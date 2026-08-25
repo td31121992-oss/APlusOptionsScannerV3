@@ -1,0 +1,60 @@
+
+# =====================================================================
+# APLUS_DHAN_429_RELIABILITY_V2
+# Infrastructure-only reliability layer.
+# =====================================================================
+if not getattr(DhanClient, "_aplus_429_reliability_v2_installed", False):
+    import threading as _aplus_threading
+    import time as _aplus_time
+
+    _aplus_original_throttle_v2 = DhanClient._throttle
+    _aplus_original_post_data_api_v2 = DhanClient._post_data_api
+
+    def _aplus_reliability_throttle_v2(self, bucket, requests_per_second):
+        bucket_name = str(bucket or "")
+        try:
+            requested_rps = float(requests_per_second)
+        except Exception:
+            requested_rps = 0.0
+
+        if bucket_name == "market_quote":
+            safe_rps = 0.30
+            requested_rps = safe_rps if requested_rps <= 0 else min(requested_rps, safe_rps)
+        elif bucket_name == "historical":
+            safe_rps = 1.50
+            requested_rps = safe_rps if requested_rps <= 0 else min(requested_rps, safe_rps)
+
+        _aplus_original_throttle_v2(self, bucket_name, requested_rps)
+
+        lock = getattr(self, "_aplus_data_global_lock_v2", None)
+        if lock is None:
+            lock = _aplus_threading.Lock()
+            self._aplus_data_global_lock_v2 = lock
+            self._aplus_data_global_last_v2 = 0.0
+
+        with lock:
+            now = _aplus_time.monotonic()
+            last = float(getattr(self, "_aplus_data_global_last_v2", 0.0))
+            global_gap = 0.45
+            wait = global_gap - (now - last)
+            if wait > 0:
+                _aplus_time.sleep(wait)
+            self._aplus_data_global_last_v2 = _aplus_time.monotonic()
+
+    def _aplus_post_data_api_v2(self, *args, **kwargs):
+        try:
+            return _aplus_original_post_data_api_v2(self, *args, **kwargs)
+        except Exception as exc:
+            text = str(exc)
+            if "429" in text or "Too Many Requests" in text:
+                endpoint = args[0] if args else kwargs.get("endpoint", "")
+                logger.warning(
+                    "APLUS_DHAN_429_RELIABILITY exhausted_429 endpoint=%s cooldown=10s; caller may skip this cycle safely",
+                    endpoint,
+                )
+                _aplus_time.sleep(10.0)
+            raise
+
+    DhanClient._throttle = _aplus_reliability_throttle_v2
+    DhanClient._post_data_api = _aplus_post_data_api_v2
+    DhanClient._aplus_429_reliability_v2_installed = True

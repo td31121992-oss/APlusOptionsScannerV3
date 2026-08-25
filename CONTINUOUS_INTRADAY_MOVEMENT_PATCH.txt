@@ -1,0 +1,114 @@
+APlus Options Scanner V3 - Continuous Intraday Movement Patch
+===============================================================
+
+PURPOSE
+-------
+The former Opening Momentum Scanner is upgraded into one stateful scanner that
+watches the F&O universe continuously from 09:15 through 15:30 IST.  The legacy
+class/file/command names are retained so existing workflows keep working.
+
+NO LIVE ORDERS
+--------------
+This patch remains PAPER_SIGNAL_ONLY.  It can select an exact CE/PE and run the
+existing safety gates, but it never places an order.
+
+WHAT CHANGED
+------------
+1. Full-day phases:
+   09:15-09:20  OPENING_OBSERVATION
+   09:20-09:30  EARLY_MOMENTUM_DISCOVERY
+   09:30-10:30  OPENING_MOMENTUM
+   10:30-12:00  MORNING_CONTINUATION
+   12:00-13:30  MIDDAY_DEVELOPMENT
+   13:30-14:45  AFTERNOON_MOMENTUM
+   14:45-15:05  LATE_A_PLUS_ENTRY_WINDOW
+   15:05-15:30  RISK_MANAGEMENT_MONITORING (no new entries)
+
+2. Full-universe quote tape:
+   Every radar cycle stores LTP and cumulative volume for every usable F&O quote.
+   This enables 5m/10m/15m/30m acceleration detection even for a stock that was
+   quiet during the opening session.
+
+3. Detailed shortlist analysis:
+   Only the dynamic top quote shortlist gets historical 5-minute requests.
+   Detailed features include:
+   - 5m/10m/15m/30m recent movement
+   - session RVOL + recent 15m RVOL + quote-tape volume acceleration
+   - 5m EMA9/20/50 and 15m EMA9/20
+   - 5m RSI14, ADX14, +DI and -DI
+   - classic previous-session P/R1/R2/R3/S1/S2/S3
+   - fresh 15m/30m/day high/low events
+   - 5m/15m structure alignment
+   - Trend Alignment Score
+   - Clean Trend Score
+   - Chase Risk Score
+
+4. Stateful lifecycle:
+   data/intraday_movement/quote_tape.json
+   data/intraday_movement/session_state.json
+
+   State remembers previous stage, first movement time, acceleration time,
+   pullback/breakout timestamps, and highest scores for the session.
+
+5. Entry families:
+   EARLY_*_MOMENTUM
+   OPENING_*_ENTRY_READY
+   FRESH_INTRADAY_*_BREAKOUT
+   CONTINUATION_*_ENTRY_READY
+   CLEAN_BULLISH_BREAKOUT / CLEAN_BEARISH_BREAKDOWN
+   HEALTHY_*_PULLBACK
+   *_TREND_WAIT_FOR_PULLBACK
+   EXTENDED_NO_ENTRY
+   LATE_A_PLUS_*_ENTRY_READY
+
+6. New shortlists/reports:
+   ENTRY_READY
+   FRESH_MOVEMENT
+   STRONG_TREND_WAIT_FOR_PULLBACK
+   NEAR_MISSES
+
+   data/reports/intraday_movement_latest.json
+   data/reports/intraday_movement_candidates.csv
+   data/reports/intraday_entry_ready.csv
+   data/reports/intraday_fresh_movement.csv
+   data/reports/intraday_wait_for_pullback.csv
+   data/reports/intraday_near_misses.csv
+
+   Existing opening_momentum_* report names are also still written for backward
+   compatibility.
+
+7. Quote diagnostics:
+   raw_quotes_received
+   radar_qualified_quotes
+   missing_quote_count / missing_quote_symbols
+   invalid_quote_count / invalid_quote_symbols
+
+COMMANDS
+--------
+Full-day loop:
+    python main.py --intraday-movement
+
+One cycle:
+    python main.py --intraday-once
+
+Legacy commands remain valid and now use the full-day engine:
+    python main.py --opening-momentum
+    python main.py --opening-once
+
+Offline validation:
+    python continuous_intraday_self_test.py
+
+IMPORTANT ENTRY POLICY
+----------------------
+Monitoring continues through 15:30.
+Normal new option entries stop at 14:45 by default.
+Only high-quality A+ fresh/continuation setups can qualify from 14:45-15:05.
+No fresh entries after 15:05, while market/state monitoring continues to 15:30.
+All times are configurable with INTRADAY_* environment variables.
+
+INSTALLATION
+------------
+Run install_continuous_intraday_patch.bat from the APlusOptionsScannerV3 folder.
+The installer backs up overwritten files, compiles/import-checks the patch and
+runs the offline self-test.  It does not modify .env and it does not overwrite
+safety data files.

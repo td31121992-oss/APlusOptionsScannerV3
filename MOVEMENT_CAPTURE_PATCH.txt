@@ -1,0 +1,50 @@
+APlus Options Scanner V3 - Movement Capture Patch
+====================================================
+
+This patch keeps the existing Trade Quality Score and adds a separate
+Movement Capture Score.
+
+Movement Capture Score weights
+------------------------------
+Actual move from 09:15 open:       35
+Relative opening volume:           20
+Directional trend retention:       20
+Position near directional edge:    15
+Opening-range expansion:           10
+Total:                             100
+
+New operational shortlists
+--------------------------
+1. EARLY_ENTRY_CANDIDATES
+   - The existing entry, structure, VWAP, volume, risk and timing rules pass.
+   - Only this list may proceed to option-chain selection.
+
+2. STRONG_TREND_WAIT_FOR_PULLBACK
+   - Strong directional movement is already visible.
+   - A fresh entry is unavailable, late or unsuitable at the current price.
+   - These stocks must not be chased.
+   - Watch for a controlled pullback toward VWAP/EMA structure and a new
+     continuation trigger.
+
+New report outputs
+------------------
+data\reports\opening_momentum_latest.json
+data\reports\opening_momentum_candidates.csv
+data\reports\opening_momentum_early_entries.csv
+data\reports\opening_momentum_wait_for_pullback.csv
+
+New JSON sections
+-----------------
+shortlists.EARLY_ENTRY_CANDIDATES
+shortlists.STRONG_TREND_WAIT_FOR_PULLBACK
+movement_leaders
+
+New CSV columns
+---------------
+shortlist
+trade_quality_score
+movement_capture_score
+
+Safety
+------
+The patch creates paper signals only. Live order placement remains disabled.

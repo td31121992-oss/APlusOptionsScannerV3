@@ -1,0 +1,64 @@
+APlusOptionsScannerV3 - Executable Option Contract Selection
+================================================================
+
+Replace these files in the project:
+
+  analytics\models.py
+  core\instrument_loader.py
+  core\scanner.py
+  option_selector.py
+  trade_engine.py
+  report_engine.py
+
+No main.py change is required. TradeEngine creates OptionSelector automatically.
+
+Compile:
+
+  python -m py_compile analytics\models.py
+  python -m py_compile core\instrument_loader.py
+  python -m py_compile core\scanner.py
+  python -m py_compile option_selector.py
+  python -m py_compile trade_engine.py
+  python -m py_compile report_engine.py
+
+Run:
+
+  python main.py --once
+
+New output:
+
+  data\reports\scanner_report.json
+  data\reports\recommendations.csv
+  data\reports\rankings.xlsx
+
+Each final recommendation now contains option_contract with:
+
+  exchange_segment, security_id, trading_symbol, display_name,
+  expiry, option_type (CE/PE), transaction (BUY), strike,
+  ltp, bid, ask, limit_price, tick_size, OI, volume, IV,
+  lot_size, lots, quantity, total_premium, premium stop/targets,
+  risk_per_lot, total_risk and selection reason.
+
+Default safety settings (override in .env):
+
+  APLUS_OPTION_MIN_LTP=2
+  APLUS_OPTION_MAX_LTP=250
+  APLUS_OPTION_MIN_OI=5000
+  APLUS_OPTION_MIN_VOLUME=500
+  APLUS_OPTION_MAX_SPREAD_PERCENT=5
+  APLUS_OPTION_MAX_MONEYNESS_PERCENT=3
+  APLUS_OPTION_TARGET_ITM_PERCENT=0.5
+  APLUS_OPTION_LIMIT_BUFFER_PERCENT=0.5
+  APLUS_OPTION_STOP_LOSS_PERCENT=25
+  APLUS_OPTION_TARGET1_RR=1
+  APLUS_OPTION_TARGET2_RR=1.75
+  APLUS_OPTION_TARGET3_RR=2.5
+  APLUS_OPTION_MAX_PREMIUM_PER_TRADE=100000
+  APLUS_OPTION_MAX_RISK_PER_TRADE=25000
+  APLUS_OPTION_MAX_LOTS=1
+
+Important:
+
+  This creates recommendations only. It does not place live orders.
+  A bearish underlying SELL signal is represented as BUY PE.
+  A bullish underlying BUY signal is represented as BUY CE.

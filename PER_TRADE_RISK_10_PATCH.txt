@@ -1,0 +1,49 @@
+APlusOptionsScannerV3 - Full Session + Per-Trade Risk 10% Patch
+================================================================
+
+Risk rule
+---------
+For BUY CE / BUY PE paper trades, capital required for the trade is the total
+option premium committed:
+
+    trade_capital = option_entry_price * quantity
+    maximum_trade_risk = trade_capital * 10%
+
+Examples:
+    Rs 30,000 trade capital -> Rs 3,000 max trade risk
+    Rs 24,750 trade capital -> Rs 2,475 max trade risk
+
+The default long-option stop-loss is also changed from 25% to 10%, so the
+selected option's planned loss matches the per-trade capital risk budget.
+
+This replaces the old rule that calculated per-trade risk as 0.5% of total
+account capital. Account capital is still used for separate session-level
+safeguards such as daily-loss and total-premium limits.
+
+Full-session paper trading
+--------------------------
+This package also includes the corrected full-session scanner:
+- paper CE/PE signals can be generated throughout 09:15-15:30 when quality gates pass
+- no 14:45/15:05 paper-trade cutoff
+- live orders remain disabled
+- paper trade journal persists generated signals
+
+New/updated environment variables
+---------------------------------
+APLUS_SAFETY_TRADE_RISK_PERCENT=10.0
+APLUS_OPTION_STOP_LOSS_PERCENT=10.0
+
+The installer does not edit .env. Defaults are already 10%, so these lines are
+optional unless you want to override them later.
+
+Validation
+----------
+The installer compiles the corrected modules and runs:
+- safety_gate_self_test.py
+- trade_risk_self_test.py
+- continuous_intraday_self_test.py
+
+After installation restart the scanner:
+    run_intraday_movement.bat
+
+Live orders remain disabled.

@@ -1,0 +1,67 @@
+APlus Options Scanner V3 - Opening Momentum Options Scanner
+============================================================
+
+PURPOSE
+-------
+Adds a separate fast scanner for HAL/SONACOMS/HINDZINC-style opening moves.
+
+It does NOT replace the validated full option-chain scanner.
+
+FLOW
+----
+1. One batch Market Quote request for all NSE stock-option underlyings.
+2. Quote radar shortlists the strongest opening movers.
+3. Five-minute historical candles are fetched only for the shortlist.
+4. The engine evaluates opening candle quality, relative volume, VWAP,
+   higher-high/higher-low structure, opening-range direction and extension.
+5. Option chains are fetched only for actionable top candidates.
+6. Existing OptionSelector chooses an executable CE for bullish momentum
+   or PE for bearish momentum.
+7. JSON and CSV paper-signal reports are written.
+
+NO ORDER API IS CALLED.
+
+INSTALL
+-------
+Use install_opening_momentum_patch.bat from the project folder.
+
+FILES CHANGED
+-------------
+config.py
+core\dhan_client.py
+main.py
+
+FILE ADDED
+----------
+opening_momentum_scanner.py
+run_opening_momentum.bat
+opening_momentum.env.example
+
+VALIDATION
+----------
+python main.py --opening-once
+
+LIVE OPENING SESSION
+--------------------
+Run around 09:14 IST:
+
+run_opening_momentum.bat
+
+Or:
+
+python main.py --opening-momentum
+
+The script waits until 09:15, creates early signals from 09:20, confirms the
+first 15-minute direction from 09:30 and stops opening new entries after 10:30.
+
+REPORTS
+-------
+data\reports\opening_momentum_latest.json
+data\reports\opening_momentum_candidates.csv
+data\reports\opening_momentum_YYYYMMDD_HHMMSS.json
+
+IMPORTANT
+---------
+This version creates paper signals and option plans only.
+Do not enable automatic order placement until several live sessions and
+false-positive/false-negative cases have been reviewed.

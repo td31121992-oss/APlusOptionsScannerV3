@@ -1,0 +1,209 @@
+APlus Options Scanner V3
+Stock Options Safety Gate Patch
+================================
+
+Purpose
+-------
+This patch inserts five pre-trade safety gates after an exact stock-option
+contract is selected and before a paper trade plan/recommendation is published:
+
+1. EXPIRY_SETTLEMENT
+2. CORPORATE_EVENT
+3. MWPL_FNO_BAN
+4. PORTFOLIO_RISK
+5. NET_COST_EXPECTANCY
+
+The patch does not place, modify, or cancel broker orders. Live orders remain
+disabled.
+
+Installed/updated files
+-----------------------
+safety_gate.py
+opening_momentum_scanner.py
+core\dhan_client.py
+analytics\models.py
+trade_engine.py
+report_engine.py
+safety_gate.env.example
+safety_gate_self_test.py
+data\safety\corporate_events.csv
+data\safety\mwpl_status.csv
+data\safety\nse_holidays.csv
+data\safety\portfolio_state.json
+
+The installer never modifies .env and never copies credentials.
+
+Operating modes
+---------------
+PAPER_OBSERVE (default)
+- Known hard risks still block.
+- Missing/stale event, MWPL, holiday, fund, position, or portfolio-state data
+  is reported as WARN/UNKNOWN where applicable.
+- Intended for paper validation.
+
+STRICT
+- Missing/stale external safety data blocks.
+- Missing live fund/position data blocks.
+- Missing/stale portfolio_state.json blocks.
+- Enable only after the safety files and account context are maintained.
+
+Suggested .env line after validation:
+APLUS_SAFETY_MODE=STRICT
+
+Expiry / settlement
+-------------------
+Default minimum: 4 trading days to expiry.
+Expiry-day stock-option entries are blocked.
+A missing holiday calendar is a warning in PAPER_OBSERVE and a block in STRICT.
+
+Important limitation:
+The current option-chain service supplies one expiry snapshot. This patch can
+block an unsafe near-expiry contract, but it does not automatically fetch and
+switch to a farther expiry. That requires a later option-chain service upgrade.
+
+Corporate events file
+---------------------
+Path:
+data\safety\corporate_events.csv
+
+Columns:
+symbol,event_date,event_type,severity,as_of,source,notes
+
+Example:
+HAL,2026-08-12,FINANCIAL_RESULTS,HIGH,2026-08-06,NSE,Results scheduled
+
+HIGH and CRITICAL events inside the configured window block by default.
+The file must represent a complete, freshly checked event calendar. The patch
+does not scrape NSE automatically.
+
+MWPL / F&O-ban file
+-------------------
+Path:
+data\safety\mwpl_status.csv
+
+Columns:
+symbol,as_of,mwpl_utilization_percent,status,source,notes
+
+Example:
+HAL,2026-08-06,42.5,SAFE,NSE,
+
+Default behavior:
+below 60%      PASS
+60% to <80%    WARN
+80% to <95%    BLOCK
+95% or FNO_BAN BLOCK
+
+A current row is required for every symbol evaluated in STRICT mode.
+The patch does not scrape NSE automatically.
+
+Holiday file
+------------
+Path:
+data\safety\nse_holidays.csv
+
+Columns:
+date,description
+
+Example:
+2026-08-15,Independence Day
+
+Portfolio state
+---------------
+Path:
+data\safety\portfolio_state.json
+
+Set "as_of" to the current trading date and update the journal fields after
+each paper/live trade.
+
+Example:
+{
+  "as_of": "2026-08-06",
+  "capital_override": 0,
+  "available_balance": 0,
+  "open_positions": 0,
+  "open_total_risk": 0,
+  "open_premium": 0,
+  "realized_pnl_today": 0,
+  "trades_today": 0,
+  "consecutive_losses": 0
+}
+
+The Opening Momentum Scanner also reads live Dhan fund limits and positions.
+A successfully returned empty position list is correctly treated as valid data.
+
+Default portfolio limits
+------------------------
+Maximum risk per trade:       0.50% of account capital
+Maximum daily loss:           1.50%
+Maximum open positions:       2
+Maximum total option premium: 20.00%
+Maximum trades per day:       3
+Consecutive-loss stop:        2
+Balance buffer:               5.00%
+
+Net-cost expectancy
+-------------------
+The estimate includes:
+- two executed-order brokerage charges
+- exchange transaction charges
+- SEBI turnover fee
+- GST
+- option STT on sell
+- option stamp duty on buy
+- execution impact based on configured slippage or half the live spread,
+  whichever is larger
+
+A trade is blocked when:
+- expected target-1 reward is non-positive after costs
+- net reward is below 2x estimated round-trip costs
+- net target-1 reward/risk is below 0.50
+
+These are configurable estimates, not a broker contract note. Compare the
+report with actual Dhan charges during paper/shadow validation.
+
+Reports
+-------
+Opening Momentum JSON includes:
+safety_mode
+safety_evaluations_count
+safety_blocked_count
+account_safety_context
+safety_gate_evaluations
+trade_plans[].safety_gate
+
+Opening Momentum CSV includes:
+safety_decision
+safety_block_reasons
+safety_warnings
+
+Full scanner recommendation CSV/Excel includes:
+Safety Decision
+Safety Block Reasons
+Safety Warnings
+Safety Mode
+Safety Account Capital
+Safety Available Balance
+Safety Open Positions
+Safety Realized PnL Today
+Estimated Round Trip Cost
+Expected Gross Reward
+Expected Net Reward
+Net Reward Cost Multiple
+Net Reward Risk Ratio
+
+Validation commands
+-------------------
+python -m py_compile safety_gate.py opening_momentum_scanner.py ^
+  core\dhan_client.py analytics\models.py trade_engine.py report_engine.py
+
+python safety_gate_self_test.py
+
+python main.py --opening-once
+
+Expected safety behavior
+------------------------
+- PAPER_OBSERVE may publish a plan with decision WARN when external data has
+  not yet been populated.
+- BLOCK never publishes an option trade plan.
+- STRICT should be enabled only when daily safety data maintenance is ready.
+- Live order placement remains disabled.

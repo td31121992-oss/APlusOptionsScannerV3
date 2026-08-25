@@ -1,0 +1,40 @@
+
+# =====================================================================
+# APLUS_SCANNER_429_SURVIVAL_V2
+# Infrastructure-only wrapper.
+# =====================================================================
+if not getattr(OpeningMomentumScanner, "_aplus_429_survival_v2_installed", False):
+    _aplus_original_run_once_v2 = OpeningMomentumScanner.run_once
+
+    def _aplus_run_once_429_survival_v2(self, *args, **kwargs):
+        try:
+            return _aplus_original_run_once_v2(self, *args, **kwargs)
+        except Exception as exc:
+            message = str(exc)
+            if "429" not in message and "Too Many Requests" not in message:
+                raise
+
+            now_value = kwargs.get("now")
+            if now_value is None:
+                now_value = datetime.now(IST)
+
+            logger.warning(
+                "APLUS_429_CYCLE_SKIPPED time=%s error=%s: %s; scanner remains alive and will retry on next scheduled cycle",
+                now_value.isoformat(),
+                type(exc).__name__,
+                exc,
+            )
+            time.sleep(10.0)
+            return {
+                "generated_at": now_value.isoformat(),
+                "mode": "PAPER_SIGNAL_ONLY",
+                "live_orders_enabled": False,
+                "scanner_mode": "CONTINUOUS_INTRADAY_MOVEMENT",
+                "cycle_skipped": True,
+                "cycle_skip_reason": "DHAN_429_EXHAUSTED",
+                "errors": {"dhan_429": f"{type(exc).__name__}: {exc}"},
+                "trade_plans": [],
+            }
+
+    OpeningMomentumScanner.run_once = _aplus_run_once_429_survival_v2
+    OpeningMomentumScanner._aplus_429_survival_v2_installed = True

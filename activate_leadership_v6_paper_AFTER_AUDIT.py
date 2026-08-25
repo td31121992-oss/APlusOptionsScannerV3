@@ -1,0 +1,8 @@
+print("="*100)
+print("APLUS LEADERSHIP V6 PAPER ACTIVATION GUARD")
+print("="*100)
+print("Production promotion is intentionally NOT auto-enabled.")
+print("The candidate->option-plan blocker still needs the first Monday PAPER conversion-audit evidence.")
+print("Leadership V6 shadow is installed and collecting forward evidence without changing trades.")
+print("After that audit, enable only the exact verified promotion bridge; existing safety remains mandatory.")
+print("="*100)

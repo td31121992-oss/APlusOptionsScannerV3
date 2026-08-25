@@ -1,0 +1,79 @@
+APlus Options Scanner V3 - Intraday Metrics Patch
+====================================================
+
+Purpose
+-------
+Broker portals commonly show percentage change from the previous market close.
+That mixes overnight gap and today's actual move.
+
+This patch separates:
+
+1. Previous-close change:
+   (LTP - previous close) / previous close * 100
+
+2. Gap:
+   (09:15/day open - previous close) / previous close * 100
+
+3. Actual intraday move:
+   (LTP - 09:15 open) / 09:15 open * 100
+
+4. Open-to-high move:
+   (day high - 09:15 open) / 09:15 open * 100
+
+5. Distance below high:
+   (day high - LTP) / day high * 100
+
+6. Day-range position:
+   (LTP - day low) / (day high - day low) * 100
+
+7. Trend retention:
+   Percentage of the maximum directional move from open that remains at LTP.
+
+8. Opening-range distance:
+   Directional percentage beyond the 09:15-09:30 range.
+
+Move labels
+-----------
+GAP_AND_GO_BULLISH
+GAP_AND_GO_BEARISH
+GAP_UP_FADE
+GAP_DOWN_RECOVERY
+OPENING_DRIVE_BULLISH
+OPENING_DRIVE_BEARISH
+GAP_UP_HOLDING
+GAP_DOWN_HOLDING
+INTRADAY_NEUTRAL
+
+Report
+------
+data\reports\opening_momentum_candidates.csv
+
+Important columns
+-----------------
+previous_close
+day_change_percent
+gap_percent
+day_open
+open_0915
+ltp
+move_from_open_percent
+move_from_0915_open_percent
+day_high
+open_to_high_percent
+below_day_high_percent
+day_low
+open_to_low_percent
+above_day_low_percent
+day_range_percent
+range_position_percent
+trend_retention_percent
+opening_range_high
+opening_range_low
+opening_range_distance_percent
+move_type
+
+The radar score now gives much greater weight to the actual move from today's
+open. A large overnight gap with no follow-through will not rank like a genuine
+opening drive.
+
+This patch does not enable live order placement.
