@@ -16,3 +16,19 @@ backup_*/
 *.zip
 .vscode/
 .idea/
+
+# Local accidental/generated artifacts
+ChatGPT Installer.exe
+Microsoft.Services.Store.winmd
+type
+*_before_*
+*.backup_before_*
+*.backup_*
+
+# Local accidental/generated artifacts
+ChatGPT Installer.exe
+Microsoft.Services.Store.winmd
+type
+*_before_*
+*.backup_before_*
+*.backup_*
