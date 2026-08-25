@@ -293,6 +293,44 @@ class PaperTradeJournal:
         self._ensure_date(when.date())
         return [x for x in self.trades if str(x.get("status") or "").upper() == "OPEN"]
 
+    # APLUS_OPTION_TAPE_V1
+    def _append_option_tape(
+        self,
+        trade: dict[str, Any],
+        when: datetime,
+        price: float,
+    ) -> None:
+        # Persist an already-fetched option quote; ZERO extra API calls.
+        try:
+            import csv as _csv
+            tid = str(trade.get("trade_id") or trade.get("paper_trade_id") or "").strip()
+            if not tid:
+                return
+            base = self.data_dir.parent / "option_trade_tape" / when.date().isoformat()
+            base.mkdir(parents=True, exist_ok=True)
+            path = base / f"{tid}.csv"
+            exists = path.exists()
+            row = {
+                "timestamp": when.isoformat(),
+                "trade_id": tid,
+                "symbol": trade.get("symbol", ""),
+                "option_security_id": trade.get("option_security_id", ""),
+                "option_type": trade.get("option_type", ""),
+                "strike": trade.get("strike", ""),
+                "expiry": trade.get("expiry", ""),
+                "price": round(float(price), 4),
+                "entry_price": trade.get("entry_price", ""),
+                "option_stop": trade.get("option_stop", ""),
+                "status": trade.get("status", ""),
+            }
+            with path.open("a", encoding="utf-8-sig", newline="") as handle:
+                writer = _csv.DictWriter(handle, fieldnames=list(row.keys()))
+                if not exists:
+                    writer.writeheader()
+                writer.writerow(row)
+        except Exception:
+            return
+
     def update_open_positions(
         self, *, option_quotes: Mapping[str, Any], when: datetime,
         force_close: bool = False, force_close_reason: str = "SESSION_END",
@@ -320,6 +358,7 @@ class PaperTradeJournal:
 
             trade["last_quote_time"] = when.isoformat()
             trade["last_option_price"] = round(price, 4)
+            self._append_option_tape(trade, when, price)
             high = max(self._number(trade.get("highest_option_price")), price)
             old_low = self._number(trade.get("lowest_option_price"))
             low = min(old_low if old_low > 0 else price, price)
