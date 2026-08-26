@@ -544,6 +544,21 @@ class OpeningMomentumScanner:
             item for item in entry_ready
             if item not in selective_entry_ready
         ]
+
+        # APLUS_SELECTIVE_GATE_DIAGNOSTIC_V1
+        selective_rejection_counts: dict[str, int] = {}
+        for _c in selective_gate_rejected:
+            _r = str(_c.paper_trade_status or "A_PLUS_REJECT_UNSPECIFIED")
+            selective_rejection_counts[_r] = selective_rejection_counts.get(_r, 0) + 1
+        if entry_ready:
+            logger.info(
+                "APLUS_SELECTIVE_GATE_AUDIT entry_ready=%d selective_pass=%d selective_reject=%d reasons=%s passed_symbols=%s rejected_symbols=%s",
+                len(entry_ready), len(selective_entry_ready), len(selective_gate_rejected),
+                "|".join(f"{k}:{v}" for k,v in sorted(selective_rejection_counts.items(), key=lambda kv:(-kv[1],kv[0]))) or "NONE",
+                ",".join(x.symbol for x in selective_entry_ready[:10]) or "NONE",
+                ",".join(f"{x.symbol}:{x.paper_trade_status or 'UNKNOWN'}" for x in selective_gate_rejected[:10]) or "NONE",
+            )
+
         # Quality-first: trade count is an outcome, never a quota.
         actionable = selective_entry_ready
         v2_config = V2GateConfig()
@@ -732,6 +747,25 @@ class OpeningMomentumScanner:
             "quote_shortlist_size": len(quote_shortlist),
             "candles_analysed": len(candidates),
             "actionable_candidates": len(actionable),
+            "aplus_selective_gate": {
+                "entry_ready_before_selective": len(entry_ready),
+                "passed_selective": len(selective_entry_ready),
+                "rejected_selective": len(selective_gate_rejected),
+                "rejection_counts": dict(selective_rejection_counts),
+                "rejected_symbols": [
+                    {"symbol":x.symbol,"direction":x.direction,"status":x.paper_trade_status,
+                     "trade_quality_score":x.trade_quality_score,
+                     "trend_alignment_score":x.trend_alignment_score,
+                     "clean_trend_score":x.clean_trend_score,
+                     "relative_volume":x.relative_volume,
+                     "recent_relative_volume_15m":x.recent_relative_volume_15m,
+                     "tape_volume_acceleration_5m":x.tape_volume_acceleration_5m,
+                     "tape_volume_acceleration_15m":x.tape_volume_acceleration_15m,
+                     "recent_move_10m_percent":x.recent_move_10m_percent,
+                     "vwap_distance_percent":x.vwap_distance_percent}
+                    for x in selective_gate_rejected
+                ],
+            },
             "stock_selection_v2": {
                 "enabled": True,
                 "rule": (
