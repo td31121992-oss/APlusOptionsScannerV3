@@ -71,12 +71,35 @@ def _time(v):
         return s.split("T", 1)[1].split("+", 1)[0].split(".", 1)[0]
     return s or "-"
 
+
+# APLUS_AUTOMOBILE_RUNTIME_OVERRIDE_V1_1
+APLUS_AUTOMOBILE_SYMBOLS = set(['ASHOKLEY', 'BAJAJ-AUTO', 'BHARATFORG', 'BOSCHLTD', 'EICHERMOT', 'HEROMOTOCO', 'HYUNDAI', 'M&M', 'MARUTI', 'MOTHERSON', 'SONACOMS', 'TIINDIA', 'TMPV', 'TVSMOTOR', 'UNOMINDA'])
+
+def _aplus_apply_runtime_sector_overrides(obj):
+    if not isinstance(obj, dict):
+        return obj
+    rows = obj.get("rows", [])
+    if not isinstance(rows, list):
+        return obj
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol in APLUS_AUTOMOBILE_SYMBOLS:
+            row["sector"] = "Auto"
+    if "sectors" in obj:
+        obj["sectors"] = sorted(set(
+            str(r.get("sector") or "UNCLASSIFIED")
+            for r in rows if isinstance(r, dict)
+        ))
+    return obj
+
 def _load_fno_market_watch():
     path = REPORTS / "fno_market_watch_latest.json"
     if not path.is_file():
         return {"generated_at": "", "count": 0, "rows": [], "sectors": []}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _aplus_apply_runtime_sector_overrides(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         return {"generated_at": "", "count": 0, "rows": [], "sectors": []}
 
