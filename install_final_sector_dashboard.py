@@ -31,7 +31,8 @@ CANON={
 "retail trade":"Retail","retail":"Retail","transportation":"Logistics/Transportation","logistics":"Logistics/Transportation",
 "defence":"Defence/Aerospace","defense":"Defence/Aerospace","insurance":"Insurance","consumer services":"Hotels/Travel","hotels":"Hotels/Travel","travel":"Hotels/Travel"
 }
-EXACT={"BAJAJ-AUTO":"Auto","NAM-INDIA":"Banking/Financial Services"}
+# APLUS_AUTOMOBILE_SECTOR_OVERRIDE_V1
+EXACT={"ASHOKLEY":"Auto","BAJAJ-AUTO":"Auto","BHARATFORG":"Auto","BOSCHLTD":"Auto","EICHERMOT":"Auto","HEROMOTOCO":"Auto","HYUNDAI":"Auto","M&M":"Auto","MARUTI":"Auto","MOTHERSON":"Auto","SONACOMS":"Auto","TIINDIA":"Auto","TMPV":"Auto","TVSMOTOR":"Auto","UNOMINDA":"Auto","NAM-INDIA":"Banking/Financial Services"}
 
 def norm(raw):
     raw=str(raw or "").strip()
