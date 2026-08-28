@@ -282,7 +282,15 @@ class InstrumentLoader:
                 row.get("OPTION_TYPE")
             )
             lot_size = self._safe_int(row.get("LOT_SIZE"))
-            tick_size = self._safe_float(row.get("TICK_SIZE"))
+            # APLUS_DHAN_TICK_SIZE_PAISE_FIX_V1
+            # Dhan detailed scrip master expresses TICK_SIZE in paise.
+            # Example: NSE option TICK_SIZE=5.0000 means Rs 0.05, not Rs 5.00.
+            tick_size_raw = self._safe_float(row.get("TICK_SIZE"))
+            tick_size = (
+                tick_size_raw / 100.0
+                if tick_size_raw is not None
+                else None
+            )
 
             if (
                 not expiry
