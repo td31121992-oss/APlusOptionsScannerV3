@@ -1,1 +1,0 @@
-This temporary file verifies GitHub write access from the connected ChatGPT Codex Connector.
