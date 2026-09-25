@@ -21,8 +21,12 @@ def _datetime(value: Any, *, field_name: str) -> datetime:
 
 
 def _event(payload: dict[str, Any]) -> NewsEvent:
-    symbols = payload.get("symbols", ())
-    if not isinstance(symbols, (list, tuple)) or not all(isinstance(x, str) and x.strip() for x in symbols):
+    symbols = payload.get("symbols")
+    if (
+        not isinstance(symbols, (list, tuple))
+        or not symbols
+        or not all(isinstance(item, str) and item.strip() for item in symbols)
+    ):
         raise ValueError("symbols must be a non-empty list of strings")
 
     source_payload = payload.get("source")
@@ -42,20 +46,28 @@ def _event(payload: dict[str, Any]) -> NewsEvent:
             verification_status=str(source_payload.get("verification_status", "UNVERIFIED")),
         )
 
+    metadata = payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object")
+
     return NewsEvent(
         event_id=str(payload["event_id"]),
         headline=str(payload["headline"]),
         summary=str(payload.get("summary", "")),
-        symbols=tuple(x.strip().upper() for x in symbols),
+        symbols=tuple(item.strip().upper() for item in symbols),
         impact=NewsImpact(str(payload.get("impact", "UNKNOWN")).upper()),
         event_type=str(payload.get("event_type", "UNKNOWN")),
         source=source,
-        detected_at=_datetime(payload["detected_at"], field_name="detected_at") if payload.get("detected_at") else datetime.now().astimezone(),
+        detected_at=(
+            _datetime(payload["detected_at"], field_name="detected_at")
+            if payload.get("detected_at")
+            else datetime.now().astimezone()
+        ),
         pre_market=bool(payload.get("pre_market", True)),
         confidence=float(payload.get("confidence", 0.0)),
         is_verified=bool(payload.get("is_verified", False)),
         paper_signal_only=True,
-        metadata=dict(payload.get("metadata", {})),
+        metadata=metadata,
     )
 
 
@@ -66,4 +78,6 @@ def load_news_events(path: str | Path) -> tuple[NewsEvent, ...]:
     items = raw.get("events", []) if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         raise ValueError("news event document must be a list or an object with events")
-    return tuple(_event(item) for item in items if isinstance(item, dict))
+    if not all(isinstance(item, dict) for item in items):
+        raise ValueError("each news event must be an object")
+    return tuple(_event(item) for item in items)
