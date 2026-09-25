@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "event_id": "evt-regulatory-abc-20260925",
+      "headline": "ABC receives a material regulatory update",
+      "summary": "Deterministic fixture for paper-only market shock validation.",
+      "symbols": ["ABC"],
+      "impact": "CRITICAL",
+      "event_type": "REGULATORY",
+      "detected_at": "2026-09-25T08:45:00+05:30",
+      "pre_market": true,
+      "confidence": 0.95,
+      "is_verified": true,
+      "source": {
+        "publisher": "Fixture Source",
+        "url": "https://example.invalid/news/evt-regulatory-abc-20260925",
+        "published_at": "2026-09-25T08:40:00+05:30",
+        "source_type": "TEST",
+        "verification_status": "VERIFIED"
+      },
+      "metadata": {
+        "fixture": true
+      }
+    }
+  ]
+}
