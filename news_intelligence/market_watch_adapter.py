@@ -14,6 +14,15 @@ from .risk_engine import PreMarketRiskEngine
 from .shock_engine import MarketShockEarlyWarning, MarketShockWarning
 
 
+_IMPACT_RANK = {
+    "UNKNOWN": 0,
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class MarketWatchNewsAnnotation:
     """Serializable news context for one market-watch symbol."""
@@ -77,7 +86,10 @@ def annotate_market_watch(
             continue
 
         risks = tuple(risk.classify(event) for event in matching)
-        highest = max(matching, key=lambda event: (event.impact.value, event.confidence))
+        highest = max(
+            matching,
+            key=lambda event: (_IMPACT_RANK.get(event.impact.value, 0), event.confidence),
+        )
         warning: MarketShockWarning = shock.evaluate(matching)
         annotation = MarketWatchNewsAnnotation(
             symbol=symbol,
