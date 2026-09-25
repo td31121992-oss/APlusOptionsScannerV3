@@ -4,6 +4,7 @@ The package is intentionally provider-agnostic and paper-signal only.
 """
 
 from .collector import NewsCollector, StaticNewsCollector
+from .event_source import load_news_events
 from .market_watch_adapter import MarketWatchNewsAnnotation, annotate_market_watch
 from .market_watch_dashboard_bridge import enrich_dashboard_market_watch
 from .market_watch_payload import build_market_watch_payload
@@ -26,4 +27,5 @@ __all__ = [
     "build_market_watch_payload",
     "enrich_dashboard_market_watch",
     "enrich_market_watch_report",
+    "load_news_events",
 ]
