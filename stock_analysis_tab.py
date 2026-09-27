@@ -314,8 +314,9 @@ async function load(){
 function backToWatch(){location.href="/fno-market-watch"}
 const params=new URLSearchParams(location.search);
 q("#symbol").value=(params.get("symbol")||"").toUpperCase();
-q("#day").value=params.get("day")||new Date().toISOString().slice(0,10);
-if(q("#symbol").value)load();
+const now=new Date();const localDate=new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10);
+q("#day").value=params.get("day")||localDate;
+if(q("#symbol").value){load();setInterval(load,5000);}
 </script></body></html>"""
 
 
