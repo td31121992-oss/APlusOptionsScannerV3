@@ -79,8 +79,21 @@ def _latest_candidate(symbol: str) -> dict[str, Any]:
     return best
 
 
+def _safe_day(day: str) -> str:
+    value = str(day or "").strip()
+    try:
+        from datetime import date
+        parsed = date.fromisoformat(value)
+        return parsed.isoformat()
+    except ValueError:
+        return ""
+
+
 def _load_points(day: str, symbol: str) -> list[dict[str, Any]]:
-    path = CHART_BASE / day / "market_watch_1m.csv"
+    safe_day = _safe_day(day)
+    if not safe_day:
+        return []
+    path = CHART_BASE / safe_day / "market_watch_1m.csv"
     rows = _read_csv(path)
     symbol = symbol.strip().upper()
     out = []
