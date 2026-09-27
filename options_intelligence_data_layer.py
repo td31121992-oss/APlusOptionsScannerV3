@@ -24,7 +24,7 @@ import csv
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -77,13 +77,22 @@ def _num(value: Any) -> float | int | None:
 
 
 def _chain_data(raw: Any) -> dict[str, Any]:
+    """Find the nested Dhan mapping containing the option-chain 'oc' field."""
     if not isinstance(raw, dict):
         return {}
-    data = raw.get("data")
-    if isinstance(data, dict) and isinstance(data.get("oc"), dict):
-        return data
-    if isinstance(raw.get("oc"), dict):
-        return raw
+    queue: list[dict[str, Any]] = [raw]
+    visited: set[int] = set()
+    while queue:
+        current = queue.pop(0)
+        identity = id(current)
+        if identity in visited:
+            continue
+        visited.add(identity)
+        if isinstance(current.get("oc"), dict):
+            return current
+        for key, value in current.items():
+            if isinstance(value, dict):
+                queue.append(value)
     return {}
 
 
@@ -188,6 +197,7 @@ def _write_snapshot(
 
 
 def _update_manifest(day_dir: Path, updates: dict[str, Any]) -> None:
+    day_dir.mkdir(parents=True, exist_ok=True)
     path = day_dir / "collector_manifest.json"
     current: dict[str, Any] = {}
     if path.exists():
@@ -240,7 +250,9 @@ def collect_once(
             errors.append({"symbol": symbol, "error": "No active expiry"})
             continue
 
-        expiry = expiries[0]
+        today = date.today().isoformat()
+        active_expiries = [item for item in expiries if item >= today]
+        expiry = active_expiries[0] if active_expiries else expiries[-1]
         try:
             raw = client.get_option_chain(
                 int(underlying.security_id),
