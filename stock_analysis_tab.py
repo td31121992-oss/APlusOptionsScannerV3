@@ -84,7 +84,7 @@ def _latest_candidate(symbol: str) -> dict[str, Any]:
 def _safe_day(day: str) -> str:
     value = str(day or "").strip()
     try:
-        from datetime import date
+        from datetime import date, datetime
         parsed = date.fromisoformat(value)
         return parsed.isoformat()
     except ValueError:
