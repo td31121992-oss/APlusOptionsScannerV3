@@ -8,7 +8,7 @@ import json
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
-from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload
+from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -281,6 +281,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stock-analysis":
             q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
             body=json.dumps(analysis_payload(day,symbol)).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-option-chain":
+            q=parse_query(self.path); symbol=q.get("symbol") or ""; expiry=q.get("expiry") or ""
+            try:
+                payload=option_chain_payload(symbol, expiry)
+            except Exception as exc:
+                payload={"ok":False,"error":f"Option-chain analysis failed: {type(exc).__name__}: {exc}"}
+            body=json.dumps(payload).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-charts":
             body=STOCK_CHART_HTML.encode("utf-8")
