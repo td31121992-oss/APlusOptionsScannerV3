@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import math
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +229,151 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     }
 
 
+
+
+_OPTION_CHAIN_LOCK = threading.Lock()
+_OPTION_CHAIN_CLIENT: Any = None
+_OPTION_CHAIN_LOADER: Any = None
+_OPTION_CHAIN_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_OPTION_CHAIN_CACHE_SECONDS = 15.0
+
+
+def _option_chain_runtime() -> tuple[Any, Any]:
+    global _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
+    if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None:
+        from config import AppConfig
+        from core.dhan_client import DhanClient
+        from core.instrument_loader import InstrumentLoader
+        cfg = AppConfig.from_env()
+        _OPTION_CHAIN_CLIENT = DhanClient(cfg.dhan)
+        _OPTION_CHAIN_LOADER = InstrumentLoader(cfg).load(force_refresh=False)
+    return _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
+
+
+def _chain_payload(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    data = raw.get("data")
+    if isinstance(data, dict) and isinstance(data.get("oc"), dict):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        nested = data["data"]
+        if isinstance(nested.get("oc"), dict):
+            return nested
+    if isinstance(raw.get("oc"), dict):
+        return raw
+    return {}
+
+
+def _chain_leg(raw: Any, side: str, strike: float) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    greeks = raw.get("greeks") if isinstance(raw.get("greeks"), dict) else {}
+    oi = int(_f(raw.get("oi")))
+    previous_oi = int(_f(raw.get("previous_oi")))
+    oi_change = oi - previous_oi if previous_oi else 0
+    volume = int(_f(raw.get("volume")))
+    return {
+        "side": side, "strike": strike,
+        "security_id": str(raw.get("security_id") or ""),
+        "ltp": round(_f(raw.get("last_price")), 2),
+        "oi": oi, "previous_oi": previous_oi, "oi_change": oi_change,
+        "oi_change_pct": round(oi_change / previous_oi * 100.0, 2) if previous_oi else 0.0,
+        "volume": volume, "iv": round(_f(raw.get("implied_volatility")), 2),
+        "delta": round(_f(greeks.get("delta")), 4),
+        "gamma": round(_f(greeks.get("gamma")), 6),
+        "theta": round(_f(greeks.get("theta")), 4),
+        "vega": round(_f(greeks.get("vega")), 4),
+        "bid": round(_f(raw.get("top_bid_price")), 2),
+        "ask": round(_f(raw.get("top_ask_price")), 2),
+    }
+
+
+def option_chain_payload(symbol: str, expiry: str = "") -> dict[str, Any]:
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return {"ok": False, "error": "Symbol is required"}
+
+    now = time.monotonic()
+    with _OPTION_CHAIN_LOCK:
+        client, loader = _option_chain_runtime()
+        underlying = loader.get(symbol)
+        if underlying is None:
+            return {"ok": False, "error": f"{symbol} is not in the loaded F&O universe"}
+
+        expiries = sorted({
+            str(getattr(c, "expiry", "") or "")
+            for c in getattr(underlying, "contracts", []) or []
+            if str(getattr(c, "expiry", "") or "")
+        })
+        selected_expiry = expiry if expiry in expiries else (expiries[0] if expiries else "")
+        if not selected_expiry:
+            return {"ok": False, "error": f"No active expiry found for {symbol}"}
+
+        cache_key = (symbol, selected_expiry)
+        cached = _OPTION_CHAIN_CACHE.get(cache_key)
+        if cached and now - cached[0] < _OPTION_CHAIN_CACHE_SECONDS:
+            return cached[1]
+
+        raw = client.get_option_chain(int(underlying.security_id), selected_expiry, "NSE_EQ")
+        data = _chain_payload(raw)
+        chain = data.get("oc")
+        if not isinstance(chain, dict) or not chain:
+            return {"ok": False, "error": "Dhan returned no option-chain strikes"}
+
+        spot = _f(data.get("last_price"))
+        rows = []
+        for raw_strike, raw_entry in chain.items():
+            try:
+                strike = float(raw_strike)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(raw_entry, dict):
+                continue
+            ce = _chain_leg(raw_entry.get("ce"), "CE", strike)
+            pe = _chain_leg(raw_entry.get("pe"), "PE", strike)
+            if ce or pe:
+                rows.append({"strike": strike, "ce": ce, "pe": pe})
+
+        rows.sort(key=lambda x: x["strike"])
+        if not rows:
+            return {"ok": False, "error": "No usable option-chain rows"}
+
+        atm = min(rows, key=lambda x: abs(x["strike"] - spot))["strike"] if spot else rows[len(rows)//2]["strike"]
+        idx = next((i for i, row in enumerate(rows) if row["strike"] == atm), 0)
+        visible = rows[max(0, idx - 8):min(len(rows), idx + 9)]
+
+        total_ce_oi = sum((r["ce"] or {}).get("oi", 0) for r in rows)
+        total_pe_oi = sum((r["pe"] or {}).get("oi", 0) for r in rows)
+        total_ce_vol = sum((r["ce"] or {}).get("volume", 0) for r in rows)
+        total_pe_vol = sum((r["pe"] or {}).get("volume", 0) for r in rows)
+
+        call_wall = max(rows, key=lambda r: (r["ce"] or {}).get("oi", 0))["strike"]
+        put_wall = max(rows, key=lambda r: (r["pe"] or {}).get("oi", 0))["strike"]
+
+        pain = []
+        for settlement in rows:
+            settle = settlement["strike"]
+            value = 0.0
+            for r in rows:
+                value += max(0.0, settle - r["strike"]) * (r["ce"] or {}).get("oi", 0)
+                value += max(0.0, r["strike"] - settle) * (r["pe"] or {}).get("oi", 0)
+            pain.append((value, settle))
+        max_pain = min(pain)[1] if pain else 0.0
+
+        payload = {
+            "ok": True, "symbol": symbol, "security_id": str(underlying.security_id),
+            "spot": round(spot, 2), "expiry": selected_expiry,
+            "expiries": expiries[:20], "atm": atm,
+            "pcr_oi": round(total_pe_oi / total_ce_oi, 3) if total_ce_oi else 0.0,
+            "pcr_volume": round(total_pe_vol / total_ce_vol, 3) if total_ce_vol else 0.0,
+            "call_wall": call_wall, "put_wall": put_wall, "max_pain": max_pain,
+            "captured_at": datetime.now().isoformat(), "rows": visible,
+        }
+        _OPTION_CHAIN_CACHE[cache_key] = (now, payload)
+        return payload
+
+
 STOCK_ANALYSIS_HTML = r"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>APlus Stock Analysis</title>
@@ -251,7 +398,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <a href="/sector-performance">SECTOR PERFORMANCE</a><a href="/opening-structure">OPENING STRUCTURE</a><a href="/stock-charts">STOCK CHARTS</a>
 </div>
 <div class="header"><div><div class="title" id="title">APlus Stock Analysis</div><div class="sub">Read-only analysis layer • does not place, modify or cancel orders</div></div><div class="sub" id="updated">Loading...</div></div>
-<div class="toolbar"><input id="symbol" placeholder="Enter F&amp;O symbol e.g. RELIANCE"><input type="date" id="day"><button onclick="load()">Analyze</button><button onclick="backToWatch()">← Market Watch</button></div>
+<div class="toolbar"><input id="symbol" placeholder="Enter F&amp;O symbol e.g. RELIANCE"><input type="date" id="day"><button onclick="load()">Analyze</button><button onclick="backToWatch()">← Market Watch</button><select id="expiry"><option value="">Current expiry</option></select><button onclick="loadChain()">Load Option Chain</button></div>
 <div class="wrap">
 <div class="cards">
 <div class="card"><div class="label">LTP</div><div class="value" id="ltp">-</div></div>
@@ -265,6 +412,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
 <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
 </div>
+<div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
 <div class="panel"><div class="pt">APlus Scanner Context</div><div class="body"><div id="candidate"></div></div></div>
 <div class="panel"><div class="pt">Why this stock is interesting</div><div class="body"><ul id="signals"></ul><div class="notice">This screen is diagnostic/read-only. It is intentionally isolated from APlus automated entry, risk, safety-gate and order-execution code.</div></div></div>
@@ -324,6 +472,22 @@ async function load(){
   const r=await fetch("/api/stock-analysis?symbol="+encodeURIComponent(sym)+"&day="+encodeURIComponent(day)+"&ts="+Date.now());
   render(await r.json());
 }
+async function loadChain(){
+  const sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
+  const expiry=q("#expiry").value;
+  const r=await fetch("/api/stock-option-chain?symbol="+encodeURIComponent(sym)+"&expiry="+encodeURIComponent(expiry)+"&ts="+Date.now());
+  const d=await r.json();
+  if(!d.ok){q("#chain").innerHTML="<div class='sub'>"+esc(d.error||"Option chain unavailable")+"</div>";return}
+  q("#expiry").innerHTML=(d.expiries||[]).map(x=>"<option value='"+esc(x)+"'>"+esc(x)+"</option>").join("");
+  q("#expiry").value=d.expiry;
+  q("#chainSummary").innerHTML=[
+    card("ATM",n(d.atm).toFixed(2)),card("PCR OI",n(d.pcr_oi).toFixed(3)),card("PCR Volume",n(d.pcr_volume).toFixed(3)),
+    card("Call OI Wall",n(d.call_wall).toFixed(2)),card("Put OI Wall",n(d.put_wall).toFixed(2)),card("Max Pain",n(d.max_pain).toFixed(2))
+  ].join("");
+  q("#chain").innerHTML="<table style='width:100%;border-collapse:collapse'><thead><tr><th>Strike</th><th>CE OI</th><th>CE ΔOI</th><th>CE IV</th><th>CE LTP</th><th>PE LTP</th><th>PE IV</th><th>PE ΔOI</th><th>PE OI</th></tr></thead><tbody>"+
+    (d.rows||[]).map(r=>"<tr><td><b>"+n(r.strike).toFixed(2)+"</b></td><td>"+n(r.ce&&r.ce.oi).toLocaleString()+"</td><td>"+n(r.ce&&r.ce.oi_change).toLocaleString()+"</td><td>"+n(r.ce&&r.ce.iv).toFixed(2)+"</td><td>"+n(r.ce&&r.ce.ltp).toFixed(2)+"</td><td>"+n(r.pe&&r.pe.ltp).toFixed(2)+"</td><td>"+n(r.pe&&r.pe.iv).toFixed(2)+"</td><td>"+n(r.pe&&r.pe.oi_change).toLocaleString()+"</td><td>"+n(r.pe&&r.pe.oi).toLocaleString()+"</td></tr>").join("")+
+    "</tbody></table>";
+}
 function backToWatch(){location.href="/fno-market-watch"}
 const params=new URLSearchParams(location.search);
 q("#symbol").value=(params.get("symbol")||"").toUpperCase();
@@ -333,4 +497,4 @@ if(q("#symbol").value){load();setInterval(load,5000);}
 </script></body></html>"""
 
 
-__all__ = ["STOCK_ANALYSIS_HTML", "analysis_payload"]
+__all__ = ["STOCK_ANALYSIS_HTML", "analysis_payload", "option_chain_payload"]
