@@ -126,6 +126,11 @@ def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
     symbol = str(symbol or "").strip().upper()
     if not safe_day or not symbol:
         return []
+    # Dhan intraday fallback is used only for the current trading day.
+    # Historical days must continue to rely on the local chart-history archive.
+    from datetime import date
+    if safe_day != date.today().isoformat():
+        return []
 
     cache_key = (safe_day, symbol)
     now = time.monotonic()
