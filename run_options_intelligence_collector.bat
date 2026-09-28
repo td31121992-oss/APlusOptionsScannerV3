@@ -20,7 +20,7 @@ echo [%date% %time%] APlus Options Intelligence Runtime START>>"%LOG%"
 echo [%date% %time%] 09:15-15:30 IST, read-only, trading engine untouched>>"%LOG%"
 echo ============================================================>>"%LOG%"
 
-"%PYTHON%" "%~dp0options_intelligence_runtime.py" --max-symbols 10 --cycle-delay 60 --session-start 09:15 --session-end 15:30 --reconnect-delay 20 --health-file "%HEALTH%" >>"%LOG%" 2>&1
+"%PYTHON%" "%~dp0options_intelligence_runtime.py" --max-symbols 30 --cycle-delay 60 --session-start 09:15 --session-end 15:30 --reconnect-delay 20 --health-file "%HEALTH%" >>"%LOG%" 2>&1
 set "EXITCODE=%ERRORLEVEL%"
 
 echo [%date% %time%] Options Intelligence Runtime exited with code %EXITCODE%.>>"%LOG%"
