@@ -1,6 +1,5 @@
-param(
-    [string]$ProjectRoot = "C:\Users\Darpan.bobhate\Desktop\APlusOptionsScannerV3"
-)
+param([string]$ProjectRoot = "")
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 $ErrorActionPreference = "Stop"
 Set-Location $ProjectRoot
@@ -55,7 +54,7 @@ function Ensure-OneProcess(
 Ensure-OneProcess `
     -Name "PAPER Safety Evidence Agent" `
     -Pattern "paper_safety_evidence_agent\.py" `
-    -Command "python paper_safety_evidence_agent.py" `
+    -Command "`"$ProjectRoot\.venv\Scripts\python.exe`" `"$ProjectRoot\paper_safety_evidence_agent.py`"" `
     -NotBefore 905 -NotAfter 1535
 
 # Wait for today's PAPER state to appear.
@@ -84,7 +83,7 @@ if ($Hm -ge 905 -and $Hm -le 1535) {
         Ensure-OneProcess `
             -Name "APlus Intraday Scanner" `
             -Pattern "main\.py\s+--intraday-movement" `
-            -Command "python main.py --intraday-movement" `
+            -Command "`"$ProjectRoot\.venv\Scripts\python.exe`" `"$ProjectRoot\main.py`" --intraday-movement" `
             -NotBefore 910 -NotAfter 1530
     }
 }
@@ -94,7 +93,7 @@ if (Test-Path (Join-Path $ProjectRoot "aplus_dashboard_v2.py")) {
     Ensure-OneProcess `
         -Name "APlus Dashboard V2" `
         -Pattern "aplus_dashboard_v2\.py" `
-        -Command "python aplus_dashboard_v2.py" `
+        -Command "`"$ProjectRoot\.venv\Scripts\python.exe`" `"$ProjectRoot\aplus_dashboard_v2.py`"" `
         -NotBefore 910 -NotAfter 1600
 }
 
@@ -103,7 +102,7 @@ if (Test-Path (Join-Path $ProjectRoot "movement_campaign_intelligence_v1_shadow.
     Ensure-OneProcess `
         -Name "Campaign Intelligence Shadow" `
         -Pattern "movement_campaign_intelligence_v1_shadow\.py" `
-        -Command "python movement_campaign_intelligence_v1_shadow.py --interval 30" `
+        -Command "`"$ProjectRoot\.venv\Scripts\python.exe`" `"$ProjectRoot\movement_campaign_intelligence_v1_shadow.py`" --interval 30" `
         -NotBefore 914 -NotAfter 1535
 }
 
