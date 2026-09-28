@@ -210,7 +210,7 @@ try {
         # Authoritative scanner health gate: a live scanner process plus a fresh
         # intraday report means the scanner is healthy. Do not invoke another
         # launcher merely because process detection is transient.
-        $scanner = Get-PythonProcesses "main\.py["']?\s+--intraday-movement"
+        $scanner = Get-PythonProcesses "main\.py\W+--intraday-movement"
         $reportHealthy = $false
         try {
             $reportPath = Join-Path $ProjectRoot "data\reports\intraday_movement_latest.json"
