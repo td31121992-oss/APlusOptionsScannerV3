@@ -1,4 +1,4 @@
-param([string]$ProjectRoot = "")
+﻿param([string]$ProjectRoot = "")
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 $ErrorActionPreference = "Stop"
@@ -82,7 +82,7 @@ if ($Hm -ge 905 -and $Hm -le 1535) {
         # 2) Main scanner only after state is correct.
         Ensure-OneProcess `
             -Name "APlus Intraday Scanner" `
-            -Pattern "main\.py\s+--intraday-movement" `
+            -Pattern "main\.py["']?\s+--intraday-movement" `
             -Command "`"$ProjectRoot\.venv\Scripts\python.exe`" `"$ProjectRoot\main.py`" --intraday-movement" `
             -NotBefore 910 -NotAfter 1530
     }
@@ -107,7 +107,7 @@ if (Test-Path (Join-Path $ProjectRoot "movement_campaign_intelligence_v1_shadow.
 }
 
 # Write automation health snapshot.
-$scanner = Get-PythonProc "main\.py\s+--intraday-movement"
+$scanner = Get-PythonProc "main\.py["']?\s+--intraday-movement"
 $safety  = Get-PythonProc "paper_safety_evidence_agent\.py"
 $dash    = Get-PythonProc "aplus_dashboard_v2\.py"
 $camp    = Get-PythonProc "movement_campaign_intelligence_v1_shadow\.py"
@@ -123,3 +123,5 @@ $health = [ordered]@{
 $healthPath = Join-Path $ProjectRoot "data\aplus_automation_health.json"
 $health | ConvertTo-Json | Set-Content -Path $healthPath -Encoding UTF8
 Write-Host ($health | ConvertTo-Json -Compress)
+
+
