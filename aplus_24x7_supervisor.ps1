@@ -232,7 +232,7 @@ try {
 
         $health = [ordered]@{
             service = "APlus 24x7 Reliability Supervisor"
-            version = 1
+            version = 2
             read_only_supervisor = $true
             trading_engine_untouched = $true
             updated_at = $now.ToString("o")
@@ -242,6 +242,9 @@ try {
             network_dhan_ready = $script:LastPreflight
             project_root = $ProjectRoot
             scanner_count = $scanner.Count
+            scanner_process_detected = ($scanner.Count -gt 0)
+            scanner_report_fresh = $reportHealthy
+            scanner_health = $(if ($scannerHealthy) { "HEALTHY" } elseif ($scanner.Count -gt 0) { "PROCESS_ONLY" } else { "DOWN" })
             safety_agent_count = $safety.Count
             live_dashboard_count = $liveDashboard
             dashboard_v2_count = $dashboardV2
