@@ -18,7 +18,7 @@ timeout /t 3 /nobreak >nul
 
 echo.
 echo [2/3] Starting APlus intraday scanner...
-start "APlus Intraday PAPER Scanner" cmd /k "cd /d ""%~dp0"" && python main.py --intraday-movement"
+start "APlus Intraday PAPER Scanner" /D "%~dp0" "%~dp0.venv\Scripts\python.exe" "%~dp0main.py" --intraday-movement
 
 timeout /t 5 /nobreak >nul
 

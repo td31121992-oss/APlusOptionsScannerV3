@@ -3,7 +3,12 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not exist "data\logs" mkdir "data\logs"
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "LOG=data\logs\aplus_auto_start.log"
+if not exist "%PYTHON%" (
+    echo [%date% %time%] ERROR: project venv Python not found: %PYTHON%>>"%LOG%"
+    exit /b 13
+)
 set "SCANNERLOG=data\logs\aplus_scanner_console.log"
 set "DASHLOG=data\logs\aplus_dashboard_console.log"
 
@@ -21,11 +26,11 @@ set /a TRY+=1
 echo [%date% %time%] Dhan readiness check !TRY!/!MAXTRY!...>>"%LOG%"
 
 if exist "aplus_preflight_check.py" (
-    python aplus_preflight_check.py > "data\logs\aplus_preflight_autostart.log" 2>&1
+    "%PYTHON%" aplus_preflight_check.py > "data\logs\aplus_preflight_autostart.log" 2>&1
     if not errorlevel 1 goto TOKEN_READY
 ) else (
     rem Fallback: import config; its shared-token resolver validates Dhan profile.
-    python -c "from config import CONFIG; print('APlus config/token validation PASS')" > "data\logs\aplus_preflight_autostart.log" 2>&1
+    "%PYTHON%" -c "from config import CONFIG; print('APlus config/token validation PASS')" > "data\logs\aplus_preflight_autostart.log" 2>&1
     if not errorlevel 1 goto TOKEN_READY
 )
 
