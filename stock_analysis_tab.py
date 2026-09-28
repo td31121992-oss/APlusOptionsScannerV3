@@ -114,6 +114,76 @@ def _load_points(day: str, symbol: str) -> list[dict[str, Any]]:
     return out
 
 
+_CHART_FALLBACK_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_CHART_FALLBACK_CACHE_SECONDS = 15.0
+
+
+def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
+    """Fallback to Dhan 1-minute candles when the local chart-history file is absent."""
+    safe_day = _safe_day(day)
+    symbol = str(symbol or "").strip().upper()
+    if not safe_day or not symbol:
+        return []
+
+    cache_key = (safe_day, symbol)
+    now = time.monotonic()
+    cached = _CHART_FALLBACK_CACHE.get(cache_key)
+    if cached and now - cached[0] < _CHART_FALLBACK_CACHE_SECONDS:
+        return cached[1]
+
+    try:
+        from config import AppConfig
+        from core.dhan_client import DhanClient
+        from core.instrument_loader import InstrumentLoader
+
+        cfg = AppConfig.from_env()
+        loader = InstrumentLoader(cfg).load(force_refresh=False)
+        underlying = loader.get(symbol)
+        if underlying is None:
+            return []
+
+        security_id = int(getattr(underlying, "security_id"))
+        segment = str(getattr(underlying, "exchange_segment", "NSE_EQ") or "NSE_EQ").upper()
+
+        start = datetime.strptime(f"{safe_day} 09:15:00", "%Y-%m-%d %H:%M:%S")
+        end = datetime.now()
+        if end <= start:
+            return []
+
+        client = DhanClient(cfg.dhan)
+        candles = client.get_intraday_candles(
+            security_id=security_id,
+            segment=segment,
+            instrument="EQUITY",
+            interval=1,
+            from_datetime=start,
+            to_datetime=end,
+            oi=False,
+        )
+
+        closes = candles.get("close", [])
+        timestamps = candles.get("timestamp", [])
+        size = min(len(closes), len(timestamps))
+        points: list[dict[str, Any]] = []
+        for idx in range(size):
+            ltp = _f(closes[idx])
+            if ltp <= 0:
+                continue
+            points.append({
+                "time": str(timestamps[idx]),
+                "ltp": ltp,
+                "from_open_pct": 0.0,
+                "day_high": 0.0,
+                "day_low": 0.0,
+                "range_position_pct": 0.0,
+            })
+
+        _CHART_FALLBACK_CACHE[cache_key] = (now, points)
+        return points
+    except Exception:
+        return []
+
+
 def _ema(values: list[float], period: int) -> float:
     if not values:
         return 0.0
