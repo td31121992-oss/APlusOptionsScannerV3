@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
+cd /d "%~dp0"
+
+if not exist "data\logs" mkdir "data\logs"
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
+set "LOG=data\logs\aplus_auto_start.log"
 if not exist "%PYTHON%" (
     echo [%date% %time%] ERROR: project venv Python not found: %PYTHON%>>"%LOG%"
     exit /b 13
 )
-cd /d "%~dp0"
-
-if not exist "data\logs" mkdir "data\logs"
-set "LOG=data\logs\aplus_auto_start.log"
 set "SCANNERLOG=data\logs\aplus_scanner_console.log"
 set "DASHLOG=data\logs\aplus_dashboard_console.log"
 
