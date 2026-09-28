@@ -111,7 +111,9 @@ def _load_points(day: str, symbol: str) -> list[dict[str, Any]]:
             "day_low": _f(row.get("day_low")),
             "range_position_pct": _f(row.get("range_position_pct")),
         })
-    return out
+    if out:
+        return out
+    return _load_dhan_intraday_points(safe_day, symbol)
 
 
 _CHART_FALLBACK_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
