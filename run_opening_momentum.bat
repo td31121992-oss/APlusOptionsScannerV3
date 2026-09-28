@@ -10,7 +10,7 @@ echo Monitoring now continues from 09:15 through 15:30 IST.
 echo PAPER SIGNALS ONLY - NO LIVE ORDERS
 echo ============================================================
 echo.
-python main.py --intraday-movement
+"%~dp0.venv\Scripts\python.exe" "%~dp0main.py" --intraday-movement
 
 echo.
 echo Scanner exited with code %ERRORLEVEL%.
