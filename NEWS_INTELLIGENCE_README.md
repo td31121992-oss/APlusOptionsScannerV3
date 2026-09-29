@@ -24,4 +24,34 @@ Classifications are deterministic keyword matches over the supplied headline and
 
 Stock-to-sector edges use only explicit source symbols and the local F&O market-watch symbol/sector mapping. Source-provided sectors are retained as explicit sector edges. No entity recognition, current-event facts, or causal price explanations are invented. The Stock Analysis explanation labels news and sector context as reported or possible drivers and discloses missing evidence.
 
-No news provider/feed is configured in this repository, so the local store remains empty until a user supplies source records. No predictive value is claimed.
+## Opt-in SEBI RSS reader
+
+`sebi_rss_adapter.py` is an optional, one-shot reader for the official SEBI RSS
+feed at `https://www.sebi.gov.in/sebirss.xml`. It retrieves only when invoked
+with `--fetch`; importing it, running it without that flag, or running the
+existing JSONL normalizer does not contact the source. It performs one request
+per invocation, has a 15-second timeout and a 3 MiB response limit, and has no
+credentials, scheduler, or continuous runtime.
+
+```powershell
+.\.venv\Scripts\python.exe .\sebi_rss_adapter.py --fetch
+```
+
+The adapter maps source, headline, summary, timezone-aware publication time,
+URL, and GUID/reference into the existing record format. Items without a
+usable publication timestamp are skipped; capture time is never substituted
+for publication time. Retrieval/XML failures produce a safe status without
+ingesting partial data. Feed entries are deduplicated by link, GUID, or title
+and publication time before the existing daily-store deduplication runs.
+
+This feed contains SEBI press releases, circulars, and orders/rulings. It does
+not supply exchange-listed company symbol/sector mapping or prove that an
+announcement caused a stock move. All classification remains a deterministic
+keyword observation, not a causal or trading signal. Keep this use local and
+retain source attribution and links; SEBI's website policy requires permission
+for reproduction of site material and acknowledgment of the source. The RSS
+page publishes no numeric rate limit. No scheduled collection is installed.
+
+Official source information: <https://www.sebi.gov.in/rss.html>. No live-feed
+success is implied by fixture-based tests; enable the adapter explicitly to
+verify the feed in the local environment.
