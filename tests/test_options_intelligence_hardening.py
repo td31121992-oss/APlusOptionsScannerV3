@@ -1,12 +1,49 @@
 from __future__ import annotations
 
 import unittest
+import sys
+import types
 from datetime import datetime, time
 from types import SimpleNamespace
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from options_intelligence_data_layer import _safe_error, classify_failure, resolve_symbols
-from options_intelligence_runtime import _cycle_status, _seconds_until, _should_reconnect_after_failed_cycle
+
+class _TestAppConfig:
+    @classmethod
+    def from_env(cls):
+        raise AssertionError("Unit tests must not load runtime configuration")
+
+
+class _TestDhanConfig:
+    pass
+
+
+_test_config = types.ModuleType("config")
+_test_config.AppConfig = _TestAppConfig
+_test_config.DhanConfig = _TestDhanConfig
+_test_dhan_client = types.ModuleType("core.dhan_client")
+_test_dhan_client.DhanClient = type("DhanClient", (), {})
+_test_instrument_loader = types.ModuleType("core.instrument_loader")
+_test_instrument_loader.InstrumentLoader = type("InstrumentLoader", (), {})
+
+# config.py constructs CONFIG at import time and authenticates against Dhan.
+# Replace only that module dependency while importing these pure helper paths;
+# production configuration and authentication remain unchanged.
+with patch.dict(
+    sys.modules,
+    {
+        "config": _test_config,
+        "core.dhan_client": _test_dhan_client,
+        "core.instrument_loader": _test_instrument_loader,
+    },
+):
+    from options_intelligence_data_layer import _safe_error, classify_failure, resolve_symbols
+    from options_intelligence_runtime import (
+        _cycle_status,
+        _seconds_until,
+        _should_reconnect_after_failed_cycle,
+    )
 
 
 class _Loader:
@@ -15,6 +52,11 @@ class _Loader:
 
 
 class OptionsIntelligenceHardeningTests(unittest.TestCase):
+    def test_import_uses_mocked_config_without_dhan_or_credential_access(self) -> None:
+        self.assertIs(_TestAppConfig, _test_config.AppConfig)
+        self.assertIsNot(sys.modules.get("config"), _test_config)
+        self.assertNotIn("dhan_auth", sys.modules)
+
     def test_explicit_and_default_symbol_lists_obey_configured_cap(self) -> None:
         loader = _Loader()
         explicit = resolve_symbols(loader, ",".join(f"S{i}" for i in range(1, 36)), 100)
