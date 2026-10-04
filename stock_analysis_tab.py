@@ -309,6 +309,63 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     technical = _technical(points, market)
     order_flow = order_flow_payload(symbol, points)
     direction = str(market.get("direction") or "").upper()
+    bullish = direction == "UP"
+    bearish = direction == "DOWN"
+
+    def _first_number(*keys: str) -> float | None:
+        for key in keys:
+            value = candidate.get(key)
+            if value not in (None, ""):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+            value = market.get(key)
+            if value not in (None, ""):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    breakout = bool(candidate.get("opening_range_breakout")) or (
+        bool(candidate.get("fresh_day_high")) if bullish
+        else bool(candidate.get("fresh_day_low")) if bearish
+        else False
+    )
+    vwap_gap = _f(candidate.get("vwap_distance_percent"), technical.get("vwap_distance_percent"))
+    vwap_ok = (vwap_gap > 0.05) if bullish else (vwap_gap < -0.05) if bearish else False
+    day_level = bool(candidate.get("fresh_day_high")) if bullish else bool(candidate.get("fresh_day_low")) if bearish else False
+    prev_level = bool(
+        candidate.get("previous_day_high_breakout")
+        or candidate.get("previous_day_low_breakdown")
+        or candidate.get("fresh_previous_day_high")
+        or candidate.get("fresh_previous_day_low")
+        or candidate.get("pdh_breakout")
+        or candidate.get("pdl_breakdown")
+    )
+    structure_checks = {
+        "breakout": breakout,
+        "vwap": vwap_ok,
+        "day_level": day_level,
+        "previous_day_level": prev_level,
+    }
+    structure_score = sum(1 for value in structure_checks.values() if value)
+    relative_strength = _first_number("relative_strength_pct", "vs_nifty_pct", "nifty_relative_pct")
+    futures_oi = _first_number("futures_oi_pct", "fut_oi_pct", "futures_oi_change_pct", "oi_change_pct")
+
+    confirmation = {
+        "direction": "BULLISH" if bullish else "BEARISH" if bearish else "NEUTRAL",
+        "structure_score": structure_score,
+        "structure_total": 4,
+        "structure_checks": structure_checks,
+        "relative_strength_pct": round(relative_strength, 3) if relative_strength is not None else None,
+        "rvat": round(_f(candidate.get("relative_volume"), technical.get("rvat_1m")), 2),
+        "vwap_gap_pct": round(vwap_gap, 3),
+        "futures_oi_pct": round(futures_oi, 3) if futures_oi is not None else None,
+        "order_flow_score": order_flow.get("order_flow_score") if order_flow.get("ok") else None,
+        "order_flow_bias": order_flow.get("order_flow_bias") if order_flow.get("ok") else "UNAVAILABLE",
+    }
     signals: list[str] = []
 
     if direction == "UP":
@@ -346,6 +403,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "market": market,
         "technical": technical,
         "order_flow": order_flow,
+        "confirmation": confirmation,
         "candidate": candidate,
         "candidate_status": _status(candidate),
         "points": points[-180:],
@@ -539,6 +597,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
 </div>
 <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
+<div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
 <div class="panel"><div class="pt">APlus Scanner Context</div><div class="body"><div id="candidate"></div></div></div>
@@ -585,6 +644,22 @@ function render(d){
     card("15m Move",pct(t.move_15m_pct)),card("30m Move",pct(t.move_30m_pct)),
     card("VWAP",n(t.vwap).toFixed(2)),card("VWAP Gap",pct(t.vwap_distance_percent)),
     card("RVAT (1m)",n(t.rvat_1m).toFixed(2)+"x")
+  ].join("");
+  const cf=d.confirmation||{};
+  const checks=cf.structure_checks||{};
+  q("#confirmation").innerHTML=[
+    card("Structure",n(cf.structure_score)+"/"+n(cf.structure_total||4)),
+    card("Breakout",checks.breakout?"YES":"NO"),
+    card("VWAP",checks.vwap?"YES":"NO"),
+    card("Day Level",checks.day_level?"YES":"NO"),
+    card("PDH/PDL",checks.previous_day_level?"YES":"NO"),
+    card("vs NIFTY",cf.relative_strength_pct==null?"N/A":pct(cf.relative_strength_pct)),
+    card("RVAT",n(cf.rvat).toFixed(2)+"x"),
+    card("VWAP Gap",pct(cf.vwap_gap_pct)),
+    card("Futures OI",cf.futures_oi_pct==null?"N/A":pct(cf.futures_oi_pct)),
+    card("Order Flow",cf.order_flow_score==null?"N/A":n(cf.order_flow_score).toFixed(1)+"/100"),
+    card("OF Bias",esc(cf.order_flow_bias||"-")),
+    card("Overall Bias",esc(cf.direction||"-"))
   ].join("");
   const of=d.order_flow||{};
   if(of.ok){
