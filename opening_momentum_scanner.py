@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from analytics.enums import MarketBias, RecommendationType
 from config import AppConfig
-from core.dhan_client import DhanClient
+from core.dhan_client import DhanClient, DhanMarketDataAuthorizationError
 from core.instrument_loader import InstrumentLoader, UnderlyingInstrument
 from core.option_chain import OptionChainService
 from logger import get_logger
@@ -41,10 +41,19 @@ from intraday_movement_engine import IntradayMovementEngine, TapeMetrics
 from option_selector import OptionSelectionError, OptionSelector
 from paper_trade_journal import PaperTradeJournal
 from safety_gate import SafetyGateEngine
+from scanner_authorization_state import scanner_authorization_is_blocked
 
 
 logger = get_logger(__name__)
 from stock_selection_v2 import V2GateConfig, evaluate_entry_ready, rank_raw_movers
+
+
+class _MarketDataCycleError(RuntimeError):
+    """A failed shared market-data request that should be retried next cycle."""
+
+    def __init__(self, category: str, *, authorization_failed: bool = False) -> None:
+        self.authorization_failed = authorization_failed
+        super().__init__(category)
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -280,6 +289,8 @@ class OpeningMomentumScanner:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.intraday_state_dir = Path(config.paths.data_dir) / "intraday_movement"
         self.intraday_state_dir.mkdir(parents=True, exist_ok=True)
+        self.authorization_state_path = self.intraday_state_dir / "scanner_runtime_health.json"
+        self.authorization_validation_path = self.intraday_state_dir / "market_data_authorization_validation.json"
         self.intraday_engine = IntradayMovementEngine(
             state_dir=self.intraday_state_dir,
             settings=self.settings,
@@ -408,7 +419,30 @@ class OpeningMomentumScanner:
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
         if open_option_ids:
             quote_request["NSE_FNO"] = open_option_ids
-        quote_map = self.client.get_market_quotes(quote_request, mode="quote")
+        try:
+            quote_map = self.client.get_market_quotes(quote_request, mode="quote")
+        except DhanMarketDataAuthorizationError as exc:
+            self.paper_journal.mark_open_positions_unavailable(
+                current_time,
+                error_type=type(exc).__name__,
+                mark_status="AUTHORIZATION_FAILED",
+                error_status=exc.status_code,
+            )
+            self.paper_journal.flush()
+            self._write_authorization_state(
+                "AUTHORIZATION_FAILED",
+                updated_at=current_time,
+                status_code=exc.status_code,
+                endpoint=exc.endpoint,
+            )
+            raise _MarketDataCycleError(
+                "AUTHORIZATION_FAILED", authorization_failed=True,
+            ) from exc
+        except Exception as exc:
+            self.paper_journal.mark_open_positions_unavailable(
+                current_time, error_type=type(exc).__name__,
+            )
+            raise _MarketDataCycleError(type(exc).__name__) from exc
 
         # Stock Selection V2: rank the full F&O universe by actual movement
         # from today's market open. Top-5 UP are CE-eligible; Top-5 DOWN are
@@ -863,6 +897,7 @@ class OpeningMomentumScanner:
             )
 
         self._write_reports(payload)
+        self._write_authorization_state("HEALTHY", updated_at=current_time)
 
         logger.info(
             "Intraday movement cycle phase=%s universe=%d raw_quotes=%d "
@@ -904,6 +939,13 @@ class OpeningMomentumScanner:
 
         while True:
             now = datetime.now(IST)
+            if scanner_authorization_is_blocked(
+                self.authorization_state_path, self.authorization_validation_path,
+            ):
+                logger.error(
+                    "Scanner authorization remains unverified; normal scan path is blocked"
+                )
+                return
             phase = self._session_phase(now)
 
             if phase == "PRE_OPEN":
@@ -925,26 +967,57 @@ class OpeningMomentumScanner:
                 final_summary = self.paper_journal.summary(now)
                 logger.info(
                     "Continuous Intraday Movement Scanner session complete for %s "
-                    "paper=%d open=%d closed=%d net_pnl=%.2f final_closed=%d",
+                    "paper=%d open=%d closed=%d realized_pnl=%.2f total_pnl=%s "
+                    "pnl_data_status=%s final_closed=%d",
                     now.date().isoformat(),
                     int(final_summary.get("paper_trades_today") or 0),
                     int(final_summary.get("open_positions") or 0),
                     int(final_summary.get("closed_trades") or 0),
-                    float(final_summary.get("net_pnl") or 0.0),
+                    float(final_summary.get("realized_pnl") or 0.0),
+                    final_summary.get("total_pnl") if final_summary.get("total_pnl") is not None else "INCOMPLETE",
+                    final_summary.get("pnl_data_status"),
                     len(final_update.get("closed", [])),
                 )
                 return
 
             cycle_started = time.monotonic()
-            self.run_once(
-                force_refresh_instruments=(
-                    force_refresh_instruments and first_run
-                ),
-                now=now,
-            )
+            try:
+                self.run_once(
+                    force_refresh_instruments=(
+                        force_refresh_instruments and first_run
+                    ),
+                    now=now,
+                )
+            except _MarketDataCycleError as exc:
+                # Keep open positions persisted. Only transient failures retry;
+                # authorization failures return below until explicit validation.
+                self.paper_journal.flush()
+                logger.error(
+                    "Intraday market-data cycle failed category=%s; open paper positions retained",
+                    str(exc),
+                )
+                if exc.authorization_failed:
+                    return
             first_run = False
             elapsed = time.monotonic() - cycle_started
             time.sleep(max(1.0, interval - elapsed))
+
+    def _write_authorization_state(
+        self, status: str, *, updated_at: datetime, status_code: int | None = None,
+        endpoint: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "status": status,
+            "updated_at": updated_at.isoformat(),
+            "authorization_validation_required": status == "AUTHORIZATION_FAILED",
+        }
+        if status == "AUTHORIZATION_FAILED":
+            payload.update({
+                "failure_category": "HTTP_AUTHORIZATION_REJECTED",
+                "http_status": status_code,
+                "endpoint": endpoint,
+            })
+        self._atomic_json(self.authorization_state_path, payload)
 
     # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
     def _monitor_paper_positions_from_quote_map(
@@ -989,6 +1062,9 @@ class OpeningMomentumScanner:
                 "received_option_quotes": sum(1 for security_id in ids if security_id in segment),
             }
         except Exception as exc:
+            self.paper_journal.mark_open_positions_unavailable(
+                now, error_type=type(exc).__name__, force_close=force_close,
+            )
             logger.warning("PAPER shared-position update failed: %s: %s", type(exc).__name__, exc)
             return {"closed": [], "errors": [f"{type(exc).__name__}: {exc}"], "quote_source": "SHARED_MAIN_QUOTE"}
 
@@ -1011,6 +1087,9 @@ class OpeningMomentumScanner:
             )
             return {"closed": closed, "errors": []}
         except Exception as exc:
+            self.paper_journal.mark_open_positions_unavailable(
+                now, error_type=type(exc).__name__, force_close=force_close,
+            )
             logger.warning("PAPER position quote refresh failed: %s: %s", type(exc).__name__, exc)
             return {"closed": [], "errors": [f"{type(exc).__name__}: {exc}"]}
 
