@@ -22,8 +22,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import time
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,39 @@ from core.instrument_loader import InstrumentLoader
 
 ROOT = Path(__file__).resolve().parent
 DATA_ROOT = ROOT / "data" / "options_intelligence"
+MAX_SYMBOLS_LIMIT = 30
+
+_SECRET_VALUE = re.compile(
+    r"(?i)(access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|client[_ -]?id|"
+    r"dhan[_ -]?client[_ -]?id|api[_ -]?key|authorization|totp|pin|secret)"
+    r"(\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s,;]+"
+)
+
+
+def classify_failure(value: Any) -> str:
+    """Map an error to a stable, non-secret operational category."""
+    text = str(value or "").casefold()
+    if re.search(r"\b429\b|rate.?limit|too many requests", text):
+        return "RATE_LIMITED"
+    if re.search(r"\b401\b|\b403\b|unauthori[sz]ed|forbidden|authentication", text):
+        return "AUTHORIZATION"
+    if "not in f&o universe" in text or "unknown symbol" in text:
+        return "INVALID_SYMBOL"
+    if "expiry" in text:
+        return "EXPIRY_UNAVAILABLE"
+    if re.search(r"timeout|timed out", text):
+        return "TIMEOUT"
+    if re.search(r"dns|connection|socket|ssl|tls|network|transport", text):
+        return "NETWORK"
+    if re.search(r"blank response|empty response|no usable|no data", text):
+        return "EMPTY_RESPONSE"
+    return "OTHER"
+
+
+def _safe_error(error: BaseException) -> str:
+    message = _SECRET_VALUE.sub(r"\1\2[REDACTED]", str(error))
+    message = " ".join(message.split())
+    return f"{type(error).__name__}: {message[:240]}"
 
 CSV_FIELDS = (
     "captured_at",
@@ -209,10 +244,9 @@ def _update_manifest(day_dir: Path, updates: dict[str, Any]) -> None:
             current = {}
     current.update(updates)
     current["updated_at"] = datetime.now().astimezone().isoformat()
-    path.write_text(
-        json.dumps(current, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 def collect_once(
@@ -235,7 +269,7 @@ def collect_once(
         underlying = loader.get(symbol)
         if underlying is None:
             failures += 1
-            errors.append({"symbol": symbol, "error": "Not in F&O universe"})
+            errors.append({"symbol": symbol, "failure_type": "INVALID_SYMBOL", "error": "Not in F&O universe"})
             continue
 
         expiries = sorted(
@@ -247,7 +281,7 @@ def collect_once(
         )
         if not expiries:
             failures += 1
-            errors.append({"symbol": symbol, "error": "No active expiry"})
+            errors.append({"symbol": symbol, "failure_type": "EXPIRY_UNAVAILABLE", "error": "No active expiry"})
             continue
 
         today = date.today().isoformat()
@@ -292,24 +326,30 @@ def collect_once(
             )
         except Exception as exc:
             failures += 1
+            safe_error = _safe_error(exc)
+            failure_type = classify_failure(safe_error)
             errors.append(
                 {
                     "symbol": symbol,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "failure_type": failure_type,
+                    "error": safe_error,
                 }
             )
             print(
-                f"[ERROR] {symbol}: {type(exc).__name__}: {exc}",
+                f"[ERROR] {symbol} failure_type={failure_type}: {safe_error}",
                 file=sys.stderr,
                 flush=True,
             )
 
+    failure_counts = Counter(item["failure_type"] for item in errors)
     result = {
         "captured_at": captured_at,
         "symbols_requested": len(symbols),
         "symbols_success": successes,
         "symbols_failed": failures,
         "rows_written": rows_written,
+        "last_successful_capture": captured_at if successes else None,
+        "failure_classifications": dict(failure_counts),
         "errors": errors[-50:],
     }
     _update_manifest(
@@ -330,13 +370,16 @@ def resolve_symbols(
     raw_symbols: str,
     maximum: int,
 ) -> list[str]:
+    if maximum < 1:
+        raise ValueError("maximum must be >= 1")
+    maximum = min(maximum, MAX_SYMBOLS_LIMIT)
     if raw_symbols.strip():
         requested = [
             item.strip().upper()
             for item in raw_symbols.split(",")
             if item.strip()
         ]
-        return list(dict.fromkeys(requested))
+        return list(dict.fromkeys(requested))[:maximum]
 
     universe = [item.symbol for item in loader.get_universe()]
     return universe[:maximum]
@@ -371,8 +414,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.max_symbols < 1:
-        parser.error("--max-symbols must be >= 1")
+    if args.max_symbols < 1 or args.max_symbols > MAX_SYMBOLS_LIMIT:
+        parser.error(f"--max-symbols must be between 1 and {MAX_SYMBOLS_LIMIT}")
     if args.cycles < 0:
         parser.error("--cycles must be >= 0")
 

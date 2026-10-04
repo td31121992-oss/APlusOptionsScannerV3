@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from analytics.order_flow import build_order_flow
+from stock_movement_intelligence import build_why_moving
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -308,6 +309,14 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     candidate = _latest_candidate(symbol)
     technical = _technical(points, market)
     order_flow = order_flow_payload(symbol, points)
+    intelligence = build_why_moving(
+        day=day,
+        symbol=symbol,
+        market=market,
+        technical=technical,
+        points=points,
+        candidate=candidate,
+    )
     direction = str(market.get("direction") or "").upper()
     bullish = direction == "UP"
     bearish = direction == "DOWN"
@@ -406,6 +415,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "confirmation": confirmation,
         "candidate": candidate,
         "candidate_status": _status(candidate),
+        "intelligence": intelligence,
         "points": points[-180:],
         "signals": signals[:12],
         "read_only": True,
@@ -571,10 +581,11 @@ STOCK_ANALYSIS_HTML = r"""<!doctype html>
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px}.toolbar input,.toolbar button{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 12px}.toolbar button{cursor:pointer;font-weight:700}
 .wrap{padding:0 18px 22px}.cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px}.label{font-size:10px;color:var(--muted)}.value{font-size:18px;font-weight:800;margin-top:5px}.up{color:var(--green)}.down{color:var(--red)}
 .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:10px;margin-top:10px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.pt{padding:11px 13px;border-bottom:1px solid var(--line);font-weight:800}.body{padding:12px}.rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px}.metric b{display:block;font-size:13px}.metric span{font-size:11px;color:var(--muted)}
+.intel-sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.intel-section{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px}.intel-section h3{font-size:11px;color:var(--muted);margin:0 0 6px}.intel-section ul{margin:0;padding-left:17px;font-size:12px;line-height:1.5}.intel-confidence{color:#9ff0bd;font-size:11px;font-weight:700;margin-bottom:9px}
 #chart{height:390px;padding:8px}.chartline{fill:none;stroke:var(--cyan);stroke-width:2.5}.gridline{stroke:var(--line);stroke-width:1}.point{font-size:10px;fill:var(--muted)}
 ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.notice{margin-top:10px;padding:10px 12px;border:1px solid #3a2e60;background:#15112a;border-radius:10px;color:#cfc5f7;font-size:11px}
 @media(max-width:1000px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr}}
-@media(max-width:600px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:0 10px 16px}.header{padding:12px}.toolbar{padding:10px}.title{font-size:19px}.rows{grid-template-columns:1fr}#chart{height:300px}}
+ @media(max-width:600px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:0 10px 16px}.header{padding:12px}.toolbar{padding:10px}.title{font-size:19px}.rows,.intel-sections{grid-template-columns:1fr}#chart{height:300px}}
 </style></head>
 <body>
 <div class="nav">
@@ -592,12 +603,13 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">Direction</div><div class="value" id="direction">-</div></div>
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
-<div class="grid">
-<div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
-<div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
-</div>
-<div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
-<div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
+ <div class="grid">
+ <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
+ <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
+ </div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
+ <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Why this stock is moving • local read-only evidence</div><div class="body"><div id="intelligence"></div><div class="notice">Possible drivers are evidence-based context, not confirmed causality or a trading recommendation.</div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
 <div class="panel"><div class="pt">APlus Scanner Context</div><div class="body"><div id="candidate"></div></div></div>
@@ -622,6 +634,8 @@ function drawChart(points){
 }
 function render(d){
   const m=d.market||{},t=d.technical||{},c=d.candidate||{};
+  const intel=d.intelligence||{},sections=intel.sections||[];
+  q("#intelligence").innerHTML="<div class='intel-confidence'>Evidence confidence: "+esc(intel.confidence||"INSUFFICIENT_DATA")+" • Technical "+esc(intel.technical_alignment||"unknown")+" • Sector "+esc(intel.sector_alignment||"unknown")+" • Options "+esc(intel.options_alignment||"unknown")+"</div><div class='intel-sections'>"+sections.map(s=>"<section class='intel-section'><h3>"+esc(s.title)+"</h3><ul>"+(s.items||[]).map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></section>").join("")+"</div>";
   q("#title").textContent="APlus Stock Analysis • "+d.symbol;
   q("#updated").textContent=(d.generated_at?"Market snapshot "+d.generated_at:"No market snapshot")+" • "+(d.read_only?"READ ONLY":"");
   q("#ltp").textContent=m.ltp?Number(m.ltp).toLocaleString("en-IN",{maximumFractionDigits:2}):"-";
