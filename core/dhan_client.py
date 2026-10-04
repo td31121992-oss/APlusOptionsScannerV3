@@ -51,6 +51,19 @@ class DhanClientError(RuntimeError):
     """Raised when a Dhan API call fails after all retries are exhausted."""
 
 
+class DhanMarketDataAuthorizationError(DhanClientError):
+    """Permanent market-data authorization rejection from Dhan (HTTP 401/403)."""
+
+    def __init__(self, *, status_code: int, endpoint: str, rate_bucket: str) -> None:
+        self.status_code = int(status_code)
+        self.endpoint = str(endpoint)
+        self.rate_bucket = str(rate_bucket)
+        super().__init__(
+            "Dhan market-data authorization failed "
+            f"(status={self.status_code}, endpoint={self.endpoint})"
+        )
+
+
 class _BlankResponseError(DhanClientError):
     """Internal marker: the API returned an empty/blank body (likely throttled)."""
 
@@ -325,6 +338,7 @@ class DhanClient:
 
         for attempt in range(1, self.config.max_retries + 2):
             self._throttle(rate_bucket, requests_per_second)
+            response = None
 
             try:
                 response = self._session.post(
@@ -336,19 +350,43 @@ class DhanClient:
                     ),
                     verify=self.config.verify_tls,
                 )
+                if response.status_code in (401, 403):
+                    logger.error(
+                        "Dhan REST data authorization failed "
+                        "(status=%d bucket=%s endpoint=%s); request will not be retried",
+                        response.status_code,
+                        rate_bucket,
+                        endpoint,
+                    )
+                    raise DhanMarketDataAuthorizationError(
+                        status_code=response.status_code,
+                        endpoint=endpoint,
+                        rate_bucket=rate_bucket,
+                    )
                 response.raise_for_status()
                 body = response.json()
+            except DhanMarketDataAuthorizationError:
+                raise
             except Exception as exc:  # noqa: BLE001
-                last_error = exc
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code is None and response is not None:
+                    status_code = getattr(response, "status_code", None)
+                exception_type = type(exc).__name__
+                last_error = DhanClientError(
+                    "Dhan REST data request failed "
+                    f"(category=REQUEST_ERROR, status={status_code or 'unknown'}, "
+                    f"exception={exception_type}, bucket={rate_bucket}, endpoint={endpoint})"
+                )
                 was_blank = False
                 logger.warning(
                     "Dhan REST data attempt %d/%d failed "
-                    "(bucket=%s endpoint=%s): %s",
+                    "(category=REQUEST_ERROR status=%s exception=%s bucket=%s endpoint=%s)",
                     attempt,
                     self.config.max_retries + 1,
+                    status_code or "unknown",
+                    exception_type,
                     rate_bucket,
                     endpoint,
-                    exc,
                 )
             else:
                 direct_payload = (
@@ -391,17 +429,18 @@ class DhanClient:
                     was_blank = False
                     last_error = DhanClientError(
                         "Dhan REST data API returned a non-success "
-                        f"response (bucket={rate_bucket}, "
-                        f"endpoint={endpoint}): {body!r}"
+                        f"response (category=NON_SUCCESS_RESPONSE, "
+                        f"status={getattr(response, 'status_code', 'unknown')}, "
+                        f"bucket={rate_bucket}, endpoint={endpoint})"
                     )
                     logger.warning(
                         "Dhan REST data attempt %d/%d returned failure "
-                        "(bucket=%s endpoint=%s): %s",
+                        "(category=NON_SUCCESS_RESPONSE status=%s bucket=%s endpoint=%s)",
                         attempt,
                         self.config.max_retries + 1,
+                        getattr(response, "status_code", "unknown"),
                         rate_bucket,
                         endpoint,
-                        body,
                     )
 
             if attempt <= self.config.max_retries:
@@ -775,7 +814,7 @@ class DhanClient:
         self.close()
 
 
-__all__ = ["DhanClient", "DhanClientError"]
+__all__ = ["DhanClient", "DhanClientError", "DhanMarketDataAuthorizationError"]
 
 
 # =========================================================
