@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from analytics.order_flow import build_order_flow
+
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
 CHART_BASE = ROOT / "data" / "chart_history"
@@ -110,6 +112,7 @@ def _load_points(day: str, symbol: str) -> list[dict[str, Any]]:
             "day_high": _f(row.get("day_high")),
             "day_low": _f(row.get("day_low")),
             "range_position_pct": _f(row.get("range_position_pct")),
+            "volume": _f(row.get("volume")),
         })
     if out:
         return out
@@ -183,6 +186,7 @@ def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
                 "day_high": 0.0,
                 "day_low": 0.0,
                 "range_position_pct": 0.0,
+                "volume": _f((candles.get("volume", []) or [0])[idx]) if idx < len(candles.get("volume", []) or []) else 0.0,
             })
 
         _CHART_FALLBACK_CACHE[cache_key] = (now, points)
@@ -227,6 +231,15 @@ def _move(values: list[float], minutes: int) -> float:
 
 def _technical(points: list[dict[str, Any]], market: dict[str, Any]) -> dict[str, Any]:
     prices = [x["ltp"] for x in points if x["ltp"] > 0]
+    volumes = [max(0.0, _f(x.get("volume"))) for x in points]
+    vwap_num = sum(_f(x.get("ltp")) * v for x, v in zip(points, volumes))
+    vwap_den = sum(volumes)
+    vwap = vwap_num / vwap_den if vwap_den else _f(market.get("vwap"))
+    ltp = prices[-1] if prices else _f(market.get("ltp"))
+    vwap_gap = ((ltp - vwap) / vwap * 100.0) if vwap and ltp else 0.0
+    recent = volumes[-1] if volumes else 0.0
+    baseline = [v for v in volumes[-21:-1] if v > 0]
+    rvat = (recent / (sum(baseline) / len(baseline))) if baseline else 0.0
     return {
         "ema9_1m": round(_ema(prices, 9), 2) if prices else 0.0,
         "ema20_1m": round(_ema(prices, 20), 2) if prices else 0.0,
@@ -237,6 +250,9 @@ def _technical(points: list[dict[str, Any]], market: dict[str, Any]) -> dict[str
         "move_15m_pct": round(_move(prices, 15), 3),
         "move_30m_pct": round(_move(prices, 30), 3),
         "points": len(prices),
+        "vwap": round(vwap, 2),
+        "vwap_distance_percent": round(vwap_gap, 3),
+        "rvat_1m": round(rvat, 2),
     }
 
 
@@ -255,12 +271,43 @@ def _status(candidate: dict[str, Any]) -> str:
     return str(candidate.get("selection_tier") or candidate.get("stage") or "ANALYZED")
 
 
+_ORDER_FLOW_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_ORDER_FLOW_CACHE_SECONDS = 4.0
+
+
+def order_flow_payload(symbol: str, points: list[dict[str, Any]]) -> dict[str, Any]:
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return {"ok": False, "data_status": "UNAVAILABLE", "error": "Symbol is required"}
+    now = time.monotonic()
+    cached = _ORDER_FLOW_CACHE.get(symbol)
+    if cached and now - cached[0] < _ORDER_FLOW_CACHE_SECONDS:
+        return cached[1]
+    try:
+        client, loader = _option_chain_runtime()
+        underlying = loader.get(symbol)
+        if underlying is None:
+            return {"ok": False, "data_status": "UNAVAILABLE", "error": f"{symbol} is not in the loaded F&O universe"}
+        segment = str(getattr(underlying, "exchange_segment", "NSE_EQ") or "NSE_EQ").upper()
+        payload = build_order_flow(
+            client=client,
+            security_id=int(getattr(underlying, "security_id")),
+            segment=segment,
+            points=points,
+        )
+    except Exception as exc:
+        payload = {"ok": False, "data_status": "UNAVAILABLE", "error": f"{type(exc).__name__}: {exc}"}
+    _ORDER_FLOW_CACHE[symbol] = (now, payload)
+    return payload
+
+
 def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     symbol = symbol.strip().upper()
     market = _market_row(symbol)
     points = _load_points(day, symbol)
     candidate = _latest_candidate(symbol)
     technical = _technical(points, market)
+    order_flow = order_flow_payload(symbol, points)
     direction = str(market.get("direction") or "").upper()
     signals: list[str] = []
 
@@ -298,6 +345,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "symbol": symbol,
         "market": market,
         "technical": technical,
+        "order_flow": order_flow,
         "candidate": candidate,
         "candidate_status": _status(candidate),
         "points": points[-180:],
@@ -490,6 +538,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
 <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
 </div>
+<div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
 <div class="panel"><div class="pt">APlus Scanner Context</div><div class="body"><div id="candidate"></div></div></div>
@@ -533,8 +582,29 @@ function render(d){
     card("EMA9 (1m)",n(t.ema9_1m).toFixed(2)),card("EMA20 (1m)",n(t.ema20_1m).toFixed(2)),
     card("EMA50 (1m)",n(t.ema50_1m).toFixed(2)),card("RSI14 (1m)",n(t.rsi14_1m).toFixed(1)),
     card("5m Move",pct(t.move_5m_pct)),card("10m Move",pct(t.move_10m_pct)),
-    card("15m Move",pct(t.move_15m_pct)),card("30m Move",pct(t.move_30m_pct))
+    card("15m Move",pct(t.move_15m_pct)),card("30m Move",pct(t.move_30m_pct)),
+    card("VWAP",n(t.vwap).toFixed(2)),card("VWAP Gap",pct(t.vwap_distance_percent)),
+    card("RVAT (1m)",n(t.rvat_1m).toFixed(2)+"x")
   ].join("");
+  const of=d.order_flow||{};
+  if(of.ok){
+    q("#orderflow").innerHTML=[
+      card("Order Flow Bias",esc(of.order_flow_bias||"-")),
+      card("Order Flow Score",n(of.order_flow_score).toFixed(1)+"/100"),
+      card("5-Level Bid Depth",n(of.bid_depth_5).toLocaleString()),
+      card("5-Level Ask Depth",n(of.ask_depth_5).toLocaleString()),
+      card("Book Imbalance",pct(of.book_imbalance_pct)),
+      card("Pending Buy/Sell",pct(of.pending_book_imbalance_pct)),
+      card("Best Bid",n(of.best_bid).toFixed(2)+" × "+n(of.best_bid_qty).toLocaleString()),
+      card("Best Ask",n(of.best_ask).toFixed(2)+" × "+n(of.best_ask_qty).toLocaleString()),
+      card("Spread",n(of.spread).toFixed(4)),
+      card("Candle Delta Proxy",n(of.candle_delta_proxy).toLocaleString()),
+      card("Delta Proxy %",pct(of.candle_delta_proxy_pct)),
+      card("Event",esc(of.event||"-"))
+    ].join("");
+  }else{
+    q("#orderflow").innerHTML="<div class='sub'>Order flow unavailable: "+esc(of.error||"no depth data")+"</div>";
+  }
   if(c && Object.keys(c).length){
     const keys=["stage","selection_tier","setup_family","score","trade_quality_score","movement_capture_score","trend_alignment_score","clean_trend_score","chase_risk_score","relative_volume","recent_relative_volume_15m","vwap","vwap_distance_percent","ema9_5m","ema20_5m","ema50_5m","ema9_15m","ema20_15m","rsi14_5m","adx14_5m","plus_di_5m","minus_di_5m","pivot_state","pivot_point","r1","r2","s1","s2","opening_range_breakout","opening_direction_confirmed","safety_decision","paper_trade_status"];
     q("#candidate").innerHTML=keys.filter(k=>c[k]!==undefined&&c[k]!==""&&c[k]!==null).map(k=>card(k.replaceAll("_"," "),esc(c[k]))).join("");
@@ -575,4 +645,4 @@ if(q("#symbol").value){load();setInterval(load,5000);}
 </script></body></html>"""
 
 
-__all__ = ["STOCK_ANALYSIS_HTML", "analysis_payload", "option_chain_payload"]
+__all__ = ["STOCK_ANALYSIS_HTML", "analysis_payload", "option_chain_payload", "order_flow_payload"]
