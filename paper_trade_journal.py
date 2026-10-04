@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 class PaperTradeJournal:
     """Persist generated paper option trades and de-duplicate repeated signals."""
 
+    MARK_FRESHNESS_SECONDS = 180
+
     CSV_FIELDS: tuple[str, ...] = (
         "paper_trade_id", "generated_at", "symbol", "direction", "stage",
         "setup_family", "selection_tier", "status", "momentum_score",
@@ -51,6 +53,10 @@ class PaperTradeJournal:
         "capital_deployed", "planned_risk_amount", "planned_risk_percent",
         "last_quote_time", "last_option_price", "highest_option_price",
         "lowest_option_price", "mfe_amount", "mae_amount",
+        "last_successful_mark_at", "last_mark_evaluated_at", "mark_status",
+        "last_mark_error_type", "last_mark_error_status",
+        "position_lifecycle_status", "position_status_reason",
+        "unrealized_pnl", "realized_pnl", "total_pnl", "pnl_data_status",
         "target1_hit_at", "target2_hit_at", "target3_hit_at",
         "runner_mode", "runner_activated_at", "runner_stop",
         "exit_time", "exit_price", "exit_reason", "holding_seconds",
@@ -268,6 +274,17 @@ class PaperTradeJournal:
         record["last_option_price"] = entry_price
         record["highest_option_price"] = entry_price
         record["lowest_option_price"] = entry_price
+        record.update({
+            "last_successful_mark_at": when.isoformat(),
+            "last_mark_evaluated_at": when.isoformat(),
+            "mark_status": "VALID",
+            "position_lifecycle_status": "OPEN",
+            "position_status_reason": "",
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "total_pnl": 0.0,
+            "pnl_data_status": "COMPLETE",
+        })
 
         self.trades.append(record)
 
@@ -341,23 +358,51 @@ class PaperTradeJournal:
         for trade in self.trades:
             if str(trade.get("status") or "").upper() != "OPEN":
                 continue
+            trade["last_mark_evaluated_at"] = when.isoformat()
             sid = str(trade.get("option_security_id") or "")
-            raw = option_quotes.get(sid)
-            if raw is None:
-                try:
-                    raw = option_quotes.get(int(sid))
-                except (TypeError, ValueError):
-                    raw = None
-            price = self._quote_price(raw)
+            try:
+                raw = option_quotes.get(sid)
+                if raw is None:
+                    try:
+                        raw = option_quotes.get(int(sid))
+                    except (TypeError, ValueError):
+                        raw = None
+                price = self._quote_price(raw)
+            except Exception as exc:
+                self._mark_unavailable(
+                    trade, when, status="MARKET_DATA_ERROR",
+                    error_type=type(exc).__name__, force_close=force_close,
+                )
+                continue
             if price <= 0:
+                self._mark_unavailable(
+                    trade, when, status="NO_VALID_MARK",
+                    error_type="", force_close=force_close,
+                )
                 continue
             entry = self._number(trade.get("entry_price"))
             qty = self._integer(trade.get("quantity"))
             if entry <= 0 or qty <= 0:
+                self._mark_unavailable(
+                    trade, when, status="INVALID_POSITION_DATA",
+                    error_type="", force_close=force_close,
+                )
                 continue
 
             trade["last_quote_time"] = when.isoformat()
+            trade["last_successful_mark_at"] = when.isoformat()
             trade["last_option_price"] = round(price, 4)
+            trade["mark_status"] = "VALID"
+            trade["last_mark_error_type"] = None
+            trade["last_mark_error_status"] = None
+            trade["pnl_data_status"] = "COMPLETE"
+            transaction = str(trade.get("option_transaction") or "BUY").upper()
+            unrealized = (entry - price) * qty if transaction == "SELL" else (price - entry) * qty
+            trade["unrealized_pnl"] = round(unrealized, 2)
+            trade["realized_pnl"] = 0.0
+            trade["total_pnl"] = round(unrealized, 2)
+            trade["position_status_reason"] = ""
+            trade["position_lifecycle_status"] = "OPEN"
             self._append_option_tape(trade, when, price)
             high = max(self._number(trade.get("highest_option_price")), price)
             old_low = self._number(trade.get("lowest_option_price"))
@@ -398,11 +443,37 @@ class PaperTradeJournal:
                     else ("PROFIT_PROTECTION_EXIT" if protected_stop > original_stop else "OPTION_STOP_LOSS")
                 )
             elif force_close:
-                reason = force_close_reason
+                trade["position_lifecycle_status"] = "CLOSE_PENDING"
+                trade["position_status_reason"] = (
+                    "Session ended; no automatic exit event or price was created."
+                )
             if reason:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    @staticmethod
+    def _mark_unavailable(
+        trade: dict[str, Any], when: datetime, *, status: str,
+        error_type: str, force_close: bool, error_status: int | None = None,
+    ) -> None:
+        trade["mark_status"] = status
+        trade["pnl_data_status"] = "INCOMPLETE_MARK"
+        trade["unrealized_pnl"] = None
+        trade["total_pnl"] = None
+        trade["last_mark_error_type"] = error_type or None
+        trade["last_mark_error_status"] = error_status
+        if force_close:
+            trade["position_lifecycle_status"] = "CLOSE_PENDING_NO_VALID_EXIT_MARK"
+            trade["position_status_reason"] = (
+                "Session ended without a valid exit mark; position remains open."
+            )
+        else:
+            trade["position_lifecycle_status"] = "OPEN"
+            trade["position_status_reason"] = (
+                "No valid current mark; open position retained for the next monitoring cycle."
+            )
+        trade["last_mark_evaluated_at"] = when.isoformat()
 
     def _close_trade(self, trade: dict[str, Any], when: datetime, exit_price: float, reason: str) -> None:
         entry = self._number(trade.get("entry_price"))
@@ -420,6 +491,11 @@ class PaperTradeJournal:
             "estimated_costs": costs, "net_pnl": round(net, 2),
             "return_percent": round(net / capital * 100.0, 4) if capital > 0 else 0.0,
             "result": "WIN" if net > 0 else ("LOSS" if net < 0 else "FLAT"),
+            "realized_pnl": round(net, 2), "unrealized_pnl": 0.0,
+            "total_pnl": round(net, 2), "pnl_data_status": "COMPLETE",
+            "mark_status": "VALID", "last_successful_mark_at": when.isoformat(),
+            "last_mark_evaluated_at": when.isoformat(),
+            "position_lifecycle_status": "CLOSED", "position_status_reason": "",
         })
         self.notifier.notify_exit(trade)
 
@@ -451,10 +527,82 @@ class PaperTradeJournal:
                 return value
         return 0.0
 
+    def mark_open_positions_unavailable(
+        self, when: datetime, *, error_type: str, force_close: bool = False,
+        mark_status: str = "MARKET_DATA_ERROR", error_status: int | None = None,
+    ) -> None:
+        """Record a failed mark attempt without changing the position or exit price."""
+        self._ensure_date(when.date())
+        for trade in self.trades:
+            if str(trade.get("status") or "").upper() == "OPEN":
+                self._mark_unavailable(
+                    trade, when, status=mark_status,
+                    error_type=error_type, force_close=force_close,
+                    error_status=error_status,
+                )
+
+    @classmethod
+    def _current_mark(cls, trade: Mapping[str, Any], when: datetime) -> tuple[bool, int | None]:
+        price = cls._number(trade.get("last_option_price"))
+        marked_at = cls._parse_time(
+            trade.get("last_successful_mark_at") or trade.get("last_quote_time")
+        )
+        if price <= 0 or marked_at is None:
+            return False, None
+        if marked_at.tzinfo is None and when.tzinfo is not None:
+            marked_at = marked_at.replace(tzinfo=when.tzinfo)
+        elif when.tzinfo is None and marked_at.tzinfo is not None:
+            when = when.replace(tzinfo=marked_at.tzinfo)
+        age = (when - marked_at).total_seconds()
+        fresh = 0 <= age <= cls.MARK_FRESHNESS_SECONDS
+        if str(trade.get("mark_status") or "VALID").upper() not in ("VALID", ""):
+            fresh = False
+        return fresh, max(0, int(age)) if age >= 0 else None
+
     def summary(self, when: datetime) -> dict[str, Any]:
         self._ensure_date(when.date())
         open_trades = [x for x in self.trades if str(x.get("status")).upper() == "OPEN"]
         closed = [x for x in self.trades if str(x.get("status")).upper() == "CLOSED"]
+        realized = round(sum(self._number(x.get("net_pnl")) for x in closed), 2)
+        known_unrealized = 0.0
+        incomplete_marks: list[str] = []
+        mark_details = []
+        for trade in open_trades:
+            fresh, age = self._current_mark(trade, when)
+            trade_id = str(trade.get("paper_trade_id") or trade.get("trade_id") or "")
+            stored_mark_status = str(trade.get("mark_status") or "").upper()
+            if fresh:
+                reported_mark_status = "FRESH"
+            elif stored_mark_status and stored_mark_status != "VALID":
+                reported_mark_status = stored_mark_status
+            elif age is not None and self._number(trade.get("last_option_price")) > 0:
+                reported_mark_status = "STALE"
+            else:
+                reported_mark_status = "MISSING"
+            mark_details.append({
+                "trade_id": trade_id,
+                "mark_status": reported_mark_status,
+                "mark_is_fresh": fresh,
+                "mark_age_seconds": age,
+                "last_successful_mark_at": trade.get("last_successful_mark_at") or trade.get("last_quote_time"),
+                "last_mark_evaluated_at": trade.get("last_mark_evaluated_at"),
+                "last_mark_error_type": trade.get("last_mark_error_type"),
+                "last_mark_error_status": trade.get("last_mark_error_status"),
+                "position_lifecycle_status": trade.get("position_lifecycle_status") or "OPEN",
+                "position_status_reason": trade.get("position_status_reason") or "",
+                "pnl_data_status": "COMPLETE" if fresh else "INCOMPLETE_MARK",
+            })
+            if fresh:
+                transaction = str(trade.get("option_transaction") or "BUY").upper()
+                entry = self._number(trade.get("entry_price"))
+                mark = self._number(trade.get("last_option_price"))
+                quantity = self._integer(trade.get("quantity"))
+                known_unrealized += (entry - mark) * quantity if transaction == "SELL" else (mark - entry) * quantity
+            else:
+                incomplete_marks.append(trade_id)
+        marks_complete = not incomplete_marks
+        unrealized = round(known_unrealized, 2) if marks_complete else None
+        total = round(realized + known_unrealized, 2) if marks_complete else None
         return {
             "trading_date": self.trading_date,
             "paper_trades_today": len(self.trades),
@@ -463,7 +611,14 @@ class PaperTradeJournal:
             "wins": sum(1 for x in closed if self._number(x.get("net_pnl")) > 0),
             "losses": sum(1 for x in closed if self._number(x.get("net_pnl")) < 0),
             "gross_pnl": round(sum(self._number(x.get("gross_pnl")) for x in closed), 2),
-            "net_pnl": round(sum(self._number(x.get("net_pnl")) for x in closed), 2),
+            "net_pnl": realized,
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "known_unrealized_pnl": round(known_unrealized, 2),
+            "total_pnl": total,
+            "pnl_data_status": "COMPLETE" if marks_complete else "INCOMPLETE_OPEN_POSITION_MARKS",
+            "incomplete_mark_trade_ids": incomplete_marks,
+            "open_position_marks": mark_details,
             "journal_state_file": str(self.state_path),
             "journal_report_json": str(self.report_json),
             "journal_report_csv": str(self.report_csv),
