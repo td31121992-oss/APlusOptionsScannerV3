@@ -3,6 +3,13 @@ from __future__ import annotations
 import json
 import os
 import time
+import re
+import urllib.request
+import xml.etree.ElementTree as ET
+try:
+    import keyring
+except ImportError:
+    keyring = None
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -12,6 +19,8 @@ ROOT = Path(__file__).resolve().parent
 EVENTS_PATH = ROOT / "data" / "news_intelligence" / "events.jsonl"
 STATE_PATH = ROOT / "data" / "news_intelligence" / "telegram_alert_state.json"
 LOG_PATH = ROOT / "data" / "logs" / "news_telegram_alerts.log"
+SEBI_RSS = "https://www.sebi.gov.in/sebirss.xml"
+SEBI_SERVICE = "CAlphaTrader:Telegram"
 
 HIGH_IMPACT = {"VERY HIGH", "HIGH"}
 SEBI_TERMS = (
@@ -69,7 +78,46 @@ def _event_is_alertworthy(event: dict) -> bool:
     return False
 
 def _telegram_credentials() -> tuple[str, str]:
+    if keyring is not None:
+        try:
+            token = str(keyring.get_password(SEBI_SERVICE, "bot_token") or "").strip()
+            chat_id = str(keyring.get_password(SEBI_SERVICE, "chat_id") or "").strip()
+            if token and chat_id:
+                return token, chat_id
+        except Exception:
+            pass
     return os.getenv("TELEGRAM_BOT_TOKEN", "").strip(), os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+def _sebi_text(el: ET.Element | None) -> str:
+    return re.sub(r"\s+", " ", "".join(el.itertext()).strip()) if el is not None else ""
+
+def _load_sebi_events() -> list[dict]:
+    try:
+        req = urllib.request.Request(SEBI_RSS, headers={"User-Agent": "APlusOptionsScannerV3-NewsAlerts/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            root = ET.fromstring(response.read())
+        import hashlib
+        events = []
+        for item in root.findall(".//item"):
+            title = _sebi_text(item.find("title"))
+            link = _sebi_text(item.find("link"))
+            pub = _sebi_text(item.find("pubDate"))
+            summary = _sebi_text(item.find("description"))
+            if not title or not link:
+                continue
+            event_id = "SEBI-" + hashlib.sha256(link.encode("utf-8")).hexdigest()[:24]
+            events.append({
+                "event_id": event_id, "published_at_raw": pub,
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "source": "SEBI RSS", "source_type": "official_sebi_rss",
+                "category": "SEBI_REGULATORY", "impact": "HIGH",
+                "title": title, "summary": summary[:1000], "url": link,
+                "read_only": True, "trading_engine_untouched": True,
+            })
+        return events
+    except Exception as exc:
+        _log(f"SEBI RSS fetch failed: {type(exc).__name__}: {exc}")
+        return []
 
 def _send_telegram(text: str) -> bool:
     token, chat_id = _telegram_credentials()
@@ -113,6 +161,21 @@ def _format_event(event: dict) -> str:
     return "\n".join(lines)
 
 def process_once() -> int:
+    EVENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing_ids = set()
+    if EVENTS_PATH.exists():
+        for line in EVENTS_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[-5000:]:
+            try:
+                existing_ids.add(str(json.loads(line).get("event_id") or ""))
+            except json.JSONDecodeError:
+                continue
+    sebi_events = _load_sebi_events()
+    if sebi_events:
+        with EVENTS_PATH.open("a", encoding="utf-8") as out:
+            for event in sebi_events:
+                if event["event_id"] not in existing_ids:
+                    out.write(json.dumps(event, ensure_ascii=False) + "\n")
+                    existing_ids.add(event["event_id"])
     if not EVENTS_PATH.exists():
         return 0
     state = _load_state()
