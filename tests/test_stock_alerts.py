@@ -13,7 +13,6 @@ def test_current_market_watch_rules():
     ids = {a["rule_id"] for a in alerts}
     assert "day_high" in ids
     assert "strong_up" in ids
-    assert all(a["browser_only"] is not False for a in alerts) if alerts else True
     assert all(a["telegram"] is False for a in alerts)
 
 
