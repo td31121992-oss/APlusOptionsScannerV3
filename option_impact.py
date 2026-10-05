@@ -51,12 +51,7 @@ def build_option_impact(symbol: str, day: str, chain_loader):
         return {"ok":False,"error":f"{type(exc).__name__}: {exc}","read_only":True}
     if not isinstance(chain,dict) or not chain.get("ok"):
         return {"ok":False,"error":str((chain or {}).get("error") or "Option chain unavailable"),"read_only":True}
-    client=None
-    try:
-        from config import AppConfig
-        from core.dhan_client import DhanClient
-        client=DhanClient(AppConfig.from_env().dhan)
-    except Exception: pass
+
     rows=[]
     for item in chain.get("rows",[]):
         for side in ("ce","pe"):
@@ -65,7 +60,6 @@ def build_option_impact(symbol: str, day: str, chain_loader):
             prev=_f(leg.get("previous_close"))
             ltp=_f(leg.get("ltp"))
             change=((ltp-prev)/prev*100.0) if prev>0 else 0.0
-            hist=_minute_history(client,leg.get("security_id"),str(day or date.today()))
             rows.append({"strike":_f(item.get("strike")),"side":side.upper(),
                 "security_id":leg.get("security_id"),"ltp":round(ltp,2),
                 "previous_close":round(prev,2),"premium_change_pct":round(change,2),
@@ -73,14 +67,48 @@ def build_option_impact(symbol: str, day: str, chain_loader):
                 "oi_change":int(_f(leg.get("oi_change"))),
                 "oi_change_pct":round(_f(leg.get("oi_change_pct")),2),
                 "iv":round(_f(leg.get("iv")),2),
-                "day_high":round(_f(hist.get("day_high",ltp)),2),
-                "high_time":str(hist.get("high_time") or ""),
-                "day_low":round(_f(hist.get("day_low",ltp)),2),
-                "low_time":str(hist.get("low_time") or "")})
+                "day_high":round(ltp,2),"high_time":"",
+                "day_low":round(ltp,2),"low_time":""})
+
     spot=_f(chain.get("spot"))
     top_pe=_pick(rows,"PE","premium_change_pct")
     top_ce=_pick(rows,"CE","premium_change_pct")
+
+    # Enrich only the strongest movers and nearby strikes. This keeps the
+    # read-only historical calls bounded while still giving exact timestamps.
+    targets=[]
+    for r in sorted(rows,key=lambda x:abs(x["strike"]-spot))[:6]:
+        targets.append((r["side"],r["strike"]))
+    for r in sorted(rows,key=lambda x:_f(x.get("premium_change_pct")),reverse=True)[:4]:
+        targets.append((r["side"],r["strike"]))
+    targets=set(targets)
+
+    client=None
+    try:
+        from config import AppConfig
+        from core.dhan_client import DhanClient
+        client=DhanClient(AppConfig.from_env().dhan)
+    except Exception:
+        pass
+
+    cache={}
+    for r in rows:
+        key=(r["side"],r["strike"])
+        if key not in targets or not r.get("security_id"):
+            continue
+        hist=_minute_history(client,r["security_id"],str(day or date.today()))
+        if hist:
+            r["day_high"]=round(_f(hist.get("day_high",r["ltp"])),2)
+            r["high_time"]=str(hist.get("high_time") or "")
+            r["day_low"]=round(_f(hist.get("day_low",r["ltp"])),2)
+            r["low_time"]=str(hist.get("low_time") or "")
+            cache[key]=True
+
+    # For the UI keep ATM-near strikes plus the strongest premium movers.
+    visible=sorted(rows,key=lambda r:(0 if abs(r["strike"]-spot)<=500 else 1,
+                                      -_f(r.get("premium_change_pct"))))[:24]
     return {"ok":True,"symbol":symbol,"expiry":chain.get("expiry"),"spot":spot,
-            "top_pe":top_pe,"top_ce":top_ce,"rows":rows,
+            "top_pe":top_pe,"top_ce":top_ce,"rows":visible,
+            "historical_enriched_count":len(cache),
             "read_only":True,"trading_engine_untouched":True,
-            "timestamped_intraday":any(r.get("high_time") or r.get("low_time") for r in rows)}
+            "timestamped_intraday":any(r.get("high_time") or r.get("low_time") for r in visible)}
