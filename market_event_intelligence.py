@@ -34,6 +34,14 @@ def seed_calendar():
 def load_calendar():
     try:x=json.loads(CALENDAR_PATH.read_text(encoding="utf-8"));return x if isinstance(x,list) else []
     except Exception:return []
+def calendar_context(symbol="",now=None,hours=72):
+    s=str(symbol or "").strip().upper(); out=[]; now=now or datetime.now(timezone.utc)
+    for t,e in upcoming(now,hours):
+        syms={str(x).upper() for x in e.get("symbols",[])}
+        if not s or s in syms or "NIFTYIT" in syms or e.get("category")=="RBI_MPC":
+            x=dict(e);x["minutes_to_event"]=max(0,int((t-now).total_seconds()/60));out.append(x)
+    return out
+
 def upcoming(now=None,hours=48):
     now=now or datetime.now(timezone.utc);out=[]
     for e in load_calendar():
