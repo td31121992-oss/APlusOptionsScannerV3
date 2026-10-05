@@ -88,6 +88,9 @@ def _fallback_rule(rule: AlertRule, row: Mapping[str, Any]) -> tuple[bool, str]:
 def evaluate_rule(rule: AlertRule, row: Mapping[str, Any]) -> tuple[bool, str]:
     value, key = _value(row, rule.aliases)
     if key is not None:
+        if rule.rule_id == "supertrend":
+            text = str(value).strip().lower()
+            return text in {"up", "bullish", "buy", "above", "down", "bearish", "sell", "below"}, key
         return _truthy(value), key
     return _fallback_rule(rule, row)
 
@@ -120,14 +123,15 @@ def evaluate_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 def rule_catalog(rows: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
-    sample = rows[0] if rows else {}
+    samples = list(rows)
     return [
         {
             "rule_id": rule.rule_id,
             "category": rule.category,
             "label": rule.label,
-            "available": any(k in sample for k in rule.aliases)
-            or rule.rule_id in {"day_high", "day_low", "strong_up", "strong_down"},
+            "available": any(
+                any(k in row for k in rule.aliases) for row in samples
+            ) or rule.rule_id in {"day_high", "day_low", "strong_up", "strong_down"},
             "direction": rule.direction,
             "browser_only": True,
             "telegram": False,
