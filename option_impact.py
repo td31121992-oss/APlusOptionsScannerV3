@@ -71,7 +71,7 @@ def build_option_impact(symbol: str, day: str, chain_loader):
                 "previous_close":round(prev,2),"premium_change_pct":round(change,2),
                 "volume":int(_f(leg.get("volume"))),"oi":int(_f(leg.get("oi"))),
                 "oi_change":int(_f(leg.get("oi_change"))),
-                "oi_change_pct":round(_f(leg.get("oi_change_pct")),2)),
+                "oi_change_pct":round(_f(leg.get("oi_change_pct")),2),
                 "iv":round(_f(leg.get("iv")),2),
                 "day_high":round(_f(hist.get("day_high",ltp)),2),
                 "high_time":str(hist.get("high_time") or ""),
