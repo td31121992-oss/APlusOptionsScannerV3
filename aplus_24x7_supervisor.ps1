@@ -187,6 +187,17 @@ try {
 
         $liveDashboard = Ensure-Process -Name "APlus Live Dashboard" -Pattern "aplus_live_pnl_dashboard\.py" -Executable $script:Python -Arguments @((Join-Path $ProjectRoot "aplus_live_pnl_dashboard.py"))
 
+        # Dhan-independent 24x7 intelligence service. It remains alive during
+        # market hours and continues through the overnight period; temporary
+        # Internet failures are logged by the collector and retried later.
+        $overnight = 0
+        $overnightPath = Join-Path $ProjectRoot "aplus_overnight_intelligence.py"
+        if (Test-Path $overnightPath) {
+            $overnight = Ensure-Process -Name "APlus Overnight Intelligence" -Pattern "aplus_overnight_intelligence\.py" -Executable $script:Python -Arguments @($overnightPath)
+        } else {
+            Write-Log "MISSING APlus Overnight Intelligence collector"
+        }
+
         $dashboardV2 = 0
         $dashV2Path = Join-Path $ProjectRoot "aplus_dashboard_v2.py"
         if (Test-Path $dashV2Path) {
@@ -247,6 +258,7 @@ try {
             scanner_health = $(if ($scannerHealthy) { "HEALTHY" } elseif ($scanner.Count -gt 0) { "PROCESS_ONLY" } else { "DOWN" })
             safety_agent_count = $safety.Count
             live_dashboard_count = $liveDashboard
+            overnight_intelligence_count = $overnight
             dashboard_v2_count = $dashboardV2
             campaign_shadow_count = $campaign.Count
             options_runtime_count = $optionsRuntime.Count
