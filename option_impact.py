@@ -53,7 +53,7 @@ def build_option_impact(symbol: str, day: str, chain_loader):
         return {"ok":False,"error":str((chain or {}).get("error") or "Option chain unavailable"),"read_only":True}
 
     rows=[]
-    for item in chain.get("rows",[]):
+    for item in chain.get("all_rows", chain.get("rows",[])):
         for side in ("ce","pe"):
             leg=item.get(side)
             if not isinstance(leg,dict) or _f(leg.get("ltp"))<=0: continue
