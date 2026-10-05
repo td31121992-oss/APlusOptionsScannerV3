@@ -10,6 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
 from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
+from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -72,6 +73,40 @@ def _time(v):
     if "T" in s:
         return s.split("T", 1)[1].split("+", 1)[0].split(".", 1)[0]
     return s or "-"
+
+
+def _duration_seconds(trade):
+    raw = trade.get("holding_seconds")
+    try:
+        value = int(float(raw))
+        if value > 0:
+            return value
+    except (TypeError, ValueError):
+        pass
+    try:
+        entry = datetime.fromisoformat(str(trade.get("entry_time") or "").replace("Z", "+00:00"))
+        exit_value = trade.get("exit_time")
+        if exit_value:
+            finish = datetime.fromisoformat(str(exit_value).replace("Z", "+00:00"))
+        else:
+            finish = datetime.now(entry.tzinfo) if entry.tzinfo else datetime.now()
+        if entry.tzinfo is None and finish.tzinfo is not None:
+            finish = finish.replace(tzinfo=None)
+        return max(0, int((finish - entry).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _format_duration(seconds):
+    seconds = max(0, int(seconds or 0))
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    return f"{minutes}m {secs}s"
 
 
 # APLUS_AUTOMOBILE_RUNTIME_OVERRIDE_V1_1
@@ -217,6 +252,8 @@ def snapshot():
             "trade_date": str(t.get("entry_time") or "")[:10],
             "entry_time": _time(t.get("entry_time")),
             "exit_time": _time(t.get("exit_time")),
+            "duration_seconds": _duration_seconds(t),
+            "duration": _format_duration(_duration_seconds(t)),
             "status": _status(t) or "-",
             "result": ("WIN" if (_pnl(t)>0 or str(t.get("result") or "").upper()=="WIN") else "LOSS" if (_pnl(t)<0 or str(t.get("result") or "").upper()=="LOSS") else "OPEN" if _status(t)=="OPEN" else "FLAT"),
             "entry": _num(t.get("entry_price")),
@@ -246,6 +283,12 @@ def snapshot():
         "total_pnl": round(sum(_pnl(t) for t in trades), 2),
         "closed_pnl": round(sum(_pnl(t) for t in closed), 2),
         "open_pnl": round(sum(_pnl(t) for t in open_trades), 2),
+        "average_duration_seconds": round(
+            sum(_duration_seconds(t) for t in trades) / len(trades), 1
+        ) if trades else 0.0,
+        "longest_duration_seconds": max(
+            (_duration_seconds(t) for t in trades), default=0
+        ),
         "rows": rows[:300],
     }
 
@@ -272,7 +315,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 .exact-footer{padding:0!important;margin:12px 0 0!important;border-top:1px solid var(--line);background:#0b1020;display:block!important;width:100%;overflow:hidden}.exact-footer img{display:block;width:100%;height:auto;max-height:none;object-fit:contain}.crisp-footer{margin-top:14px;border-top:1px solid #1e6091;border-bottom:1px solid #1e6091;background:linear-gradient(90deg,#071426,#0b1b35,#071426);padding:16px 22px;display:grid;grid-template-columns:1.25fr 1.7fr 1.35fr .65fr;gap:22px;align-items:center;position:relative;z-index:2}.cf-quote{font-size:13px;line-height:1.45;color:#e7eefc}.cf-brand{display:flex;align-items:center;justify-content:center;gap:12px}.cf-logo{width:54px;height:54px}.cf-title{font-size:20px;font-weight:800;white-space:nowrap}.cf-title .live{color:#17c964}.cf-dev{font-size:12px;color:#d7e3f5;margin-top:4px;text-align:center}.cf-flow{font-size:11px;font-weight:700;white-space:nowrap}.cf-flow .dot{color:#17c964;padding:0 7px}.cf-safe{font-size:11px;color:#d7e3f5;margin-top:8px;white-space:nowrap}.cf-copy{text-align:right;font-size:11px;color:#d7e3f5;line-height:1.7}.cf-flag{font-size:18px}@media(max-width:1100px){.crisp-footer{grid-template-columns:1fr 1fr}.cf-copy{text-align:left}}</style></head><body><div id="aplus-main-nav" style="padding:12px 20px;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #27334d;background:#0b1020">
 <a href="/" style="padding:9px 14px;border:1px solid #22d3ee;border-radius:9px;color:#9ffcff;text-decoration:none;font-weight:800;background:#0f2730">LIVE TRADING</a>
 <a href="/fno-market-watch" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">F&amp;O MARKET WATCH</a>
-<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>
+<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
 <a href="/sector-performance" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTOR PERFORMANCE</a>
 <a href="/opening-structure" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">OPENING STRUCTURE</a>
 <a href="http://127.0.0.1:8766" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">TECHNICAL ALERTS</a><a href="/stock-charts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK CHARTS</a>
@@ -285,15 +328,16 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 <div class="card"><div class="label">Closed P&L</div><div id="closed_pnl" class="value">-</div></div>
 <div class="card"><div class="label">Trades</div><div id="trade_count" class="value">-</div></div>
 <div class="card"><div class="label">Open / Closed</div><div id="open_closed" class="value">-</div></div>
-<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>
+<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
 const pct=n=>Number(n||0).toFixed(2)+"%";
+const formatDuration=sec=>{sec=Math.max(0,Math.floor(Number(sec)||0));const d=Math.floor(sec/86400);sec%=86400;const h=Math.floor(sec/3600);sec%=3600;const m=Math.floor(sec/60),s=sec%60;if(d)return d+"d "+h+"h "+m+"m";if(h)return h+"h "+m+"m "+s+"s";return m+"m "+s+"s";};
 const cls=n=>Number(n)>=0?"green":"red";
 const prettyDate=x=>{if(!x)return "-";const p=x.split("-");if(p.length!==3)return x;const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return p[2]+"-"+m[Number(p[1])-1]+"-"+p[0];};
 let currentFilter="ALL",lastData=null;
@@ -305,10 +349,13 @@ function renderSummary(d){
  const wr=closed.length?wins.length/closed.length*100:0;
  for(const [id,v] of [["total_pnl",total],["open_pnl",op],["closed_pnl",cp]]){const e=document.getElementById(id);e.textContent=fmt(v);e.className="value "+cls(v);}
  trade_count.textContent=rr.length;open_closed.textContent=open.length+" / "+closed.length;win_rate.textContent=pct(wr);
+ const avg=rr.length?rr.reduce((a,x)=>a+Number(x.duration_seconds||0),0)/rr.length:0;
+ const longest=rr.reduce((a,x)=>Math.max(a,Number(x.duration_seconds||0)),0);
+ avg_duration.textContent=formatDuration(avg);longest_duration.textContent=formatDuration(longest);
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
@@ -339,6 +386,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/opening-structure":
             body = _mobileize_html(OPENING_STRUCTURE_HTML).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/alerts":
+            body = _mobileize_html(STOCK_ALERTS_HTML).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-alerts":
+            body = json.dumps(stock_alerts_payload()).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-analysis":
             body=STOCK_ANALYSIS_HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
