@@ -556,7 +556,7 @@ def option_chain_payload(symbol: str, expiry: str = "") -> dict[str, Any]:
             "pcr_oi": round(total_pe_oi / total_ce_oi, 3) if total_ce_oi else 0.0,
             "pcr_volume": round(total_pe_vol / total_ce_vol, 3) if total_ce_vol else 0.0,
             "call_wall": call_wall, "put_wall": put_wall, "max_pain": max_pain,
-            "captured_at": datetime.now().isoformat(), "rows": visible,
+            "captured_at": datetime.now().isoformat(), "rows": visible, "all_rows": rows,
         }
         _OPTION_CHAIN_CACHE[cache_key] = (now, payload)
         return payload
