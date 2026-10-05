@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from analytics.order_flow import build_order_flow
+from option_impact import build_option_impact
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -308,6 +309,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     candidate = _latest_candidate(symbol)
     technical = _technical(points, market)
     order_flow = order_flow_payload(symbol, points)
+    option_impact = build_option_impact(symbol, day, option_chain_payload)
     direction = str(market.get("direction") or "").upper()
     bullish = direction == "UP"
     bearish = direction == "DOWN"
@@ -403,6 +405,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "market": market,
         "technical": technical,
         "order_flow": order_flow,
+        "option_impact": option_impact,
         "confirmation": confirmation,
         "candidate": candidate,
         "candidate_status": _status(candidate),
@@ -598,6 +601,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 </div>
 <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
+<div class="panel" style="margin-top:10px"><div class="pt">Option Impact on Today's Move <span class="sub">Top CE/PE strikes • read-only</span></div><div class="body"><div class="rows" id="optionImpactSummary"></div><div id="optionImpact" style="margin-top:10px;overflow:auto"></div><div class="notice">Option impact uses verified Dhan contract data. Intraday high/low timestamps are shown only when minute history is available; no values are fabricated.</div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
 <div class="panel"><div class="pt">APlus Scanner Context</div><div class="body"><div id="candidate"></div></div></div>
@@ -685,6 +689,13 @@ function render(d){
     q("#candidate").innerHTML=keys.filter(k=>c[k]!==undefined&&c[k]!==""&&c[k]!==null).map(k=>card(k.replaceAll("_"," "),esc(c[k]))).join("");
   }else{
     q("#candidate").innerHTML="<div class='sub'>This stock is not in the current detailed APlus candidate shortlist. Market-watch and locally calculated technical data are still shown.</div>";
+  }
+  const oi=d.option_impact||{};
+  if(oi.ok){
+    q("#optionImpactSummary").innerHTML=[card("Expiry",esc(oi.expiry||"-")),card("Top PE %",oi.top_pe?esc(oi.top_pe.strike+" PE • "+pct(oi.top_pe.premium_change_pct)):"N/A"),card("Top CE %",oi.top_ce?esc(oi.top_ce.strike+" CE • "+pct(oi.top_ce.premium_change_pct)):"N/A"),card("Top PE Volume",oi.top_pe?Number(oi.top_pe.volume||0).toLocaleString():"N/A"),card("Top PE OI Δ",oi.top_pe?Number(oi.top_pe.oi_change||0).toLocaleString():"N/A")].join("");
+    q("#optionImpact").innerHTML="<table style='width:100%;border-collapse:collapse'><thead><tr><th>Strike</th><th>Side</th><th>LTP</th><th>% Chg</th><th>Day High</th><th>High Time</th><th>Day Low</th><th>Low Time</th><th>Volume</th><th>OI</th><th>ΔOI</th><th>IV</th></tr></thead><tbody>"+(oi.rows||[]).map(r=>"<tr><td><b>"+n(r.strike).toFixed(0)+"</b></td><td>"+esc(r.side)+"</td><td>"+n(r.ltp).toFixed(2)+"</td><td class='"+cls(r.premium_change_pct)+"'>"+pct(r.premium_change_pct)+"</td><td>"+n(r.day_high).toFixed(2)+"</td><td>"+esc(r.high_time||"-")+"</td><td>"+n(r.day_low).toFixed(2)+"</td><td>"+esc(r.low_time||"-")+"</td><td>"+Number(r.volume||0).toLocaleString()+"</td><td>"+Number(r.oi||0).toLocaleString()+"</td><td>"+Number(r.oi_change||0).toLocaleString()+"</td><td>"+n(r.iv).toFixed(2)+"</td></tr>").join("")+"</tbody></table>";
+  }else{
+    q("#optionImpactSummary").innerHTML=card("Option Impact",esc(oi.error||"Unavailable"));q("#optionImpact").innerHTML="";
   }
   q("#signals").innerHTML=(d.signals||[]).map(x=>"<li>"+esc(x)+"</li>").join("")||"<li>No additional local signals available.</li>";
   drawChart(d.points||[]);
