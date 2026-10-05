@@ -18,11 +18,11 @@ def eid(k):return "CAL-"+hashlib.sha256(k.encode()).hexdigest()[:24]
 def seed_events():
     rows=[
     ("2026-10-07T10:00:00+05:30","RBI MPC October 2026 policy decision","RBI_MPC","VERY HIGH",["NIFTY","BANKNIFTY"],"Monitor the actual repo-rate decision, policy stance, inflation and liquidity guidance."),
-    ("2026-10-08T18:30:00+05:30","TCS Q2 FY27 results","EARNINGS","HIGH",["TCS","NIFTYIT"],"September-quarter results; earnings, guidance, deal wins and margins."),
-    ("2026-10-12T18:30:00+05:30","HCLTech Q2 FY27 results","EARNINGS","HIGH",["HCLTECH","NIFTYIT"],"September-quarter results; guidance, margins and deal momentum."),
-    ("2026-10-14T18:30:00+05:30","Tata Technologies Q2 FY27 results","EARNINGS","HIGH",["TATATECH","NIFTYIT"],"September-quarter results and management commentary."),
-    ("2026-10-15T18:30:00+05:30","Wipro Q2 FY27 results","EARNINGS","HIGH",["WIPRO","NIFTYIT"],"September-quarter results; guidance, bookings, margins and demand."),
-    ("2026-10-15T18:30:00+05:30","Tech Mahindra Q2 FY27 results","EARNINGS","HIGH",["TECHM","NIFTYIT"],"September-quarter results; margins, deal wins and demand."),
+    ("2026-10-08T18:30:00+05:30","TCS Q2 FY27 results","EARNINGS","HIGH",["TCS","NIFTYIT"],"September-quarter results; earnings, guidance, deal wins and margins. Result timing is treated as after-market/approximate for alert scheduling."),
+    ("2026-10-12T18:30:00+05:30","HCLTech Q2 FY27 results","EARNINGS","HIGH",["HCLTECH","NIFTYIT"],"September-quarter results; timing is treated as after-market/approximate for alert scheduling."),
+    ("2026-10-14T18:30:00+05:30","Tata Technologies Q2 FY27 results","EARNINGS","HIGH",["TATATECH","NIFTYIT"],"September-quarter results; timing is treated as after-market/approximate for alert scheduling."),
+    ("2026-10-15T18:30:00+05:30","Wipro Q2 FY27 results","EARNINGS","HIGH",["WIPRO","NIFTYIT"],"September-quarter results; timing is treated as after-market/approximate for alert scheduling."),
+    ("2026-10-15T18:30:00+05:30","Tech Mahindra Q2 FY27 results","EARNINGS","HIGH",["TECHM","NIFTYIT"],"September-quarter results; timing is treated as after-market/approximate for alert scheduling."),
     ("2026-10-19T18:00:00+05:30","LTTS Q2 FY27 results","EARNINGS","HIGH",["LTTS","NIFTYIT"],"September-quarter results and engineering-services demand."),
     ("2026-10-23T18:30:00+05:30","Infosys Q2 FY27 results","EARNINGS","HIGH",["INFY","NIFTYIT"],"September-quarter results; guidance, AI monetisation, margins and demand."),
     ("2026-10-23T18:30:00+05:30","Coforge Q2 FY27 results","EARNINGS","HIGH",["COFORGE","NIFTYIT"],"September-quarter results; integration, order intake and margins."),
@@ -92,7 +92,7 @@ def process_once():
     for e in load_events()[-500:]:
         x=str(e.get("event_id") or "");blob=(str(e.get("title") or "")+" "+str(e.get("summary") or "")).lower()
         if not x or x in sent:continue
-        if e.get("source_type")=="official_sebi_rss" or any(k in blob for k in ("rbi","repo rate","position limit","margin","derivatives","f&o","expiry","settlement","trading rule","circuit")):
+        if e.get("source_type")=="official_sebi_rss" or str(e.get("impact") or "").upper() in ("HIGH","VERY HIGH") or any(k in blob for k in ("rbi","repo rate","position limit","margin","derivatives","f&o","expiry","settlement","trading rule","circuit")):
             msg=f"🚨 APlus Market News — {e.get('impact','HIGH')}\n{e.get('title','')}\n{e.get('summary','')[:900]}\n{e.get('url','')}\nRead-only news alert • No trade/order action taken"
             if send(msg):sent[x]=now.isoformat();count+=1
     STATE_PATH.parent.mkdir(parents=True,exist_ok=True);STATE_PATH.write_text(json.dumps({"sent":dict(list(sent.items())[-5000:])},indent=2),encoding="utf-8");log(f"cycle complete; sent={count}; upcoming={len(upcoming(now,48))}");return count
