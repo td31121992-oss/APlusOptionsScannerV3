@@ -464,6 +464,7 @@ def _chain_leg(raw: Any, side: str, strike: float) -> dict[str, Any] | None:
         "side": side, "strike": strike,
         "security_id": str(raw.get("security_id") or ""),
         "ltp": round(_f(raw.get("last_price")), 2),
+        "previous_close": round(_f(raw.get("previous_close_price")), 2),
         "oi": oi, "previous_oi": previous_oi, "oi_change": oi_change,
         "oi_change_pct": round(oi_change / previous_oi * 100.0, 2) if previous_oi else 0.0,
         "volume": volume, "iv": round(_f(raw.get("implied_volatility")), 2),
