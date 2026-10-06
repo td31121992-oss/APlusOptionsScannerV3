@@ -41,8 +41,17 @@ function Test-MarketSession {
     )
 }
 
+function Select-RootScannerProcesses($Processes) {
+    # A venv python.exe launcher spawns the real interpreter as a child with the
+    # same command line, so one scanner appears as two processes. Count only
+    # processes whose parent is not itself a matching scanner process.
+    $list = @($Processes)
+    $ids = @($list | ForEach-Object { [int]$_.ProcessId })
+    @($list | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
+}
+
 function Get-ScannerProcesses {
-    @(
+    $found = @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             ($_.Name -eq "python.exe" -or $_.Name -eq "pythonw.exe") -and
@@ -51,6 +60,7 @@ function Get-ScannerProcesses {
             $_.CommandLine -match "main\.py\s+--intraday-movement"
         }
     )
+    Select-RootScannerProcesses $found
 }
 
 function Test-Dhan {
@@ -89,11 +99,14 @@ Write-Log "No token generation/replacement"
 Write-Log "No blind process termination"
 Write-Log "No forced paper-trade close"
 
+$RecoveryCooldownSeconds = 180
+$lastRecovery = [datetime]::MinValue
+$dhan = $null
+
 do {
 
     $now = Get-Date
     $market = Test-MarketSession
-    $dhan = Test-Dhan
     $scanner = @(Get-ScannerProcesses)
     $reportFresh = Test-ReportFresh
 
@@ -104,34 +117,59 @@ do {
         ($reportFresh -or -not $market)
     )
 
-    if ($market -and $dhan -and -not $scannerHealthy) {
+    # Relaunch only when NO scanner is running. Two or more processes, or a
+    # stale report with one scanner, are logged but never acted on blindly.
+    if ($market -and $scannerCount -eq 0) {
 
-        Write-Log "SCANNER RECOVERY ELIGIBLE: scannerCount=$scannerCount reportFresh=$reportFresh"
+        if (((Get-Date) - $lastRecovery).TotalSeconds -lt $RecoveryCooldownSeconds) {
 
-        if (Test-Path $ScannerLauncher) {
-
-            try {
-
-                Start-Process `
-                    -FilePath $ScannerLauncher `
-                    -WorkingDirectory $ProjectRoot `
-                    -WindowStyle Minimized
-
-                Write-Log "RECOVERY START: existing guarded launcher invoked"
-
-            }
-            catch {
-
-                Write-Log "RECOVERY ERROR: $($_.Exception.Message)"
-
-            }
+            Write-Log "SCANNER RECOVERY WAIT: cooldown after previous launch"
 
         }
         else {
 
-            Write-Log "RECOVERY BLOCKED: aplus_auto_start.bat missing"
+            # Preflight (a Dhan API call) runs only when a relaunch is needed.
+            $dhan = Test-Dhan
+
+            if (-not $dhan) {
+
+                Write-Log "SCANNER RECOVERY BLOCKED: Dhan preflight failed"
+
+            }
+            elseif (Test-Path $ScannerLauncher) {
+
+                Write-Log "SCANNER RECOVERY ELIGIBLE: no scanner process detected"
+
+                try {
+
+                    Start-Process `
+                        -FilePath $ScannerLauncher `
+                        -WorkingDirectory $ProjectRoot `
+                        -WindowStyle Minimized
+
+                    $lastRecovery = Get-Date
+                    Write-Log "RECOVERY START: existing guarded launcher invoked"
+
+                }
+                catch {
+
+                    Write-Log "RECOVERY ERROR: $($_.Exception.Message)"
+
+                }
+
+            }
+            else {
+
+                Write-Log "RECOVERY BLOCKED: aplus_auto_start.bat missing"
+
+            }
 
         }
+
+    }
+    elseif ($scannerCount -eq 1 -and $market -and -not $reportFresh) {
+
+        Write-Log "WARN: one scanner running but report is stale (>180s); no action taken"
 
     }
     elseif ($scannerCount -eq 1) {
@@ -141,12 +179,7 @@ do {
     }
     elseif ($scannerCount -gt 1) {
 
-        Write-Log "SAFETY: multiple scanner processes detected; NO PROCESS TERMINATION"
-
-    }
-    elseif (-not $dhan) {
-
-        Write-Log "SCANNER RECOVERY BLOCKED: Dhan preflight failed"
+        Write-Log "SAFETY: multiple scanner processes detected (count=$scannerCount); NO PROCESS TERMINATION, NO RELAUNCH"
 
     }
 
