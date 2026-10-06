@@ -33,6 +33,19 @@ function Test-MarketSession {
         return $false
     }
 
+    # NSE holidays (data\safety\nse_holidays.csv). Fails open: a missing or
+    # unreadable file is treated as a trading day.
+    try {
+        $holidayFile = Join-Path $ProjectRoot "data\safety\nse_holidays.csv"
+        if (Test-Path $holidayFile) {
+            $today = $now.ToString("yyyy-MM-dd")
+            if (@(Import-Csv $holidayFile | Where-Object { $_.date -eq $today }).Count -gt 0) {
+                return $false
+            }
+        }
+    }
+    catch { }
+
     $t = $now.TimeOfDay
 
     return (
