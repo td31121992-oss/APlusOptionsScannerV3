@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from analytics.order_flow import build_order_flow
+from news_intelligence import news_context
+from market_event_intelligence import calendar_context
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -308,6 +310,8 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     candidate = _latest_candidate(symbol)
     technical = _technical(points, market)
     order_flow = order_flow_payload(symbol, points)
+    news = news_context(symbol, max_age_hours=72, limit=8)
+    market_events = calendar_context(symbol, hours=168)
     direction = str(market.get("direction") or "").upper()
     bullish = direction == "UP"
     bearish = direction == "DOWN"
@@ -405,6 +409,8 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "order_flow": order_flow,
         "confirmation": confirmation,
         "candidate": candidate,
+        "news": news,
+        "market_events": market_events,
         "candidate_status": _status(candidate),
         "points": points[-180:],
         "signals": signals[:12],
@@ -597,6 +603,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
 </div>
 <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
+<div class="panel" style="margin-top:10px"><div class="pt">Market Event Intelligence <span class="sub">Scheduled catalysts + timestamped news • read-only</span></div><div class="body"><div class="rows" id="events"></div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
@@ -647,6 +654,9 @@ function render(d){
   ].join("");
   const cf=d.confirmation||{};
   const checks=cf.structure_checks||{};
+  const ev=(d.market_events||[]).map(e=>card(e.title,esc(e.event_time)+" • "+esc(e.impact)+" • "+n(e.minutes_to_event)+" min")).join("");
+  const nw=(d.news&&d.news.events||[]).map(e=>card(e.title,esc(e.published_at)+" • "+esc(e.impact))).join("");
+  q("#events").innerHTML=ev+nw||"<div class=\"sub\">No upcoming catalyst or recent timestamped news found.</div>";
   q("#confirmation").innerHTML=[
     card("Structure",n(cf.structure_score)+"/"+n(cf.structure_total||4)),
     card("Breakout",checks.breakout?"YES":"NO"),

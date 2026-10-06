@@ -191,6 +191,12 @@ try {
         # market hours and continues through the overnight period; temporary
         # Internet failures are logged by the collector and retried later.
         $overnight = 0
+        $marketEvent = 0
+        $marketEventPath = Join-Path $ProjectRoot "market_event_intelligence.py"
+        if (Test-Path $marketEventPath) {
+            $marketEvent = Ensure-Process -Name "APlus Market Event Intelligence" -Pattern "market_event_intelligence\.py" -Executable $script:Python -Arguments @($marketEventPath)
+        } else { Write-Log "MISSING APlus Market Event Intelligence worker" }
+
         $overnightPath = Join-Path $ProjectRoot "aplus_overnight_intelligence.py"
         if (Test-Path $overnightPath) {
             $overnight = Ensure-Process -Name "APlus Overnight Intelligence" -Pattern "aplus_overnight_intelligence\.py" -Executable $script:Python -Arguments @($overnightPath)
@@ -259,6 +265,7 @@ try {
             safety_agent_count = $safety.Count
             live_dashboard_count = $liveDashboard
             overnight_intelligence_count = $overnight
+            market_event_intelligence_count = $marketEvent
             dashboard_v2_count = $dashboardV2
             campaign_shadow_count = $campaign.Count
             options_runtime_count = $optionsRuntime.Count
