@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -62,10 +63,71 @@ try:
     returned_id = str(body.get("dhanClientId") or "")
     if returned_id and returned_id != client_id:
         raise RuntimeError("profile client ID does not match DHAN_CLIENT_ID")
+
+    # Dhan separates token validity from Data API entitlement/validity.
+    # A valid /profile response is therefore not enough to start the scanner.
+    data_plan = str(body.get("dataPlan") or "").strip().lower()
+    if data_plan != "active":
+        raise RuntimeError(f"Dhan Data API plan is not Active (dataPlan={body.get('dataPlan')!r})")
+
+    data_validity = str(body.get("dataValidity") or "").strip()
+    if data_validity:
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M"):
+            try:
+                parsed = datetime.strptime(data_validity, fmt).replace(
+                    tzinfo=timezone(timedelta(hours=5, minutes=30))
+                )
+                break
+            except ValueError:
+                pass
+        if parsed is not None and parsed <= datetime.now(timezone.utc):
+            raise RuntimeError(f"Dhan Data API validity has expired (dataValidity={data_validity})")
+
+    # Read-only Data API probe. This does not place or modify orders.
+    # It intentionally uses a small 5-minute candle request for a stable NSE
+    # equity security so a token with profile access but broken Data API
+    # authorization is not mistaken for a healthy scanner session.
+    probe_day = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1)).date()
+    probe_date = probe_day.isoformat()
+    probe = requests.post(
+        "https://api.dhan.co/v2/charts/intraday",
+        headers={
+            "access-token": token,
+            "client-id": client_id,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json={
+            "securityId": "1333",
+            "exchangeSegment": "NSE_EQ",
+            "instrument": "EQUITY",
+            "interval": "5",
+            "oi": False,
+            "fromDate": probe_date + " 09:15:00",
+            "toDate": probe_date + " 15:30:00",
+        },
+        timeout=12,
+    )
+    if probe.status_code != 200:
+        detail = ""
+        try:
+            payload = probe.json()
+            if isinstance(payload, dict):
+                detail = str(payload.get("errorMessage") or payload.get("message") or payload.get("errorCode") or "").strip()
+        except Exception:
+            pass
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"Dhan intraday Data API probe HTTP {probe.status_code}{suffix}")
+    probe_body = probe.json()
+    if not isinstance(probe_body, dict):
+        raise RuntimeError("Dhan intraday Data API probe returned a non-JSON-object response")
 except Exception as exc:
-    raise SystemExit(f"FAIL: Dhan profile validation failed: {type(exc).__name__}: {exc}")
+    raise SystemExit(f"FAIL: Dhan Data API validation failed: {type(exc).__name__}: {exc}")
 
 print("PASS: Dhan profile validation succeeded.")
+print("PASS: Dhan Data API plan/validity validation succeeded.")
+print("PASS: Dhan intraday historical Data API probe succeeded (read-only).")
 print("PASS: daily manual access-token generation should no longer be required.")
 
 cache_path = PROJECT_ROOT / "data" / "cache" / "dhan_access_token.json"

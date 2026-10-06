@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, time, os, hashlib
+import json, time, os, hashlib, tempfile
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -31,9 +31,30 @@ def f(v,d=0.0):
 
 def atom_write(path,obj):
     path.parent.mkdir(parents=True,exist_ok=True)
-    tmp=path.with_suffix(path.suffix+".tmp")
-    tmp.write_text(json.dumps(obj,indent=2,default=str),encoding="utf-8")
-    os.replace(tmp,path)
+    fd,tmp=tempfile.mkstemp(prefix=path.name+".",suffix=".tmp",dir=str(path.parent))
+    try:
+        with os.fdopen(fd,"w",encoding="utf-8") as h:
+            h.write(json.dumps(obj,indent=2,default=str))
+            h.flush()
+            try:
+                os.fsync(h.fileno())
+            except OSError:
+                pass
+        last_error=None
+        for attempt in range(1,8):
+            try:
+                os.replace(tmp,path)
+                return True
+            except OSError as exc:
+                last_error=exc
+                time.sleep(0.05*(2**(attempt-1)))
+        print(f"WARNING: atomic write failed after retries for {path}: {last_error}")
+        return False
+    finally:
+        try:
+            if os.path.exists(tmp): os.unlink(tmp)
+        except OSError:
+            pass
 
 def latest_map(obj):
     out={}

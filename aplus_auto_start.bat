@@ -3,41 +3,50 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not exist "data\logs" mkdir "data\logs"
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "LOG=data\logs\aplus_auto_start.log"
+if not exist "%PYTHON%" (
+    echo [%date% %time%] ERROR: project venv Python not found: %PYTHON%>>"%LOG%"
+    exit /b 13
+)
 set "SCANNERLOG=data\logs\aplus_scanner_console.log"
 set "DASHLOG=data\logs\aplus_dashboard_console.log"
 
 echo.>>"%LOG%"
 echo ============================================================>>"%LOG%"
-echo [%date% %time%] APlus guarded morning startup>>"%LOG%"
+echo [%date% %time%] APlus guarded unattended startup/recovery>>"%LOG%"
 
-rem CAlphaTrader starts at 09:13. APlus waits until its shared Dhan token
-rem passes APlus's own preflight/profile validation. Retry up to 5 minutes.
-set /a TRY=0
-set /a MAXTRY=10
+rem IMPORTANT:
+rem Do not give up after a short Dhan-token retry window. If the shared
+rem token is temporarily unavailable at 09:14, keep retrying safely until
+rem the market session ends. This preserves the existing safety rule:
+rem no valid Dhan profile -> no scanner start.
+set /a RETRY=0
 
-:WAIT_TOKEN
-set /a TRY+=1
-echo [%date% %time%] Dhan readiness check !TRY!/!MAXTRY!...>>"%LOG%"
+:SESSION_CHECK
+powershell -NoProfile -Command "$n=(Get-Date); if($n.DayOfWeek -eq 'Saturday' -or $n.DayOfWeek -eq 'Sunday'){exit 2}; $t=$n.TimeOfDay; if($t -lt [TimeSpan]::Parse('09:05:00')){exit 3}; if($t -gt [TimeSpan]::Parse('15:35:00')){exit 4}; exit 0"
+if errorlevel 4 goto MARKET_DONE
+if errorlevel 3 (
+    echo [%date% %time%] Outside startup window; waiting 60 seconds.>>"%LOG%"
+    timeout /t 60 /nobreak >nul
+    goto SESSION_CHECK
+)
+if errorlevel 2 goto MARKET_DONE
+
+set /a RETRY+=1
+echo [%date% %time%] Dhan readiness attempt !RETRY!...>>"%LOG%"
 
 if exist "aplus_preflight_check.py" (
-    python aplus_preflight_check.py > "data\logs\aplus_preflight_autostart.log" 2>&1
+    "%PYTHON%" aplus_preflight_check.py > "data\logs\aplus_preflight_autostart.log" 2>&1
     if not errorlevel 1 goto TOKEN_READY
 ) else (
-    rem Fallback: import config; its shared-token resolver validates Dhan profile.
-    python -c "from config import CONFIG; print('APlus config/token validation PASS')" > "data\logs\aplus_preflight_autostart.log" 2>&1
+    "%PYTHON%" -c "from config import CONFIG; print('APlus config/token validation PASS')" > "data\logs\aplus_preflight_autostart.log" 2>&1
     if not errorlevel 1 goto TOKEN_READY
 )
 
-echo [%date% %time%] Shared Dhan token not ready yet. Waiting 30 seconds...>>"%LOG%"
-if !TRY! GEQ !MAXTRY! goto TOKEN_FAILED
-timeout /t 30 /nobreak >nul
-goto WAIT_TOKEN
-
-:TOKEN_FAILED
-echo [%date% %time%] ERROR: Dhan token did not become valid within retry window. Scanner NOT started.>>"%LOG%"
-echo [%date% %time%] See data\logs\aplus_preflight_autostart.log>>"%LOG%"
-exit /b 10
+echo [%date% %time%] Shared Dhan token not ready. Safe retry in 60 seconds...>>"%LOG%"
+timeout /t 60 /nobreak >nul
+goto SESSION_CHECK
 
 :TOKEN_READY
 echo [%date% %time%] PASS: shared Dhan token/preflight validation succeeded.>>"%LOG%"
@@ -57,15 +66,17 @@ if not exist "run_intraday_movement.bat" (
 echo [%date% %time%] Starting APlus scanner...>>"%LOG%"
 start "APlus Intraday Scanner" /min cmd /c "cd /d ""%~dp0"" && call run_intraday_movement.bat >> ""%SCANNERLOG%"" 2>&1"
 
-rem Give it time to initialize and make sure it stayed alive.
+rem Verify startup. If the scanner exits immediately, retry safely instead of
+rem abandoning the day after one failed launch.
 timeout /t 25 /nobreak >nul
 powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -and $_.CommandLine -match 'main\.py' -and $_.CommandLine -match '--intraday-movement' }; if($p){exit 0}else{exit 1}"
 if errorlevel 1 (
-    echo [%date% %time%] ERROR: scanner did not remain running after launch.>>"%LOG%"
-    echo [%date% %time%] See %SCANNERLOG%>>"%LOG%"
-    exit /b 12
+    echo [%date% %time%] WARNING: scanner did not remain running. Safe recovery retry in 60 seconds.>>"%LOG%"
+    timeout /t 60 /nobreak >nul
+    goto SESSION_CHECK
 )
 echo [%date% %time%] PASS: scanner is running.>>"%LOG%"
+goto START_DASHBOARD
 
 :START_DASHBOARD
 rem Dashboard is independent of broker order execution, but avoid duplicates.
@@ -83,5 +94,9 @@ if exist "run_live_pnl_dashboard.bat" (
 )
 
 :DONE
-echo [%date% %time%] PASS: guarded morning startup completed.>>"%LOG%"
+echo [%date% %time%] PASS: unattended startup/recovery completed.>>"%LOG%"
+exit /b 0
+
+:MARKET_DONE
+echo [%date% %time%] Market/startup window ended; no scanner start attempted.>>"%LOG%"
 exit /b 0

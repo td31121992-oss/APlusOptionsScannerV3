@@ -1,4 +1,5 @@
-﻿param([string]$ProjectRoot="C:\\Users\\Darpan.bobhate\\Desktop\\APlusOptionsScannerV3")
+﻿param([string]$ProjectRoot="")
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $ErrorActionPreference="Stop"
 $wrapper=Join-Path $ProjectRoot "aplus_market_runtime_wrapper_v2.ps1"
 if(-not (Test-Path $wrapper)){throw "Wrapper missing: $wrapper"}
