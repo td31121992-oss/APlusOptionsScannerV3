@@ -30,6 +30,7 @@ _test_instrument_loader.InstrumentLoader = type("InstrumentLoader", (), {})
 # config.py constructs CONFIG at import time and authenticates against Dhan.
 # Replace only that module dependency while importing these pure helper paths;
 # production configuration and authentication remain unchanged.
+_DHAN_AUTH_PRELOADED = "dhan_auth" in sys.modules  # other tests in a full run may already have imported it
 with patch.dict(
     sys.modules,
     {
@@ -55,7 +56,8 @@ class OptionsIntelligenceHardeningTests(unittest.TestCase):
     def test_import_uses_mocked_config_without_dhan_or_credential_access(self) -> None:
         self.assertIs(_TestAppConfig, _test_config.AppConfig)
         self.assertIsNot(sys.modules.get("config"), _test_config)
-        self.assertNotIn("dhan_auth", sys.modules)
+        # Importing the options-intelligence modules must not itself pull in dhan_auth.
+        self.assertTrue(_DHAN_AUTH_PRELOADED or "dhan_auth" not in sys.modules)
 
     def test_explicit_and_default_symbol_lists_obey_configured_cap(self) -> None:
         loader = _Loader()
