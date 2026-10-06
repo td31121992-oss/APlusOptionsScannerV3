@@ -33,6 +33,8 @@ UA = (
 BAN_URL = "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"
 HOLIDAY_URL = "https://www.nseindia.com/api/holiday-master?type=trading"
 HOME_URL = "https://www.nseindia.com/"
+COMBINE_OI_URL = "https://nsearchives.nseindia.com/archives/nsccl/mwpl/combineoi_{stamp}.zip"
+SOURCE_OI = "NSE combineoi"
 SOURCE_BAN = "NSE fo_secban.csv"
 SOURCE_HOLIDAY = "NSE holiday-master (FO)"
 
@@ -81,24 +83,110 @@ def parse_holidays(payload: dict) -> list[tuple[date, str]]:
     return sorted(out)
 
 
+def parse_combine_oi(text: str) -> tuple[date, list[dict]]:
+    """Parse NSE combineoi CSV into (data_date, rows).
+
+    MWPL utilization % = future-equivalent open interest / MWPL * 100.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict] = []
+    data_date: date | None = None
+    for raw in reader:
+        rec = {str(k).strip(): (v or "").strip() for k, v in raw.items() if k}
+        symbol = rec.get("NSE Symbol", "").upper()
+        if not symbol:
+            continue
+        try:
+            mwpl = float(rec["MWPL"])
+            fut_eq = float(rec["Future Equivalent Open Interest"])
+            day = datetime.strptime(rec["Date"].title(), "%d-%b-%Y").date()
+        except (KeyError, ValueError):
+            continue
+        if mwpl <= 0:
+            continue
+        data_date = data_date or day
+        rows.append({
+            "symbol": symbol,
+            "utilization": round(fut_eq / mwpl * 100.0, 2),
+            "no_fresh": rec.get("Limit for Next Day", "").lower().startswith("no fresh"),
+        })
+    if data_date is None or not rows:
+        raise ValueError("combineoi file had no usable rows")
+    return data_date, rows
+
+
+def fetch_combine_oi(session: requests.Session, today: date | None = None) -> tuple[date, list[dict]]:
+    """Fetch the most recent combineoi file (tries today back through 6 days)."""
+    import zipfile
+    from datetime import timedelta
+
+    today = today or date.today()
+    last_error: Exception | None = None
+    for back in range(0, 7):
+        day = today - timedelta(days=back)
+        if day.weekday() >= 5:
+            continue
+        url = COMBINE_OI_URL.format(stamp=day.strftime("%d%m%Y"))
+        try:
+            response = session.get(url, timeout=25)
+            if response.status_code == 404:
+                continue
+            response.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                name = next(n for n in archive.namelist() if n.lower().endswith(".csv"))
+                return parse_combine_oi(archive.read(name).decode("utf-8", "ignore"))
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    raise RuntimeError(f"no combineoi file found ({last_error})")
+
+
 def update_ban_list(session: requests.Session) -> bool:
+    """Write mwpl_status.csv: MWPL utilization for every stock plus today's ban list."""
+    ban_date: date | None = None
+    ban_symbols: list[str] = []
     try:
         response = session.get(BAN_URL, timeout=25)
         response.raise_for_status()
-        trade_date, symbols = parse_ban_list(response.text)
+        ban_date, ban_symbols = parse_ban_list(response.text)
     except Exception as exc:  # noqa: BLE001
-        print(f"BAN LIST NOT UPDATED: {type(exc).__name__}: {exc}")
+        print(f"BAN LIST FETCH FAILED: {type(exc).__name__}: {exc}")
+
+    oi_date: date | None = None
+    oi_rows: list[dict] = []
+    try:
+        oi_date, oi_rows = fetch_combine_oi(session)
+    except Exception as exc:  # noqa: BLE001
+        print(f"MWPL UTILIZATION FETCH FAILED: {type(exc).__name__}: {exc}")
+
+    if ban_date is None and not oi_rows:
+        print("MWPL/BAN NOT UPDATED: both sources failed; keeping existing file")
         return False
-    rows = [
-        [sym, trade_date.isoformat(), "", "FNO_BAN", SOURCE_BAN, "In F&O ban period per NSE"]
-        for sym in symbols
-    ]
+
+    out: dict[str, list[str]] = {}
+    for rec in oi_rows:
+        status = "FNO_BAN" if rec["no_fresh"] else ""
+        out[rec["symbol"]] = [
+            rec["symbol"], oi_date.isoformat(), f"{rec['utilization']:.2f}", status,
+            SOURCE_OI, "Future-equivalent OI / MWPL",
+        ]
+    if ban_date is not None:  # official ban list for the trade date overrides
+        for sym in ban_symbols:
+            prior = out.get(sym)
+            util = prior[2] if prior else ""
+            out[sym] = [sym, ban_date.isoformat(), util, "FNO_BAN", SOURCE_BAN, "In F&O ban period per NSE"]
+
+    rows = [out[k] for k in sorted(out)]
     _atomic_write_csv(
         SAFETY_DIR / "mwpl_status.csv",
         ["symbol", "as_of", "mwpl_utilization_percent", "status", "source", "notes"],
         rows,
     )
-    print(f"BAN LIST UPDATED: trade_date={trade_date.isoformat()} symbols_in_ban={len(symbols)} {symbols}")
+    high = sum(1 for r in rows if r[2] and float(r[2]) >= 80.0)
+    print(
+        f"MWPL UPDATED: rows={len(rows)} oi_date={oi_date.isoformat() if oi_date else None} "
+        f"ban_date={ban_date.isoformat() if ban_date else None} in_ban={len(ban_symbols)} "
+        f"at_or_above_80pct={high}"
+    )
     return True
 
 
