@@ -125,9 +125,44 @@ class PayloadIsolationTests(unittest.TestCase):
     def test_empty_folder_never_raises_and_returns_every_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             payload = di.control_room_payload(Path(tmp), ist(2026, 10, 7, 10, 0))
-        for key in ("market", "health", "funnel", "positions", "performance"):
+        for key in ("market", "health", "funnel", "positions", "performance", "news"):
             self.assertIn(key, payload)
         json.dumps(payload)   # must be serialisable
+
+
+class NewsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+
+    def test_heartbeats_alive_vs_stalled_vs_missing(self) -> None:
+        now = ist(2026, 10, 7, 10, 0)
+        _write(self.base, "data/news_intelligence/announcement_health.json",
+               {"updated_at": "2026-10-07T09:58:00+05:30", "status": "ok", "fno": 75})
+        _write(self.base, "data/news_intelligence/overnight_intelligence_health.json",
+               {"updated_at": "2026-10-05T18:22:08+00:00", "events_added": 26})
+        levels = {i["key"]: i for i in di.health(self.base, now, {"state": "OPEN"})["items"]}
+        self.assertEqual(levels["Announcement feed"]["level"], "ok")
+        self.assertEqual(levels["News collector"]["level"], "bad")           # two days old -> stalled
+        self.assertIn("stalled", levels["News collector"]["value"])
+        empty = {i["key"]: i for i in di.health(Path(self.tmp.name, "nowhere"), now, {"state": "OPEN"})["items"]}
+        self.assertEqual(empty["Announcement feed"]["level"], "bad")
+
+    def test_news_section_lists_recent_high_and_headlines(self) -> None:
+        now = ist(2026, 10, 7, 12, 0)
+        ann = [
+            {"id": "1", "symbol": "TCS", "desc": "Acquisition", "severity": "HIGH", "published_at": "2026-10-07T10:00:00+05:30", "session_date": "2026-10-07", "text": "deal"},
+            {"id": "2", "symbol": "INFY", "desc": "Newspaper", "severity": "LOW", "published_at": "2026-10-07T10:00:00+05:30", "session_date": "2026-10-07", "text": "x"},
+        ]
+        nl = chr(10)
+        _write(self.base, "data/news_intelligence/announcements.jsonl", nl.join(json.dumps(a) for a in ann) + nl)
+        _write(self.base, "data/news_intelligence/events.jsonl", json.dumps({"title": "Nifty rises", "source": "ET", "fetched_at": "2026-10-07T09:00:00+00:00"}) + nl)
+        n = di.news(self.base, now)
+        self.assertEqual([a["symbol"] for a in n["announcements"]], ["TCS"])
+        self.assertEqual(n["high_24h"], 1)
+        self.assertEqual(n["headlines"][0]["title"], "Nifty rises")
+        self.assertEqual(di.news(Path(self.tmp.name, "nowhere"), now)["announcements"], [])
 
 
 class ServerTests(unittest.TestCase):
