@@ -1,34 +1,38 @@
-﻿.env
+# Secrets
+.env
 .env.*
 !.env.example
 *.key
 *.pem
+
+# Python / environments
 __pycache__/
 *.pyc
 .venv/
 venv/
-logs/
+
+# Runtime data and logs (large, machine-generated)
 data/
+logs/
 *.log
 *.tmp
-backup_before_*/
+
+# Archived backups, patch packages, accidental artifacts
+_archive/
 backup_*/
 *.zip
+*_before_*
+*.before-*
+*.backup_*
+*.backup
+*.backup_*
+*.bak*
+%~dp0data/
+%%~dp0data/
+ChatGPT Installer.exe
+Microsoft.Services.Store.winmd
+type
+
+# Editors
 .vscode/
 .idea/
-
-# Local accidental/generated artifacts
-ChatGPT Installer.exe
-Microsoft.Services.Store.winmd
-type
-*_before_*
-*.backup_before_*
-*.backup_*
-
-# Local accidental/generated artifacts
-ChatGPT Installer.exe
-Microsoft.Services.Store.winmd
-type
-*_before_*
-*.backup_before_*
-*.backup_*
