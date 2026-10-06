@@ -87,7 +87,7 @@ def main() -> int:
     text = "\n".join(lines) + "\n" + "-" * 78 + f"\n{'ALL CLEAR' if not problems else str(problems) + ' PROBLEM(S) - see FAIL lines'}\n"
     print(text)
     try:
-        out = ROOT / "data" / "logs" / f"preopen_check_{now:%Y%m%d}.txt"
+        out = ROOT / "data" / "logs" / f"preopen_check_{now:%Y%m%d_%H%M}.txt"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")
     except OSError:
