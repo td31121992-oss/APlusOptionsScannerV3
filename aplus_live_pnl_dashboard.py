@@ -56,17 +56,45 @@ def _load_trades():
 def _status(t):
     return str(t.get("status") or "").upper()
 
-def _pnl(t):
+def _realized_pnl(t):
+    """Return realized P&L only; OPEN trades are marked separately."""
     return _num(t.get("net_pnl") if t.get("net_pnl") not in (None, "") else t.get("pnl"))
+
+
+def _unrealized_pnl(t):
+    """Mark an OPEN paper option position from its latest option LTP."""
+    if _status(t) != "OPEN":
+        return 0.0
+    entry = _num(t.get("entry_price"))
+    mark = _num(t.get("last_option_price"))
+    try:
+        quantity = int(float(t.get("quantity") or 0))
+    except (TypeError, ValueError, OverflowError):
+        quantity = 0
+    if entry <= 0 or mark <= 0 or quantity <= 0:
+        return 0.0
+    # APlus paper option trades are entered as long option premium positions.
+    return round((mark - entry) * quantity, 2)
+
+
+def _pnl(t):
+    """Display P&L: realized for CLOSED, live unrealized for OPEN."""
+    if _status(t) == "OPEN":
+        return _unrealized_pnl(t)
+    return _realized_pnl(t)
+
 
 def _capital(t):
     return _num(t.get("capital_deployed") or t.get("capital"))
 
 def _return_pct(t):
+    if _status(t) == "OPEN":
+        cap = _capital(t)
+        return (_unrealized_pnl(t) / cap * 100.0) if cap else 0.0
     if t.get("return_percent") not in (None, ""):
         return _num(t.get("return_percent"))
     cap = _capital(t)
-    return (_pnl(t) / cap * 100.0) if cap else 0.0
+    return (_realized_pnl(t) / cap * 100.0) if cap else 0.0
 
 def _time(v):
     s = str(v or "")
@@ -255,10 +283,12 @@ def snapshot():
             "duration_seconds": _duration_seconds(t),
             "duration": _format_duration(_duration_seconds(t)),
             "status": _status(t) or "-",
-            "result": ("WIN" if (_pnl(t)>0 or str(t.get("result") or "").upper()=="WIN") else "LOSS" if (_pnl(t)<0 or str(t.get("result") or "").upper()=="LOSS") else "OPEN" if _status(t)=="OPEN" else "FLAT"),
+            "result": ("WIN" if (_status(t)=="CLOSED" and (_realized_pnl(t)>0 or str(t.get("result") or "").upper()=="WIN")) else "LOSS" if (_status(t)=="CLOSED" and (_realized_pnl(t)<0 or str(t.get("result") or "").upper()=="LOSS")) else "OPEN" if _status(t)=="OPEN" else "FLAT"),
             "entry": _num(t.get("entry_price")),
             "last": _num(t.get("last_option_price") or t.get("exit_price") or t.get("entry_price")),
             "pnl": _pnl(t),
+            "realized_pnl": _realized_pnl(t),
+            "unrealized_pnl": _unrealized_pnl(t),
             "return_pct": _return_pct(t),
             "capital": _capital(t),
             "mfe": _num(t.get("mfe_amount")),
@@ -281,8 +311,8 @@ def snapshot():
         "win_rate": round((len(wins) / len(closed) * 100.0) if closed else 0.0, 2),
         "capital": round(sum(_capital(t) for t in trades), 2),
         "total_pnl": round(sum(_pnl(t) for t in trades), 2),
-        "closed_pnl": round(sum(_pnl(t) for t in closed), 2),
-        "open_pnl": round(sum(_pnl(t) for t in open_trades), 2),
+        "closed_pnl": round(sum(_realized_pnl(t) for t in closed), 2),
+        "open_pnl": round(sum(_unrealized_pnl(t) for t in open_trades), 2),
         "average_duration_seconds": round(
             sum(_duration_seconds(t) for t in trades) / len(trades), 1
         ) if trades else 0.0,
