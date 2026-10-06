@@ -42,6 +42,7 @@ from option_selector import OptionSelectionError, OptionSelector
 from paper_trade_journal import PaperTradeJournal
 from safety_gate import SafetyGateEngine
 from scanner_authorization_state import scanner_authorization_is_blocked
+from trading_calendar import is_trading_day
 
 
 logger = get_logger(__name__)
@@ -928,6 +929,7 @@ class OpeningMomentumScanner:
             int(poll_seconds or self.settings.poll_seconds),
         )
         first_run = True
+        non_trading_reason: str | None = None
 
         logger.info(
             "Continuous Intraday Movement Scanner started: %s-%s, poll=%ds, "
@@ -939,6 +941,19 @@ class OpeningMomentumScanner:
 
         while True:
             now = datetime.now(IST)
+            trading_day, day_reason = is_trading_day(now.date())
+            if not trading_day:
+                # Stay alive but idle (no quotes, no signals) so supervisors do
+                # not relaunch in a loop; re-check every 5 minutes.
+                if day_reason != non_trading_reason:
+                    logger.warning(
+                        "Not an NSE trading day (%s); scanner idle until the next trading day",
+                        day_reason,
+                    )
+                    non_trading_reason = day_reason
+                time.sleep(300)
+                continue
+            non_trading_reason = None
             if scanner_authorization_is_blocked(
                 self.authorization_state_path, self.authorization_validation_path,
             ):
