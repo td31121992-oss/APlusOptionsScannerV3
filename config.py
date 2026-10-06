@@ -188,6 +188,10 @@ class OpeningMomentumConfig:
     latest_entry_time: clock_time = clock_time(15, 5)
     session_stop: clock_time = clock_time(15, 30)
     market_close: clock_time = clock_time(15, 30)
+    # No NEW paper entries after this time (open trades keep being managed).
+    # 13:00 because valid history shows entries after 13:00 have profit factor
+    # 0.16-0.20 vs 2.47 for 10:00-11:30. Set INTRADAY_LAST_NEW_ENTRY=15:30 to disable.
+    last_new_entry_time: clock_time = clock_time(13, 0)
 
     quote_shortlist_size: int = 50
     candle_shortlist_size: int = 30
@@ -460,6 +464,7 @@ class AppConfig:
                 latest_entry_time=_clock("INTRADAY_LATEST_ENTRY", "15:05"),
                 session_stop=_clock("INTRADAY_SESSION_STOP", "15:30"),
                 market_close=_clock("MARKET_CLOSE_TIME", "15:30"),
+                last_new_entry_time=_clock("INTRADAY_LAST_NEW_ENTRY", "13:00"),
                 quote_shortlist_size=_int(
                     "INTRADAY_QUOTE_SHORTLIST",
                     _int("OPENING_QUOTE_SHORTLIST", 50, 1),

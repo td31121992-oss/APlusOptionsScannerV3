@@ -34,7 +34,8 @@ class OptionSelectionConfig:
     maximum_ltp: float = 250.0
     minimum_oi: int = 5_000
     minimum_volume: int = 500
-    maximum_spread_percent: float = 5.0
+    # 2.0: valid trades with a 2-3% bid-ask spread had profit factor 0.21 (34 trades, -Rs31k).
+    maximum_spread_percent: float = 2.0
     maximum_moneyness_percent: float = 3.0
     target_itm_percent: float = 0.50
 
