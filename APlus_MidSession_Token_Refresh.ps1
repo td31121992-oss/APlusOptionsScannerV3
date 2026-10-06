@@ -60,7 +60,17 @@ if (-not (Test-Path $oldEnv) -or (Get-Item $oldEnv).LastWriteTimeUtc -le $oldSta
     exit 21
 }
 
-Log "Token refresh OK. Checking scanner before controlled restart."
+Log "Token refresh OK. Re-validating market-data authorization (one read-only quote)."
+$validator = Join-Path $ProjectRoot "validate_market_data_authorization.py"
+if (Test-Path $validator) {
+    $vOut = & $Python $validator 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Log "PASS authorization latch revalidated: $($vOut -join ' ')"
+    } else {
+        Log "WARN authorization revalidation did not pass: $($vOut -join ' '). Existing latch state left unchanged."
+    }
+}
+Log "Checking scanner before controlled restart."
 $p = ScannerProcesses
 
 if ($p.Count -eq 0) {
