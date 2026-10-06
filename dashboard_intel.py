@@ -167,6 +167,13 @@ def health(base: Path, now: datetime, market: dict[str, Any]) -> dict[str, Any]:
             detail = str(hb.get("error", ""))[:80]
         items.append({"key": key, "level": "bad" if bad else "ok", "value": value, "detail": detail})
 
+    # historical options download (informational)
+    prog = _read_json(Path(os.getenv("APLUS_OPTIONS_HISTORY", r"E:\APlusData\expired_options")) / "_progress.json")
+    if isinstance(prog, dict) and prog.get("planned_total"):
+        items.append({"key": "Options history download", "level": "ok",
+                      "value": f"{prog.get('pct', 0)}% ({int(prog.get('stored_total', 0)):,}/{int(prog['planned_total']):,})",
+                      "detail": f"{int(prog.get('with_data', 0)):,} with data, {int(prog.get('empty', 0)):,} empty; last {prog.get('last', '')}"})
+
     # safety data freshness
     safety = base / "data" / "safety"
     mwpl_dates, mwpl_ban = [], 0

@@ -165,6 +165,21 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(di.news(Path(self.tmp.name, "nowhere"), now)["announcements"], [])
 
 
+class OptionsHistoryProgressTests(unittest.TestCase):
+    def test_progress_line_shown_when_file_exists(self) -> None:
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp, "hist")
+            _write(hist, "_progress.json", {"planned_total": 1000, "stored_total": 250, "pct": 25.0, "with_data": 200, "empty": 50, "last": "TCS 2025-09-01"})
+            with mock.patch.dict(os.environ, {"APLUS_OPTIONS_HISTORY": str(hist)}):
+                items = {i["key"]: i for i in di.health(Path(tmp, "base"), ist(2026, 10, 7, 10, 0), {"state": "OPEN"})["items"]}
+            self.assertIn("25.0%", items["Options history download"]["value"])
+            with mock.patch.dict(os.environ, {"APLUS_OPTIONS_HISTORY": str(Path(tmp, "none"))}):
+                keys = [i["key"] for i in di.health(Path(tmp, "base"), ist(2026, 10, 7, 10, 0), {"state": "OPEN"})["items"]]
+            self.assertNotIn("Options history download", keys)
+
+
 class ServerTests(unittest.TestCase):
     def test_pages_and_api_over_http(self) -> None:
         import aplus_live_pnl_dashboard as dash
