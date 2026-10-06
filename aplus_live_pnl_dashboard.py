@@ -11,6 +11,12 @@ from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
 from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
 from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
+try:  # the control room must never stop the main dashboard from starting
+    from dashboard_intel import control_room_payload
+    from dashboard_control_room_page import CONTROL_ROOM_HTML
+except Exception:  # noqa: BLE001
+    control_room_payload = None
+    CONTROL_ROOM_HTML = ""
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -24,6 +30,10 @@ def _mobileize_html(html, host=None):
     if not isinstance(html, str):
         return html
     out = html
+    if control_room_payload is not None and "/control-room" not in out:
+        link = ('<a href="/control-room" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTROL ROOM</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', link + '<a href="/fno-market-watch"', 1)
     if 'id="aplus-mobile-css"' not in out:
         out = out.replace("</head>", MAIN_MOBILE_CSS + "</head>", 1)
     if host:
@@ -454,6 +464,15 @@ class Handler(BaseHTTPRequestHandler):
             q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
             body=json.dumps(chart_payload(day,symbol)).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/control-room" and control_room_payload is not None:
+            body = CONTROL_ROOM_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/control-room" and control_room_payload is not None:
+            try:
+                body = json.dumps(control_room_payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/snapshot":
             body = json.dumps(snapshot()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
