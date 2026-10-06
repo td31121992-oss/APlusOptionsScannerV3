@@ -62,11 +62,11 @@ class SafetyGateConfig:
 
     fallback_account_capital: float = 500_000.0
     trade_risk_percent: float = 10.0
-    maximum_daily_loss_percent: float = 1.50
-    maximum_open_positions: int = 2
+    maximum_daily_loss_percent: float = 0.0  # 0 = no daily-loss stop; set APLUS_SAFETY_MAX_DAILY_LOSS_PERCENT to enable
+    maximum_open_positions: int = 0  # 0 = unlimited; set APLUS_SAFETY_MAX_OPEN_POSITIONS to cap
     maximum_total_premium_percent: float = 20.0
     maximum_trades_per_day: int = 0  # 0 = unlimited; quality/risk gates decide
-    maximum_consecutive_losses: int = 2
+    maximum_consecutive_losses: int = 0  # 0 = no cooling-off; set APLUS_SAFETY_MAX_CONSECUTIVE_LOSSES to enable
     available_balance_buffer_percent: float = 5.0
     portfolio_state_max_age_days: int = 0
 
@@ -157,7 +157,7 @@ class SafetyGateConfig:
             maximum_daily_loss_percent=_env_float(
                 "APLUS_SAFETY_MAX_DAILY_LOSS_PERCENT",
                 defaults.maximum_daily_loss_percent,
-                minimum=0.01,
+                minimum=0.0,
             ),
             maximum_open_positions=_env_int(
                 "APLUS_SAFETY_MAX_OPEN_POSITIONS",
@@ -895,15 +895,24 @@ class SafetyGateEngine:
             reasons.append(
                 "Proposed option risk exceeds per-trade capital risk limit"
             )
-        if realized_pnl <= -maximum_daily_loss:
+        if (
+            self.config.maximum_daily_loss_percent > 0
+            and realized_pnl <= -maximum_daily_loss
+        ):
             reasons.append("Maximum daily loss has been reached")
-        if open_positions >= self.config.maximum_open_positions:
+        if (
+            self.config.maximum_open_positions > 0
+            and open_positions >= self.config.maximum_open_positions
+        ):
             reasons.append("Maximum open-position count has been reached")
         if open_premium + proposed_premium > maximum_total_premium:
             reasons.append("Total deployed option premium would exceed limit")
         if self.config.maximum_trades_per_day > 0 and trades_today >= self.config.maximum_trades_per_day:
             reasons.append("Maximum trades per day has been reached")
-        if consecutive_losses >= self.config.maximum_consecutive_losses:
+        if (
+            self.config.maximum_consecutive_losses > 0
+            and consecutive_losses >= self.config.maximum_consecutive_losses
+        ):
             reasons.append("Consecutive-loss cooling-off threshold reached")
         if available_balance > 0 and available_balance < required_balance:
             reasons.append("Available balance is insufficient with safety buffer")

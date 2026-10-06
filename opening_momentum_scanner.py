@@ -379,7 +379,7 @@ class OpeningMomentumScanner:
             capital = float(cfg.fallback_account_capital)
         max_daily_loss = capital * float(cfg.maximum_daily_loss_percent) / 100.0
         result["maximum_daily_loss"] = round(max_daily_loss, 2)
-        if realized_pnl <= -max_daily_loss:
+        if float(cfg.maximum_daily_loss_percent) > 0 and realized_pnl <= -max_daily_loss:
             result["reasons"].append(
                 "DAILY_LOSS_LIMIT: "
                 f"realized_pnl={realized_pnl:.2f} limit=-{max_daily_loss:.2f}"
