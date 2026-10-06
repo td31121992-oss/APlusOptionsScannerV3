@@ -509,7 +509,8 @@ class SafetyGateEngine:
         today: date,
     ) -> GateCheck:
         path = self.safety_dir / "corporate_events.csv"
-        rows = _read_csv(path)
+        # Live NSE announcements (written by announcement_feed.py) are merged with the calendar.
+        rows = _read_csv(path) + _read_csv(self.safety_dir / "announcement_events.csv")
         if not rows:
             return self._unknown_or_block(
                 "CORPORATE_EVENT",

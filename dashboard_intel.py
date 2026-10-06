@@ -151,6 +151,22 @@ def health(base: Path, now: datetime, market: dict[str, Any]) -> dict[str, Any]:
     else:
         items.append({"key": "Supervisor", "level": "unknown", "value": "no health file", "detail": ""})
 
+    # 24x7 news services (heartbeats; independent of market hours)
+    for key, rel, max_age_s in (("Announcement feed", "data/news_intelligence/announcement_health.json", 2700),
+                                ("News collector", "data/news_intelligence/overnight_intelligence_health.json", 4500)):
+        hb = _read_json(base / rel) or {}
+        hb_at = _parse_dt(hb.get("updated_at"))
+        if hb_at is None:
+            items.append({"key": key, "level": "bad", "value": "not running", "detail": "no heartbeat file"})
+            continue
+        hb_age = int((now - hb_at).total_seconds())
+        bad = hb_age > max_age_s or str(hb.get("status", "ok")).lower() == "error"
+        value = ("alive" if not bad else "stalled") + f" ({hb_age // 60} min ago)"
+        detail = f"{hb.get('fno', hb.get('events_added', '?'))} items last poll"
+        if str(hb.get("status", "")).lower() == "error":
+            detail = str(hb.get("error", ""))[:80]
+        items.append({"key": key, "level": "bad" if bad else "ok", "value": value, "detail": detail})
+
     # safety data freshness
     safety = base / "data" / "safety"
     mwpl_dates, mwpl_ban = [], 0
@@ -370,6 +386,36 @@ def summarize_performance(trades: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ----------------------------------------------------------------------------- news
+def news(base: Path, now: datetime) -> dict[str, Any]:
+    import announcement_feed as af
+
+    ann = af.recent_from_store(14, 24, now, base / "data" / "news_intelligence" / "announcements.jsonl")
+    announcements = [{"symbol": a.get("symbol"), "desc": a.get("desc"), "severity": a.get("severity"),
+                      "published_at": a.get("published_at"), "affects": a.get("session_date"), "text": str(a.get("text") or "")[:160]}
+                     for a in ann]
+    headlines: list[dict[str, Any]] = []
+    path = base / "data" / "news_intelligence" / "events.jsonl"
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 120_000))
+            lines = handle.read().decode("utf-8", "ignore").splitlines()
+        for line in reversed(lines):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("title"):
+                headlines.append({"title": str(e["title"])[:140], "source": e.get("source"), "when": e.get("fetched_at")})
+            if len(headlines) >= 8:
+                break
+    except OSError:
+        pass
+    return {"announcements": announcements, "headlines": headlines,
+            "high_24h": sum(1 for a in ann if a.get("severity") == "HIGH")}
+
+
 # ----------------------------------------------------------------------------- payload
 def control_room_payload(base: Path = ROOT, now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(IST)
@@ -382,5 +428,6 @@ def control_room_payload(base: Path = ROOT, now: datetime | None = None) -> dict
         "health": _safe(lambda: health(base, now, market)),
         "funnel": _safe(lambda: funnel(base, now, market)),
         "positions": _safe(lambda: positions(base, now)),
+        "news": _safe(lambda: news(base, now)),
         "performance": _safe(lambda: performance(base)),
     }

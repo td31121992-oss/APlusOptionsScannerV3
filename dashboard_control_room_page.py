@@ -38,6 +38,7 @@ td.r,th.r{text-align:right}.pos{color:var(--green)}.neg{color:var(--red)}.muted{
 <div class="two"><div><h2>Signal funnel (latest cycle)</h2><div id="funnel"></div><div id="reasons"></div></div>
 <div><h2>Top movers</h2><div id="leaders"></div><h2>Safety blocks</h2><div id="safety" class="muted">none</div></div></div>
 <h2>Open positions</h2><div id="posnote" class="note"></div><div class="scroll"><table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Entry</th><th class="r">Last</th><th class="r">P&amp;L</th><th class="r">Stop</th><th class="r">To stop</th><th class="r">Held</th><th class="r">Mark age</th></tr></thead><tbody id="pos"></tbody></table></div>
+<h2>News &amp; announcements (F&amp;O stocks, last 24 h)</h2><div id="annnote" class="muted"></div><div class="scroll"><table id="ann"></table></div><div class="muted" style="margin-top:10px">Market headlines</div><div id="headlines"></div>
 <h2>Performance after costs (valid trades since 28 Aug)</h2><div id="kpis" class="grid"></div>
 <div id="curve"></div>
 <div class="two"><div><h2>By exit reason</h2><div class="scroll"><table id="byexit"></table></div></div><div><h2>By entry hour</h2><div class="scroll"><table id="byhour"></table></div></div></div>
@@ -69,6 +70,10 @@ function render(d){
  $("safety").innerHTML=(f.safety_block_reasons&&f.safety_block_reasons.length)?f.safety_block_reasons.map(r=>"<span class='chip'>"+esc(r.reason)+" <b>"+r.count+"</b></span>").join(""):"none this cycle";
  $("posnote").textContent=p.note||"";
  $("pos").innerHTML=(p.rows||[]).map(r=>"<tr><td><b>"+esc(r.symbol)+"</b></td><td>"+esc(r.side)+"</td><td class='r'>"+esc(r.entry)+"</td><td class='r'>"+esc(r.last)+"</td><td class='r "+sg(r.pnl)+"'>"+inr(r.pnl)+"</td><td class='r'>"+esc(r.stop)+"</td><td class='r'>"+(r.stop_distance_pct==null?"-":esc(r.stop_distance_pct)+"%")+"</td><td class='r'>"+hold(r.held_min)+"</td><td class='r'>"+(r.mark_age_s==null?"-":esc(r.mark_age_s)+"s")+"</td></tr>").join("")||"<tr><td colspan='9' class='muted'>no open positions</td></tr>";
+ const nw=d.news||{};const A=nw.announcements||[];
+ $("annnote").textContent=A.length?(nw.high_24h||0)+" HIGH-impact in the last 24 h. HIGH = blocked for new entries on the day it affects; MEDIUM = warning only.":"No HIGH/MEDIUM announcements for F&O stocks in the last 24 h (or the announcement service has not run yet).";
+ $("ann").innerHTML=table(A,[{h:"Stock",f:r=>r.symbol},{h:"Impact",f:r=>r.severity,cls:r=>r.severity==="HIGH"?"neg":"muted"},{h:"Filing",f:r=>r.desc},{h:"Published",f:r=>String(r.published_at||"").slice(5,16).replace("T"," ")},{h:"Affects",f:r=>r.affects},{h:"Detail",f:r=>r.text}]);
+ $("headlines").innerHTML=(nw.headlines||[]).map(x=>"<span class='chip'>"+esc(x.title)+" <span class='muted'>"+esc(x.source)+"</span></span>").join("")||"<span class='muted'>none yet</span>";
  if(!pf.n){$("kpis").innerHTML="<div class='card muted'>No valid trade history yet.</div>";$("curve").innerHTML="";return;}
  const k=(l,v,c,dtl)=>"<div class='card'><div class='label'>"+l+"</div><div class='value "+(c||"")+"'>"+v+"</div><div class='detail'>"+(dtl||"")+"</div></div>";
  $("kpis").innerHTML=k("Net after costs",inr(pf.net),sg(pf.net),"gross "+inr(pf.gross)+" - costs "+inr(pf.costs))+k("Trades",pf.n,"",pf.win_pct+"% win")+

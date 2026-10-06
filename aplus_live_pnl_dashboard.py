@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
 from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
 from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
+import dashboard_access
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -409,6 +410,9 @@ load();setInterval(load,5000);
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if not dashboard_access.is_allowed(self.client_address[0]):
+            body = b"Forbidden: the APlus dashboard is limited to the local network."
+            self.send_response(403); self.send_header("Content-Type","text/plain; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         path = urlparse(self.path).path
         if path == "/paper-history":
             body = history_html().encode("utf-8")
