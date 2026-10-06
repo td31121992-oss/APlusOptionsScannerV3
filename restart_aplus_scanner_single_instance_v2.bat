@@ -23,12 +23,12 @@ timeout /t 4 /nobreak >nul
 
 echo.
 echo [3/5] Compiling scanner + observer...
-python -m py_compile opening_momentum_scanner.py open_move_pattern_observer.py
+"%~dp0.venv\Scripts\python.exe" -m py_compile opening_momentum_scanner.py open_move_pattern_observer.py
 if errorlevel 1 goto :fail
 
 echo.
 echo [4/5] Starting exactly ONE APlus intraday scanner...
-start "APlus Intraday PAPER Scanner" /D "%~dp0" python main.py --intraday-movement
+start "APlus Intraday PAPER Scanner" /D "%~dp0" "%~dp0.venv\Scripts\python.exe" "%~dp0main.py" --intraday-movement
 
 timeout /t 8 /nobreak >nul
 

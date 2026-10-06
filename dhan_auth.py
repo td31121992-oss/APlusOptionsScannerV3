@@ -33,7 +33,7 @@ AUTH_URL = "https://auth.dhan.co/app/generateAccessToken"
 PROFILE_URL = "https://api.dhan.co/v2/profile"
 CACHE_SAFETY_SECONDS = 300
 KEYRING_SERVICE = "CAlphaTrader:DhanTOTP"
-SHARED_ENV_PATH = Path(r"C:\Users\Darpan.bobhate\Desktop\CAlphaTrader\.env")
+SHARED_ENV_PATH = Path.home() / "Desktop" / "CAlphaTrader" / ".env"
 
 
 class DhanAuthError(RuntimeError):

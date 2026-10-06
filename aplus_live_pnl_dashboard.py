@@ -3,11 +3,14 @@ from paper_trade_history_dashboard import history_html, history_payload, days_pa
 
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import csv
 import json
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
+from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
+from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -53,23 +56,93 @@ def _load_trades():
 def _status(t):
     return str(t.get("status") or "").upper()
 
+def _realized_pnl(t):
+    return _num(
+        t.get("net_pnl")
+        if t.get("net_pnl") not in (None, "")
+        else t.get("pnl")
+    )
+
+def _unrealized_pnl(t):
+    """Calculate current open-position P&L from the latest valid option mark."""
+    if _status(t) != "OPEN":
+        return 0.0
+
+    entry = _num(t.get("entry_price"))
+    mark = _num(t.get("last_option_price"))
+    quantity = int(_num(t.get("quantity")))
+
+    if entry <= 0 or mark <= 0 or quantity <= 0:
+        return 0.0
+
+    transaction = str(
+        t.get("option_transaction")
+        or t.get("transaction")
+        or "BUY"
+    ).upper()
+
+    if transaction == "SELL":
+        return (entry - mark) * quantity
+
+    return (mark - entry) * quantity
+
 def _pnl(t):
-    return _num(t.get("net_pnl") if t.get("net_pnl") not in (None, "") else t.get("pnl"))
+    if _status(t) == "OPEN":
+        return _unrealized_pnl(t)
+    return _realized_pnl(t)
 
 def _capital(t):
     return _num(t.get("capital_deployed") or t.get("capital"))
 
 def _return_pct(t):
+    cap = _capital(t)
+    if _status(t) == "OPEN":
+        return (_unrealized_pnl(t) / cap * 100.0) if cap else 0.0
+
     if t.get("return_percent") not in (None, ""):
         return _num(t.get("return_percent"))
-    cap = _capital(t)
-    return (_pnl(t) / cap * 100.0) if cap else 0.0
+
+    return (_realized_pnl(t) / cap * 100.0) if cap else 0.0
 
 def _time(v):
     s = str(v or "")
     if "T" in s:
         return s.split("T", 1)[1].split("+", 1)[0].split(".", 1)[0]
     return s or "-"
+
+
+def _duration_seconds(trade):
+    raw = trade.get("holding_seconds")
+    try:
+        value = int(float(raw))
+        if value > 0:
+            return value
+    except (TypeError, ValueError):
+        pass
+    try:
+        entry = datetime.fromisoformat(str(trade.get("entry_time") or "").replace("Z", "+00:00"))
+        exit_value = trade.get("exit_time")
+        if exit_value:
+            finish = datetime.fromisoformat(str(exit_value).replace("Z", "+00:00"))
+        else:
+            finish = datetime.now(entry.tzinfo) if entry.tzinfo else datetime.now()
+        if entry.tzinfo is None and finish.tzinfo is not None:
+            finish = finish.replace(tzinfo=None)
+        return max(0, int((finish - entry).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _format_duration(seconds):
+    seconds = max(0, int(seconds or 0))
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    return f"{minutes}m {secs}s"
 
 
 # APLUS_AUTOMOBILE_RUNTIME_OVERRIDE_V1_1
@@ -94,17 +167,80 @@ def _aplus_apply_runtime_sector_overrides(obj):
         ))
     return obj
 
+IST = ZoneInfo("Asia/Kolkata")
+FNO_MARKET_WATCH_MAX_AGE_SECONDS = 180
+
+
 def _load_fno_market_watch():
     path = REPORTS / "fno_market_watch_latest.json"
+    empty = {
+        "generated_at": "",
+        "count": 0,
+        "rows": [],
+        "sectors": [],
+        "data_status": "NO_DATA",
+        "stale": True,
+        "stale_reason": "FNO market-watch report is missing",
+        "age_seconds": None,
+        "current_day": datetime.now(IST).date().isoformat(),
+    }
     if not path.is_file():
-        return {"generated_at": "", "count": 0, "rows": [], "sectors": []}
+        return empty
     try:
-        return _aplus_apply_runtime_sector_overrides(json.loads(path.read_text(encoding="utf-8")))
-    except Exception:
-        return {"generated_at": "", "count": 0, "rows": [], "sectors": []}
+        payload = _aplus_apply_runtime_sector_overrides(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
+        generated_at = str(payload.get("generated_at") or "").strip()
+        now = datetime.now(IST)
+        generated_dt = None
+        if generated_at:
+            try:
+                generated_dt = datetime.fromisoformat(
+                    generated_at.replace("Z", "+00:00")
+                )
+                if generated_dt.tzinfo is None:
+                    generated_dt = generated_dt.replace(tzinfo=IST)
+                else:
+                    generated_dt = generated_dt.astimezone(IST)
+            except ValueError:
+                generated_dt = None
+
+        age_seconds = (
+            max(0.0, (now - generated_dt).total_seconds())
+            if generated_dt is not None
+            else None
+        )
+        current_day = now.date().isoformat()
+        report_day = generated_dt.date().isoformat() if generated_dt else ""
+        stale_reason = ""
+        if generated_dt is None:
+            stale_reason = "Scanner timestamp is missing or invalid"
+        elif report_day != current_day:
+            stale_reason = (
+                f"Scanner report is from {report_day}; waiting for {current_day}"
+            )
+        elif age_seconds > FNO_MARKET_WATCH_MAX_AGE_SECONDS:
+            stale_reason = (
+                f"Last scanner update is {int(age_seconds)}s old "
+                f"(limit {FNO_MARKET_WATCH_MAX_AGE_SECONDS}s)"
+            )
+
+        payload["current_day"] = current_day
+        payload["age_seconds"] = (
+            round(age_seconds, 1) if age_seconds is not None else None
+        )
+        payload["data_status"] = "STALE" if stale_reason else "LIVE"
+        payload["stale"] = bool(stale_reason)
+        payload["stale_reason"] = stale_reason
+        return payload
+    except Exception as exc:
+        empty["stale_reason"] = (
+            f"Unable to read F&O market-watch report: {type(exc).__name__}: {exc}"
+        )
+        return empty
 
 
-FNO_MARKET_WATCH_HTML = '<!doctype html><html><head><meta charset="utf-8"><title>APlus F&O Market Watch</title>\n<style>:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.title{font-size:24px;font-weight:750}.sub{color:var(--muted);font-size:12px;margin-top:4px}.toolbar{padding:14px 24px;display:flex;gap:8px;flex-wrap:wrap}.toolbar button,.toolbar select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:600}.toolbar button{cursor:pointer}.active{border-color:var(--green)!important;background:#173527!important;color:#9ff0bd!important}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:750;margin-top:5px}.tablewrap{padding:0 24px 26px;overflow:auto}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{color:var(--muted);background:#0f1729;position:sticky;top:0}.right{text-align:right}.up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}a{color:#7dd3fc;text-decoration:none}.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}}</style></head><body>\n<div class="header"><div><div class="title">APlus F&O Market Watch</div><div class="sub">Full F&O universe • 09:15 Open → Now • Previous Close • High/Low • Gap • Sector</div></div><div style="text-align:right"><a href="/">← Live Trading Terminal</a><div id="updated" class="sub">Waiting for scanner data...</div></div></div>\n<div style="padding:12px 24px;display:flex;gap:8px">\n  <a href="/fno-market-watch" style="padding:8px 14px;border-radius:9px;border:1px solid #22d3ee;color:#9ffcff;background:#0f2730;font-weight:700;text-decoration:none">Market Watch</a>\n  <a href="/sector-performance" style="padding:8px 14px;border-radius:9px;border:1px solid #27334d;color:#e7eefc;background:#121a2d;font-weight:700;text-decoration:none">Sector Performance</a>\n</div>\n<div class="cards"><div class="card"><div class="label">F&O Stocks</div><div class="value" id="count">-</div></div><div class="card"><div class="label">Advancing from Open</div><div class="value up" id="adv">-</div></div><div class="card"><div class="label">Declining from Open</div><div class="value down" id="dec">-</div></div><div class="card"><div class="label">Top From Open</div><div class="value up" id="topup">-</div></div><div class="card"><div class="label">Bottom From Open</div><div class="value down" id="topdown">-</div></div></div>\n<div class="toolbar"><button id="bALL" class="active" onclick="setMode(\'ALL\')">All</button><button id="bGAIN" onclick="setMode(\'GAIN\')">Top Gainers</button><button id="bLOSS" onclick="setMode(\'LOSS\')">Top Losers</button><button id="bUP" onclick="setMode(\'UP\')">Strong Up ≥1%</button><button id="bDOWN" onclick="setMode(\'DOWN\')">Strong Down ≤−1%</button><select id="sector" onchange="render()"><option value="ALL">All Sectors</option></select><select id="basis" onchange="render()"><option value="from_open_pct">Sort: From 09:15 Open %</option><option value="from_prev_close_pct">Sort: From Prev Close %</option><option value="gap_pct">Sort: Gap %</option></select><span class="sub" id="shown"></span></div>\n<div class="tablewrap"><table><thead><tr><th>Symbol</th><th>Sector</th><th class="right">9:15 Open</th><th class="right">LTP</th><th class="right">Prev Close</th><th class="right">Gap %</th><th class="right">From Open %</th><th class="right">From Prev Close %</th><th class="right">Day High</th><th class="right">Day Low</th><th class="right">Range Pos %</th><th>Direction</th></tr></thead><tbody id="rows"></tbody></table></div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>let data=[],mode=\'ALL\';const money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});const pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';function setMode(m){mode=m;document.querySelectorAll(\'.toolbar button\').forEach(x=>x.classList.remove(\'active\'));document.getElementById(\'b\'+m).classList.add(\'active\');render()}function render(){let a=[...data],sec=sector.value,b=basis.value;if(sec!==\'ALL\')a=a.filter(x=>x.sector===sec);if(mode===\'GAIN\')a=a.filter(x=>x[b]>0).sort((x,y)=>y[b]-x[b]).slice(0,30);else if(mode===\'LOSS\')a=a.filter(x=>x[b]<0).sort((x,y)=>x[b]-y[b]).slice(0,30);else if(mode===\'UP\')a=a.filter(x=>x.from_open_pct>=1).sort((x,y)=>y.from_open_pct-x.from_open_pct);else if(mode===\'DOWN\')a=a.filter(x=>x.from_open_pct<=-1).sort((x,y)=>x.from_open_pct-y.from_open_pct);else a.sort((x,y)=>y[b]-x[b]);shown.textContent=\'Showing \'+a.length+\' of \'+data.length+\' stocks\';rows.innerHTML=a.map(x=>`<tr><td><b>${x.symbol}</b></td><td>${x.sector||\'UNCLASSIFIED\'}</td><td class="right">${money(x.open_0915)}</td><td class="right">${money(x.ltp)}</td><td class="right">${money(x.previous_close)}</td><td class="right ${x.gap_pct>=0?\'up\':\'down\'}">${pct(x.gap_pct)}</td><td class="right ${x.from_open_pct>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td><td class="right ${x.from_prev_close_pct>=0?\'up\':\'down\'}">${pct(x.from_prev_close_pct)}</td><td class="right">${money(x.day_high)}</td><td class="right">${money(x.day_low)}</td><td class="right">${Number(x.range_position_pct||0).toFixed(1)}</td><td class="${x.direction===\'UP\'?\'up\':x.direction===\'DOWN\'?\'down\':\'\'}">${x.direction===\'UP\'?\'▲\':x.direction===\'DOWN\'?\'▼\':\'•\'} ${x.direction}</td></tr>`).join(\'\')}async function load(){const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];count.textContent=data.length;adv.textContent=data.filter(x=>x.from_open_pct>0).length;dec.textContent=data.filter(x=>x.from_open_pct<0).length;if(data.length){let u=[...data].sort((a,b)=>b.from_open_pct-a.from_open_pct)[0],dn=[...data].sort((a,b)=>a.from_open_pct-b.from_open_pct)[0];topup.textContent=u.symbol+\' \'+pct(u.from_open_pct);topdown.textContent=dn.symbol+\' \'+pct(dn.from_open_pct)}updated.textContent=d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting for scanner data...\';const old=sector.value;const secs=[...new Set(data.map(x=>x.sector||\'UNCLASSIFIED\'))].sort();sector.innerHTML=\'<option value="ALL">All Sectors</option>\'+secs.map(x=>`<option value="${x}">${x}</option>`).join(\'\');if(old===\'ALL\'||secs.includes(old))sector.value=old;render()}load();setInterval(load,5000)</script><a href="/fno-market-watch" style="position:fixed;right:22px;bottom:22px;z-index:999;background:#17c964;color:#04130a;text-decoration:none;font-weight:800;padding:11px 16px;border-radius:12px;box-shadow:0 5px 24px #0008">F&amp;O MARKET WATCH</a><a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;z-index:9998;background:#0f2730;color:#9ffcff;text-decoration:none;font-weight:800;padding:10px 14px;border:1px solid #22d3ee;border-radius:10px">OPENING STRUCTURE</a></body></html>'
+FNO_MARKET_WATCH_HTML = '<!doctype html><html><head><meta charset="utf-8"><title>APlus F&O Market Watch</title>\n<style>:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.title{font-size:24px;font-weight:750}.sub{color:var(--muted);font-size:12px;margin-top:4px}.toolbar{padding:14px 24px;display:flex;gap:8px;flex-wrap:wrap}.toolbar button,.toolbar select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:600}.toolbar button{cursor:pointer}.active{border-color:var(--green)!important;background:#173527!important;color:#9ff0bd!important}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:750;margin-top:5px}.tablewrap{padding:0 24px 26px;overflow:auto}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{color:var(--muted);background:#0f1729;position:sticky;top:0}.right{text-align:right}.up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}a{color:#7dd3fc;text-decoration:none}.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}}</style></head><body>\n<div class="header"><div><div class="title">APlus F&O Market Watch</div><div class="sub">Full F&O universe • 09:15 Open → Now • Previous Close • High/Low • Gap • Sector</div></div><div style="text-align:right"><a href="/">← Live Trading Terminal</a><div id="updated" class="sub">Waiting for scanner data...</div></div></div>\n<div style="padding:12px 24px;display:flex;gap:8px">\n  <a href="/fno-market-watch" style="padding:8px 14px;border-radius:9px;border:1px solid #22d3ee;color:#9ffcff;background:#0f2730;font-weight:700;text-decoration:none">Market Watch</a>\n  <a href="/sector-performance" style="padding:8px 14px;border-radius:9px;border:1px solid #27334d;color:#e7eefc;background:#121a2d;font-weight:700;text-decoration:none">Sector Performance</a>\n</div>\n<div class="cards"><div class="card"><div class="label">F&O Stocks</div><div class="value" id="count">-</div></div><div class="card"><div class="label">Advancing from Open</div><div class="value up" id="adv">-</div></div><div class="card"><div class="label">Declining from Open</div><div class="value down" id="dec">-</div></div><div class="card"><div class="label">Top From Open</div><div class="value up" id="topup">-</div></div><div class="card"><div class="label">Bottom From Open</div><div class="value down" id="topdown">-</div></div></div>\n<div class="toolbar"><button id="bALL" class="active" onclick="setMode(\'ALL\')">All</button><button id="bGAIN" onclick="setMode(\'GAIN\')">Top Gainers</button><button id="bLOSS" onclick="setMode(\'LOSS\')">Top Losers</button><button id="bUP" onclick="setMode(\'UP\')">Strong Up ≥1%</button><button id="bDOWN" onclick="setMode(\'DOWN\')">Strong Down ≤−1%</button><select id="sector" onchange="render()"><option value="ALL">All Sectors</option></select><select id="basis" onchange="render()"><option value="from_open_pct">Sort: From 09:15 Open %</option><option value="from_prev_close_pct">Sort: From Prev Close %</option><option value="gap_pct">Sort: Gap %</option></select><span class="sub" id="shown"></span></div>\n<div class="tablewrap"><table><thead><tr><th>Symbol</th><th>Sector</th><th class="right">9:15 Open</th><th class="right">LTP</th><th class="right">Prev Close</th><th class="right">Gap %</th><th class="right">From Open %</th><th class="right">From Prev Close %</th><th class="right">Day High</th><th class="right">Day Low</th><th class="right">Range Pos %</th><th>Direction</th></tr></thead><tbody id="rows"></tbody></table></div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>let data=[],mode=\'ALL\';const money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});const pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';function setMode(m){mode=m;document.querySelectorAll(\'.toolbar button\').forEach(x=>x.classList.remove(\'active\'));document.getElementById(\'b\'+m).classList.add(\'active\');render()}function render(){let a=[...data],sec=sector.value,b=basis.value;if(sec!==\'ALL\')a=a.filter(x=>x.sector===sec);if(mode===\'GAIN\')a=a.filter(x=>x[b]>0).sort((x,y)=>y[b]-x[b]).slice(0,30);else if(mode===\'LOSS\')a=a.filter(x=>x[b]<0).sort((x,y)=>x[b]-y[b]).slice(0,30);else if(mode===\'UP\')a=a.filter(x=>x.from_open_pct>=1).sort((x,y)=>y.from_open_pct-x.from_open_pct);else if(mode===\'DOWN\')a=a.filter(x=>x.from_open_pct<=-1).sort((x,y)=>x.from_open_pct-y.from_open_pct);else a.sort((x,y)=>y[b]-x[b]);shown.textContent=\'Showing \'+a.length+\' of \'+data.length+\' stocks\';rows.innerHTML=a.map(x=>`<tr><td><a href=\"/stock-analysis?symbol=${encodeURIComponent(x.symbol)}\" style=\"font-weight:800;color:#e7eefc\">${x.symbol}</a></td><td>${x.sector||\'UNCLASSIFIED\'}</td><td class="right">${money(x.open_0915)}</td><td class="right">${money(x.ltp)}</td><td class="right">${money(x.previous_close)}</td><td class="right ${x.gap_pct>=0?\'up\':\'down\'}">${pct(x.gap_pct)}</td><td class="right ${x.from_open_pct>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td><td class="right ${x.from_prev_close_pct>=0?\'up\':\'down\'}">${pct(x.from_prev_close_pct)}</td><td class="right">${money(x.day_high)}</td><td class="right">${money(x.day_low)}</td><td class="right">${Number(x.range_position_pct||0).toFixed(1)}</td><td class="${x.direction===\'UP\'?\'up\':x.direction===\'DOWN\'?\'down\':\'\'}">${x.direction===\'UP\'?\'▲\':x.direction===\'DOWN\'?\'▼\':\'•\'} ${x.direction}</td></tr>`).join(\'\')}async function load(){const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];count.textContent=data.length;adv.textContent=data.filter(x=>x.from_open_pct>0).length;dec.textContent=data.filter(x=>x.from_open_pct<0).length;if(data.length){let u=[...data].sort((a,b)=>b.from_open_pct-a.from_open_pct)[0],dn=[...data].sort((a,b)=>a.from_open_pct-b.from_open_pct)[0];topup.textContent=u.symbol+\' \'+pct(u.from_open_pct);topdown.textContent=dn.symbol+\' \'+pct(dn.from_open_pct)}updated.textContent=d.stale?(d.generated_at?\'⚠ STALE — Last scanner update \'+String(d.generated_at).replace("T"," ").slice(0,19):\'⚠ NO SCANNER DATA\'):(d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting for scanner data...\');const old=sector.value;const secs=[...new Set(data.map(x=>x.sector||\'UNCLASSIFIED\'))].sort();sector.innerHTML=\'<option value="ALL">All Sectors</option>\'+secs.map(x=>`<option value="${x}">${x}</option>`).join(\'\');if(old===\'ALL\'||secs.includes(old))sector.value=old;render()}load();setInterval(load,5000)</script><a href="/fno-market-watch" style="position:fixed;right:22px;bottom:22px;z-index:999;background:#17c964;color:#04130a;text-decoration:none;font-weight:800;padding:11px 16px;border-radius:12px;box-shadow:0 5px 24px #0008">F&amp;O MARKET WATCH</a><a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;z-index:9998;background:#0f2730;color:#9ffcff;text-decoration:none;font-weight:800;padding:10px 14px;border:1px solid #22d3ee;border-radius:10px">OPENING STRUCTURE</a></body></html>'
 
 # APLUS_SAFE_GLOBAL_SEARCH_V1_2
 # Runtime transformation AFTER the original giant HTML literal is complete.
@@ -152,6 +288,8 @@ def snapshot():
             "trade_date": str(t.get("entry_time") or "")[:10],
             "entry_time": _time(t.get("entry_time")),
             "exit_time": _time(t.get("exit_time")),
+            "duration_seconds": _duration_seconds(t),
+            "duration": _format_duration(_duration_seconds(t)),
             "status": _status(t) or "-",
             "result": ("WIN" if (_pnl(t)>0 or str(t.get("result") or "").upper()=="WIN") else "LOSS" if (_pnl(t)<0 or str(t.get("result") or "").upper()=="LOSS") else "OPEN" if _status(t)=="OPEN" else "FLAT"),
             "entry": _num(t.get("entry_price")),
@@ -181,6 +319,12 @@ def snapshot():
         "total_pnl": round(sum(_pnl(t) for t in trades), 2),
         "closed_pnl": round(sum(_pnl(t) for t in closed), 2),
         "open_pnl": round(sum(_pnl(t) for t in open_trades), 2),
+        "average_duration_seconds": round(
+            sum(_duration_seconds(t) for t in trades) / len(trades), 1
+        ) if trades else 0.0,
+        "longest_duration_seconds": max(
+            (_duration_seconds(t) for t in trades), default=0
+        ),
         "rows": rows[:300],
     }
 
@@ -207,6 +351,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 .exact-footer{padding:0!important;margin:12px 0 0!important;border-top:1px solid var(--line);background:#0b1020;display:block!important;width:100%;overflow:hidden}.exact-footer img{display:block;width:100%;height:auto;max-height:none;object-fit:contain}.crisp-footer{margin-top:14px;border-top:1px solid #1e6091;border-bottom:1px solid #1e6091;background:linear-gradient(90deg,#071426,#0b1b35,#071426);padding:16px 22px;display:grid;grid-template-columns:1.25fr 1.7fr 1.35fr .65fr;gap:22px;align-items:center;position:relative;z-index:2}.cf-quote{font-size:13px;line-height:1.45;color:#e7eefc}.cf-brand{display:flex;align-items:center;justify-content:center;gap:12px}.cf-logo{width:54px;height:54px}.cf-title{font-size:20px;font-weight:800;white-space:nowrap}.cf-title .live{color:#17c964}.cf-dev{font-size:12px;color:#d7e3f5;margin-top:4px;text-align:center}.cf-flow{font-size:11px;font-weight:700;white-space:nowrap}.cf-flow .dot{color:#17c964;padding:0 7px}.cf-safe{font-size:11px;color:#d7e3f5;margin-top:8px;white-space:nowrap}.cf-copy{text-align:right;font-size:11px;color:#d7e3f5;line-height:1.7}.cf-flag{font-size:18px}@media(max-width:1100px){.crisp-footer{grid-template-columns:1fr 1fr}.cf-copy{text-align:left}}</style></head><body><div id="aplus-main-nav" style="padding:12px 20px;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #27334d;background:#0b1020">
 <a href="/" style="padding:9px 14px;border:1px solid #22d3ee;border-radius:9px;color:#9ffcff;text-decoration:none;font-weight:800;background:#0f2730">LIVE TRADING</a>
 <a href="/fno-market-watch" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">F&amp;O MARKET WATCH</a>
+<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
 <a href="/sector-performance" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTOR PERFORMANCE</a>
 <a href="/opening-structure" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">OPENING STRUCTURE</a>
 <a href="http://127.0.0.1:8766" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">TECHNICAL ALERTS</a><a href="/stock-charts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK CHARTS</a>
@@ -219,15 +364,16 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 <div class="card"><div class="label">Closed P&L</div><div id="closed_pnl" class="value">-</div></div>
 <div class="card"><div class="label">Trades</div><div id="trade_count" class="value">-</div></div>
 <div class="card"><div class="label">Open / Closed</div><div id="open_closed" class="value">-</div></div>
-<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>
+<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
 const pct=n=>Number(n||0).toFixed(2)+"%";
+const formatDuration=sec=>{sec=Math.max(0,Math.floor(Number(sec)||0));const d=Math.floor(sec/86400);sec%=86400;const h=Math.floor(sec/3600);sec%=3600;const m=Math.floor(sec/60),s=sec%60;if(d)return d+"d "+h+"h "+m+"m";if(h)return h+"h "+m+"m "+s+"s";return m+"m "+s+"s";};
 const cls=n=>Number(n)>=0?"green":"red";
 const prettyDate=x=>{if(!x)return "-";const p=x.split("-");if(p.length!==3)return x;const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return p[2]+"-"+m[Number(p[1])-1]+"-"+p[0];};
 let currentFilter="ALL",lastData=null;
@@ -239,10 +385,13 @@ function renderSummary(d){
  const wr=closed.length?wins.length/closed.length*100:0;
  for(const [id,v] of [["total_pnl",total],["open_pnl",op],["closed_pnl",cp]]){const e=document.getElementById(id);e.textContent=fmt(v);e.className="value "+cls(v);}
  trade_count.textContent=rr.length;open_closed.textContent=open.length+" / "+closed.length;win_rate.textContent=pct(wr);
+ const avg=rr.length?rr.reduce((a,x)=>a+Number(x.duration_seconds||0),0)/rr.length:0;
+ const longest=rr.reduce((a,x)=>Math.max(a,Number(x.duration_seconds||0)),0);
+ avg_duration.textContent=formatDuration(avg);longest_duration.textContent=formatDuration(longest);
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
@@ -273,6 +422,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/opening-structure":
             body = _mobileize_html(OPENING_STRUCTURE_HTML).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/alerts":
+            body = _mobileize_html(STOCK_ALERTS_HTML).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-alerts":
+            body = json.dumps(stock_alerts_payload()).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/stock-analysis":
+            body=STOCK_ANALYSIS_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-analysis":
+            q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
+            body=json.dumps(analysis_payload(day,symbol)).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-option-chain":
+            q=parse_query(self.path); symbol=q.get("symbol") or ""; expiry=q.get("expiry") or ""
+            try:
+                payload=option_chain_payload(symbol, expiry)
+            except Exception as exc:
+                payload={"ok":False,"error":f"Option-chain analysis failed: {type(exc).__name__}: {exc}"}
+            body=json.dumps(payload).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-charts":
             body=STOCK_CHART_HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
