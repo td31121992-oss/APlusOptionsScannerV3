@@ -43,6 +43,7 @@ from paper_trade_journal import PaperTradeJournal
 from safety_gate import SafetyGateEngine
 from scanner_authorization_state import scanner_authorization_is_blocked
 from trading_calendar import is_trading_day
+import market_context
 
 
 logger = get_logger(__name__)
@@ -404,6 +405,7 @@ class OpeningMomentumScanner:
         now: datetime | None = None,
     ) -> dict[str, Any]:
         started_monotonic = time.monotonic()
+        stage_marks: dict[str, float] = {"start": started_monotonic}  # per-cycle timing (log only)
         current_time = self._as_ist(now or datetime.now(IST))
         phase = self._session_phase(current_time)
 
@@ -420,6 +422,7 @@ class OpeningMomentumScanner:
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
         if open_option_ids:
             quote_request["NSE_FNO"] = open_option_ids
+        market_context.add_to_request(quote_request)  # NIFTY/BANKNIFTY/VIX ride on this same call
         try:
             quote_map = self.client.get_market_quotes(quote_request, mode="quote")
         except DhanMarketDataAuthorizationError as exc:
@@ -444,6 +447,17 @@ class OpeningMomentumScanner:
                 current_time, error_type=type(exc).__name__,
             )
             raise _MarketDataCycleError(type(exc).__name__) from exc
+
+        # Market-trend context (never allowed to affect the cycle if it fails).
+        self._market_context = None
+        try:
+            self._market_context = market_context.summarize(quote_map)
+            if self._market_context:
+                market_context.record(self._market_context, current_time, self.intraday_state_dir.parent)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Market context skipped: %s: %s", type(exc).__name__, exc)
+
+        stage_marks["quotes"] = time.monotonic()
 
         # Stock Selection V2: rank the full F&O universe by actual movement
         # from today's market open. Top-5 UP are CE-eligible; Top-5 DOWN are
@@ -515,6 +529,7 @@ class OpeningMomentumScanner:
             candle_shortlist,
             current_time,
         )
+        stage_marks["histories"] = time.monotonic()
 
         candidates: list[MomentumCandidate] = []
         for quote in candle_shortlist:
@@ -683,8 +698,21 @@ class OpeningMomentumScanner:
                 )
             actionable_for_plans = []
 
+        # Optional counter-trend filter (APLUS_MARKET_REGIME_MODE=ENFORCE; default SHADOW = off).
+        regime_ctx = getattr(self, "_market_context", None)
+        if regime_ctx and actionable_for_plans and market_context.mode() == "ENFORCE":
+            kept_for_regime = []
+            for candidate in actionable_for_plans:
+                if market_context.direction_allowed(regime_ctx.get("regime", "UNKNOWN"), candidate.direction):
+                    kept_for_regime.append(candidate)
+                else:
+                    candidate.paper_trade_status = "MARKET_REGIME_BLOCKED"
+            actionable_for_plans = kept_for_regime
+
         if self._new_entries_allowed(current_time) and actionable_for_plans:
+            _acct_t0 = time.monotonic()
             account_context = self._load_account_safety_context()
+            stage_marks["account_s"] = stage_marks.get("account_s", 0.0) + (time.monotonic() - _acct_t0)
             for candidate in actionable_for_plans:
                 if not self.paper_journal.can_generate(
                     symbol=candidate.symbol,
@@ -750,10 +778,12 @@ class OpeningMomentumScanner:
                 when=current_time,
             )
 
+        stage_marks["analysis_and_plans"] = time.monotonic()
         # Persist the full-universe tape, state machine and paper-trade journal.
         self.intraday_engine.flush()
         self.paper_journal.flush()
         paper_journal_summary = self.paper_journal.summary(current_time)
+        stage_marks["flush"] = time.monotonic()
 
         elapsed = round(time.monotonic() - started_monotonic, 2)
         payload = {
@@ -899,6 +929,21 @@ class OpeningMomentumScanner:
 
         self._write_reports(payload)
         self._write_authorization_state("HEALTHY", updated_at=current_time)
+        try:
+            _end = time.monotonic()
+            _order = ["start", "quotes", "histories", "analysis_and_plans", "flush"]
+            _prev, _parts = stage_marks["start"], []
+            for _name in _order[1:]:
+                if _name in stage_marks:
+                    _parts.append(f"{_name}={stage_marks[_name] - _prev:.1f}s")
+                    _prev = stage_marks[_name]
+            _parts.append(f"reports={_end - _prev:.1f}s")
+            logger.info(
+                "CYCLE_TIMING %s (account_fetch=%.1fs inside analysis_and_plans) total=%.1fs",
+                " ".join(_parts), stage_marks.get("account_s", 0.0), _end - stage_marks["start"],
+            )
+        except Exception:  # noqa: BLE001 - timing must never affect the cycle
+            pass
 
         logger.info(
             "Intraday movement cycle phase=%s universe=%d raw_quotes=%d "
@@ -3015,11 +3060,12 @@ class OpeningMomentumScanner:
         return "SESSION_COMPLETE"
 
     def _new_entries_allowed(self, now: datetime) -> bool:
-        """Allow quality-gated PAPER trade generation for the whole session."""
+        """Allow quality-gated PAPER trade generation until the last-new-entry time."""
+        last_entry = getattr(self.settings, "last_new_entry_time", self.settings.session_stop)
         return (
             self.settings.session_start
             <= now.time()
-            <= self.settings.session_stop
+            <= min(self.settings.session_stop, last_entry)
         )
 
     @staticmethod

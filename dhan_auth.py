@@ -125,12 +125,26 @@ def _profile_valid(client_id: str, token: str, *, timeout: float = 8.0) -> tuple
     if not token:
         return False, ""
     try:
-        response = requests.get(
-            PROFILE_URL,
-            headers={"access-token": token, "client-id": str(client_id), "Accept": "application/json"},
-            timeout=timeout,
-        )
-        if response.status_code != 200:
+        # Retry transient failures (timeout / connection error / 429 / 5xx) so a
+        # single slow Dhan response is not mistaken for an invalid token.  A
+        # definite rejection (e.g. 401/403) fails immediately.
+        attempts = 3
+        response = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(
+                    PROFILE_URL,
+                    headers={"access-token": token, "client-id": str(client_id), "Accept": "application/json"},
+                    timeout=max(timeout, 12.0),
+                )
+            except requests.RequestException:
+                response = None
+            transient = response is None or response.status_code == 429 or response.status_code >= 500
+            if not transient:
+                break
+            if attempt < attempts:
+                time.sleep(1.5 * attempt)
+        if response is None or response.status_code != 200:
             return False, ""
         body = response.json()
         if not isinstance(body, dict):

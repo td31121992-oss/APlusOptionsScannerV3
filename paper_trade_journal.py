@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from telegram_notifier import TelegramPaperTradeNotifier
+from trade_costs import round_trip_costs
 
 
 logger = logging.getLogger(__name__)
@@ -443,10 +444,9 @@ class PaperTradeJournal:
                     else ("PROFIT_PROTECTION_EXIT" if protected_stop > original_stop else "OPTION_STOP_LOSS")
                 )
             elif force_close:
-                trade["position_lifecycle_status"] = "CLOSE_PENDING"
-                trade["position_status_reason"] = (
-                    "Session ended; no automatic exit event or price was created."
-                )
+                # Session end: exit at the last valid mark (this branch is only
+                # reached with a valid positive price), never leave it open.
+                reason = force_close_reason
             if reason:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
@@ -482,7 +482,9 @@ class PaperTradeJournal:
         capital = self._number(trade.get("capital_deployed"))
         entered = self._parse_time(trade.get("entry_time"))
         holding = max(0, int((when - entered).total_seconds())) if entered else 0
-        costs = 0.0  # no fabricated brokerage model
+        costs = round_trip_costs(
+            entry, exit_price, qty, self._number(trade.get("spread_percent")),
+        )["total"]
         net = gross - costs
         trade.update({
             "status": "CLOSED", "exit_time": when.isoformat(),
@@ -658,9 +660,41 @@ class PaperTradeJournal:
     def _ensure_date(self, value: date) -> None:
         key = value.isoformat()
         if self.trading_date != key:
+            self._close_unresolved_prior_trades()
             self.trading_date = key
             self.trades = []
             self.lanes = {}
+
+    def _close_unresolved_prior_trades(self) -> None:
+        """Never silently drop OPEN trades when the trading date changes.
+
+        Each is closed at its last recorded option price (no new price is
+        invented) with reason PRIOR_SESSION_UNRESOLVED at 15:30 of its session,
+        then persisted to the history so the P&L is not lost.
+        """
+        if not self.trading_date or not self.trades:
+            return
+        try:
+            session_day = date.fromisoformat(self.trading_date)
+        except ValueError:
+            return
+        from zoneinfo import ZoneInfo
+        when = datetime(session_day.year, session_day.month, session_day.day, 15, 30,
+                        tzinfo=ZoneInfo("Asia/Kolkata"))
+        changed = False
+        for trade in self.trades:
+            if str(trade.get("status") or "").upper() != "OPEN":
+                continue
+            last = self._number(trade.get("last_option_price")) or self._number(trade.get("entry_price"))
+            if last <= 0:
+                continue
+            self._close_trade(trade, when, last, "PRIOR_SESSION_UNRESOLVED")
+            changed = True
+        if changed:
+            try:
+                sync_history(self.report_dir, self.trades)
+            except Exception as exc:  # never block the scanner on persistence
+                logger.warning("History sync after prior-session close failed: %s: %s", type(exc).__name__, exc)
 
     def _load(self) -> None:
         if not self.state_path.exists():
