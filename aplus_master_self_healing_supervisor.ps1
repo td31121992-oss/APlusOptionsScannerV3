@@ -76,6 +76,38 @@ function Get-ScannerProcesses {
     Select-RootScannerProcesses $found
 }
 
+# 24x7 background services (news/announcements). Independent of market hours and of Dhan.
+$Services = @(
+    @{ Name = "Announcement service"; Script = "aplus_announcement_service.py" },
+    @{ Name = "News collector";       Script = "aplus_overnight_intelligence.py" }
+)
+$ServiceLastStart = @{}
+$ServiceCooldownSeconds = 300
+
+function Ensure-Services {
+    $pythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+    if (-not (Test-Path $pythonw)) { $pythonw = $Python }
+    foreach ($svc in $Services) {
+        try {
+            $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                ($_.Name -eq "python.exe" -or $_.Name -eq "pythonw.exe") -and $_.CommandLine -and
+                $_.CommandLine -match [regex]::Escape($svc.Script)
+            })
+            if ($running.Count -gt 0) { continue }
+            $last = $ServiceLastStart[$svc.Name]
+            if ($last -and (((Get-Date) - $last).TotalSeconds -lt $ServiceCooldownSeconds)) { continue }
+            $scriptPath = Join-Path $ProjectRoot $svc.Script
+            if (-not (Test-Path $scriptPath)) { Write-Log "SERVICE MISSING: $($svc.Script)"; continue }
+            Start-Process -FilePath $pythonw -ArgumentList "`"$scriptPath`"" -WorkingDirectory $ProjectRoot -WindowStyle Hidden
+            $ServiceLastStart[$svc.Name] = Get-Date
+            Write-Log "SERVICE STARTED: $($svc.Name) ($($svc.Script))"
+        }
+        catch {
+            Write-Log "SERVICE ERROR: $($svc.Name): $($_.Exception.Message)"
+        }
+    }
+}
+
 function Test-Dhan {
     if (-not (Test-Path $Python)) {
         return $false
@@ -119,6 +151,7 @@ $dhan = $null
 do {
 
     $now = Get-Date
+    Ensure-Services
     $market = Test-MarketSession
     $scanner = @(Get-ScannerProcesses)
     $reportFresh = Test-ReportFresh
