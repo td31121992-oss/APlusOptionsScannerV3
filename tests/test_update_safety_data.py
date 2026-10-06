@@ -45,6 +45,20 @@ class UpdateSafetyDataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_combine_oi("Date, NSE Symbol, MWPL\n")
 
+    def test_parse_events_severity_and_dates(self) -> None:
+        from update_safety_data import parse_events
+        payload = [
+            {"symbol": "gmbrew", "purpose": "Financial Results", "bm_desc": "To consider  results", "date": "08-Oct-2026"},
+            {"symbol": "TCS", "purpose": "Dividend", "bm_desc": "", "date": "09-Oct-2026"},
+            {"symbol": "", "purpose": "Financial Results", "date": "09-Oct-2026"},      # no symbol -> skipped
+            {"symbol": "BAD", "purpose": "Financial Results", "date": "not-a-date"},    # bad date -> skipped
+        ]
+        rows = parse_events(payload, date(2026, 10, 7))
+        self.assertEqual([r[0] for r in rows], ["GMBREW", "TCS"])
+        self.assertEqual(rows[0][1:5], ["2026-10-08", "FINANCIAL RESULTS", "HIGH", "2026-10-07"])
+        self.assertEqual(rows[1][3], "MEDIUM")
+        self.assertEqual(rows[0][6], "To consider results")  # whitespace collapsed
+
     def test_parse_holidays_uses_fo_segment_sorted(self) -> None:
         payload = {
             "CM": [{"tradingDate": "01-Jan-2026", "description": "ignore"}],

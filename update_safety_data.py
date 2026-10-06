@@ -34,6 +34,8 @@ BAN_URL = "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"
 HOLIDAY_URL = "https://www.nseindia.com/api/holiday-master?type=trading"
 HOME_URL = "https://www.nseindia.com/"
 COMBINE_OI_URL = "https://nsearchives.nseindia.com/archives/nsccl/mwpl/combineoi_{stamp}.zip"
+EVENT_URL = "https://www.nseindia.com/api/event-calendar"
+SOURCE_EVENTS = "NSE event-calendar"
 SOURCE_OI = "NSE combineoi"
 SOURCE_BAN = "NSE fo_secban.csv"
 SOURCE_HOLIDAY = "NSE holiday-master (FO)"
@@ -215,12 +217,62 @@ def update_holidays(session: requests.Session) -> bool:
     return True
 
 
+HIGH_PURPOSE = ("RESULT",)  # earnings announcements: block new entries inside the gate window
+
+
+def parse_events(payload, as_of: date) -> list[list[str]]:
+    """Convert NSE event-calendar rows into corporate_events.csv rows."""
+    rows = payload if isinstance(payload, list) else (payload or {}).get("data", [])
+    out: list[list[str]] = []
+    for item in rows or []:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        raw_date = str(item.get("date") or "").strip()
+        if not symbol or not raw_date:
+            continue
+        try:
+            event_day = datetime.strptime(raw_date.title(), "%d-%b-%Y").date()
+        except ValueError:
+            continue
+        purpose = str(item.get("purpose") or "UNKNOWN").strip().upper()
+        severity = "HIGH" if any(tag in purpose for tag in HIGH_PURPOSE) else "MEDIUM"
+        notes = " ".join(str(item.get("bm_desc") or "").split())[:140]
+        out.append([symbol, event_day.isoformat(), purpose, severity, as_of.isoformat(), SOURCE_EVENTS, notes])
+    return sorted(out, key=lambda r: (r[1], r[0]))
+
+
+def update_events(session: requests.Session) -> bool:
+    try:
+        session.get(HOME_URL, timeout=20)
+        response = session.get(
+            EVENT_URL,
+            headers={"Referer": "https://www.nseindia.com/companies-listing/corporate-filings-event-calendar"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        rows = parse_events(response.json(), date.today())
+    except Exception as exc:  # noqa: BLE001
+        print(f"EVENTS NOT UPDATED: {type(exc).__name__}: {exc}")
+        return False
+    if len(rows) < 10:
+        print(f"EVENTS NOT UPDATED: only {len(rows)} rows returned; keeping existing file")
+        return False
+    _atomic_write_csv(
+        SAFETY_DIR / "corporate_events.csv",
+        ["symbol", "event_date", "event_type", "severity", "as_of", "source", "notes"],
+        rows,
+    )
+    high = sum(1 for r in rows if r[3] == "HIGH")
+    print(f"EVENTS UPDATED: {len(rows)} events ({high} HIGH/results) {rows[0][1]} .. {rows[-1][1]}")
+    return True
+
+
 def main() -> int:
     session = requests.Session()
     session.headers.update({"User-Agent": UA, "Accept": "*/*"})
     ok_ban = update_ban_list(session)
     ok_hol = update_holidays(session)
-    return 0 if (ok_ban and ok_hol) else 1
+    ok_evt = update_events(session)
+    return 0 if (ok_ban and ok_hol and ok_evt) else 1
 
 
 if __name__ == "__main__":
