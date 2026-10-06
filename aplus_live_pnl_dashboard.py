@@ -56,17 +56,53 @@ def _load_trades():
 def _status(t):
     return str(t.get("status") or "").upper()
 
+def _realized_pnl(t):
+    return _num(
+        t.get("net_pnl")
+        if t.get("net_pnl") not in (None, "")
+        else t.get("pnl")
+    )
+
+def _unrealized_pnl(t):
+    """Calculate current open-position P&L from the latest valid option mark."""
+    if _status(t) != "OPEN":
+        return 0.0
+
+    entry = _num(t.get("entry_price"))
+    mark = _num(t.get("last_option_price"))
+    quantity = int(_num(t.get("quantity")))
+
+    if entry <= 0 or mark <= 0 or quantity <= 0:
+        return 0.0
+
+    transaction = str(
+        t.get("option_transaction")
+        or t.get("transaction")
+        or "BUY"
+    ).upper()
+
+    if transaction == "SELL":
+        return (entry - mark) * quantity
+
+    return (mark - entry) * quantity
+
 def _pnl(t):
-    return _num(t.get("net_pnl") if t.get("net_pnl") not in (None, "") else t.get("pnl"))
+    if _status(t) == "OPEN":
+        return _unrealized_pnl(t)
+    return _realized_pnl(t)
 
 def _capital(t):
     return _num(t.get("capital_deployed") or t.get("capital"))
 
 def _return_pct(t):
+    cap = _capital(t)
+    if _status(t) == "OPEN":
+        return (_unrealized_pnl(t) / cap * 100.0) if cap else 0.0
+
     if t.get("return_percent") not in (None, ""):
         return _num(t.get("return_percent"))
-    cap = _capital(t)
-    return (_pnl(t) / cap * 100.0) if cap else 0.0
+
+    return (_realized_pnl(t) / cap * 100.0) if cap else 0.0
 
 def _time(v):
     s = str(v or "")
