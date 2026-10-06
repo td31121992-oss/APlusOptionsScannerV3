@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from analytics.order_flow import build_order_flow
+from news_intelligence import news_context
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
@@ -308,6 +309,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
     candidate = _latest_candidate(symbol)
     technical = _technical(points, market)
     order_flow = order_flow_payload(symbol, points)
+    news = news_context(symbol, max_age_hours=72.0, limit=8)
     direction = str(market.get("direction") or "").upper()
     bullish = direction == "UP"
     bearish = direction == "DOWN"
@@ -403,6 +405,7 @@ def analysis_payload(day: str, symbol: str) -> dict[str, Any]:
         "market": market,
         "technical": technical,
         "order_flow": order_flow,
+        "news": news,
         "confirmation": confirmation,
         "candidate": candidate,
         "candidate_status": _status(candidate),
@@ -597,6 +600,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
 </div>
 <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
+<div class="panel" style="margin-top:10px"><div class="pt">News Intelligence <span class="sub">Timestamped context • read-only • no trade decision</span></div><div class="body"><div class="notice" id="newsSummary">No news context loaded.</div><div id="newsEvents" style="margin-top:10px"></div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
 <div class="panel" style="margin-top:10px"><div class="pt">F&amp;O Option Chain <span class="sub">Read-only • cached to respect Dhan API limits</span></div><div class="body"><div class="rows" id="chainSummary"></div><div id="chain" style="margin-top:10px;overflow:auto"><div class="sub">Click “Load Option Chain” to fetch the selected expiry.</div></div></div></div>
 <div class="grid">
@@ -645,6 +649,9 @@ function render(d){
     card("VWAP",n(t.vwap).toFixed(2)),card("VWAP Gap",pct(t.vwap_distance_percent)),
     card("RVAT (1m)",n(t.rvat_1m).toFixed(2)+"x")
   ].join("");
+  const news=d.news||{};
+  q("#newsSummary").textContent=news.summary||"No timestamped local news available.";
+  q("#newsEvents").innerHTML=(news.events||[]).map(e=>card((e.direction||"NEUTRAL")+" • "+(e.impact||"UNKNOWN"),esc(e.title||"Untitled")+" • "+esc(e.source_type||"UNKNOWN")+" • "+esc(e.published_at||"")+" • confidence "+n(e.confidence).toFixed(2))).join("")||"<div class='sub'>No relevant timestamped local news found in the last 72 hours.</div>";
   const cf=d.confirmation||{};
   const checks=cf.structure_checks||{};
   q("#confirmation").innerHTML=[
