@@ -21,6 +21,22 @@ except Exception:  # noqa: BLE001
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
+try:  # high/low-time tracking must never stop the dashboard from starting
+    from high_low_tracker import HighLowTracker
+    _HL = HighLowTracker(ROOT / "data" / "dashboard_state" / "high_low_times.json")
+except Exception:  # noqa: BLE001
+    _HL = None
+
+
+def _hl_fields(t):
+    """High/low option price of a trade with the time each occurred (see high_low_tracker)."""
+    try:
+        if _HL is not None:
+            r = _HL.update(t, datetime.now(ZoneInfo("Asia/Kolkata")))
+            return {"high": r["high"], "high_time": r["high_time"], "low": r["low"], "low_time": r["low_time"]}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"high": _num(t.get("highest_option_price")), "high_time": "", "low": _num(t.get("lowest_option_price")), "low_time": ""}
 HOST = "0.0.0.0"
 PORT = 8765
 
@@ -314,6 +330,7 @@ def snapshot():
             "setup": str(t.get("setup_family") or "-"),
             "quality": _num(t.get("momentum_score") or t.get("trade_quality_score")),
             "clean": _num(t.get("clean_trend_score")),
+            **_hl_fields(t),
         })
 
     return {
@@ -375,11 +392,11 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 <div class="card"><div class="label">Closed P&L</div><div id="closed_pnl" class="value">-</div></div>
 <div class="card"><div class="label">Trades</div><div id="trade_count" class="value">-</div></div>
 <div class="card"><div class="label">Open / Closed</div><div id="open_closed" class="value">-</div></div>
-<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>
+<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>\n<div class="card"><div class="label">Capital Deployed (open)</div><div id="cap_deployed" class="value">-</div></div>\n<div class="card"><div class="label">Open Return on Capital</div><div id="open_return" class="value">-</div></div>\n<div class="card"><div class="label">Day Return on Capital</div><div id="day_return" class="value">-</div></div>
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">Low ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -396,13 +413,17 @@ function renderSummary(d){
  const wr=closed.length?wins.length/closed.length*100:0;
  for(const [id,v] of [["total_pnl",total],["open_pnl",op],["closed_pnl",cp]]){const e=document.getElementById(id);e.textContent=fmt(v);e.className="value "+cls(v);}
  trade_count.textContent=rr.length;open_closed.textContent=open.length+" / "+closed.length;win_rate.textContent=pct(wr);
+ const capOpen=open.reduce((a,x)=>a+Number(x.capital||0),0),capAll=rr.reduce((a,x)=>a+Number(x.capital||0),0);
+ cap_deployed.textContent=fmt(capOpen);
+ {const v=capOpen?op/capOpen*100:0;open_return.textContent=capOpen?pct(v):"-";open_return.className="value "+(capOpen?cls(v):"");}
+ {const v=capAll?total/capAll*100:0;day_return.textContent=capAll?pct(v):"-";day_return.className="value "+(capAll?cls(v):"");}
  const avg=rr.length?rr.reduce((a,x)=>a+Number(x.duration_seconds||0),0)/rr.length:0;
  const longest=rr.reduce((a,x)=>Math.max(a,Number(x.duration_seconds||0)),0);
  avg_duration.textContent=formatDuration(avg);longest_duration.textContent=formatDuration(longest);
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);

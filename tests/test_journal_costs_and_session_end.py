@@ -78,6 +78,44 @@ class SessionEndTests(unittest.TestCase):
             self.assertEqual(journal.trades[0]["pnl_data_status"], "INCOMPLETE_MARK")
 
 
+class HighLowTimeTests(unittest.TestCase):
+    def _mark(self, journal, price, hh, mm):
+        journal.update_open_positions(option_quotes={"123": {"last_price": price}},
+                                      when=datetime(2026, 10, 7, hh, mm, tzinfo=IST))
+
+    def test_exact_time_of_each_new_high_and_low_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(entry_price=10.0, option_stop=1.0, option_target1=50.0,
+                                                               highest_option_price=10.0, lowest_option_price=10.0)])
+            self._mark(journal, 10.0, 10, 1)       # equal to entry: no new extreme, no time
+            t = journal.trades[0]
+            self.assertNotIn("highest_option_price_at", t)
+            self._mark(journal, 11.5, 10, 2)       # new high
+            self._mark(journal, 11.0, 10, 3)       # lower, not a new high / not below the entry-low
+            self._mark(journal, 9.0, 10, 4)        # new low
+            self._mark(journal, 12.5, 10, 5)       # newer high
+            self.assertEqual((t["highest_option_price"], t["highest_option_price_at"][11:16]), (12.5, "10:05"))
+            self.assertEqual((t["lowest_option_price"], t["lowest_option_price_at"][11:16]), (9.0, "10:04"))
+
+    def test_csv_report_still_writes_with_the_new_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(option_stop=1.0, option_target1=50.0)])
+            self._mark(journal, 12.0, 10, 2)
+            self.assertTrue(journal.flush())
+            header = Path(tmp, "reports", "paper_trades.csv").read_text(encoding="utf-8").splitlines()[0]
+            self.assertIn("highest_option_price_at", header)
+            self.assertIn("lowest_option_price_at", header)
+
+    def test_option_trade_tape_is_actually_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(option_stop=1.0, option_target1=50.0)])
+            self._mark(journal, 10.5, 10, 2)
+            self._mark(journal, 10.7, 10, 3)
+            tape = Path(tmp, "option_trade_tape", "2026-10-07", "PT-TEST-1.csv")
+            self.assertTrue(tape.exists(), "tape file must exist (previous code silently never wrote it)")
+            self.assertEqual(len(tape.read_text(encoding="utf-8").splitlines()), 3)    # header + 2 marks
+
+
 class CarryoverTests(unittest.TestCase):
     def test_open_trade_is_closed_not_dropped_when_date_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -54,6 +54,7 @@ class PaperTradeJournal:
         "capital_deployed", "planned_risk_amount", "planned_risk_percent",
         "last_quote_time", "last_option_price", "highest_option_price",
         "lowest_option_price", "mfe_amount", "mae_amount",
+        "highest_option_price_at", "lowest_option_price_at",
         "last_successful_mark_at", "last_mark_evaluated_at", "mark_status",
         "last_mark_error_type", "last_mark_error_status",
         "position_lifecycle_status", "position_status_reason",
@@ -324,7 +325,8 @@ class PaperTradeJournal:
             tid = str(trade.get("trade_id") or trade.get("paper_trade_id") or "").strip()
             if not tid:
                 return
-            base = self.data_dir.parent / "option_trade_tape" / when.date().isoformat()
+            # (was self.data_dir, which does not exist: the error was swallowed and no tape was ever written)
+            base = self.state_dir.parent / "option_trade_tape" / when.date().isoformat()
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{tid}.csv"
             exists = path.exists()
@@ -405,9 +407,14 @@ class PaperTradeJournal:
             trade["position_status_reason"] = ""
             trade["position_lifecycle_status"] = "OPEN"
             self._append_option_tape(trade, when, price)
-            high = max(self._number(trade.get("highest_option_price")), price)
+            prev_high = self._number(trade.get("highest_option_price"))
+            high = max(prev_high, price)
             old_low = self._number(trade.get("lowest_option_price"))
             low = min(old_low if old_low > 0 else price, price)
+            if price > prev_high:                      # time of each NEW extreme (strictly beyond the previous one)
+                trade["highest_option_price_at"] = when.isoformat()
+            if old_low > 0 and price < old_low:
+                trade["lowest_option_price_at"] = when.isoformat()
             trade["highest_option_price"] = round(high, 4)
             trade["lowest_option_price"] = round(low, 4)
             trade["mfe_amount"] = round((high - entry) * qty, 2)
