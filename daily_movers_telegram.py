@@ -24,6 +24,9 @@ STATE = ROOT / "data" / "dashboard_state" / "daily_movers_sent.json"
 REPORT = ROOT / "data" / "reports" / "intraday_movement_latest.json"
 
 
+TAGLINE = "APlus Software made by Mr. Darpan Bobhate (F&O Trader with 7 years of experience)"
+
+
 def _f(value: Any) -> float:
     try:
         out = float(value)
@@ -54,7 +57,7 @@ def format_message(day: date, gainers: list[dict], losers: list[dict], total: in
     out += [line(i, x) for i, x in enumerate(gainers, 1)] or ["(none)"]
     out += ["", "🔴 TOP 5 LOSERS"]
     out += [line(i, x) for i, x in enumerate(losers, 1)] or ["(none)"]
-    out += ["", f"{total} F&O stocks, change vs previous close"]
+    out += ["", f"{total} F&O stocks, change vs previous close", "", TAGLINE]
     return "\n".join(out)
 
 

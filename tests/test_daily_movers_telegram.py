@@ -25,6 +25,7 @@ class MoversTests(unittest.TestCase):
         self.assertIn("1. HHH  ₹80.00  (-20.00%)", text)
         self.assertIn("TOP 5 GAINERS", text)
         self.assertIn("TOP 5 LOSERS", text)
+        self.assertTrue(text.rstrip().endswith("Darpan Bobhate (F&O Trader with 7 years of experience)"))
 
     def test_empty_sides_do_not_crash(self) -> None:
         text = dm.format_message(date(2026, 10, 8), [], [], 0)
