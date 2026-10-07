@@ -165,7 +165,15 @@ do {
 
     # Relaunch only when NO scanner is running. Two or more processes, or a
     # stale report with one scanner, are logged but never acted on blindly.
-    if ($market -and $scannerCount -eq 0) {
+    # Liveness = the scanner's own report is fresh. A scanner started by an ELEVATED task (the 2-minute
+    # watchdog) is invisible to this non-elevated supervisor (its command line cannot be read), so
+    # process counting alone would start a duplicate that the watchdog then force-kills.
+    if ($market -and $scannerCount -eq 0 -and $reportFresh) {
+
+        Write-Log "SCANNER ALIVE: report is fresh (scanner process not visible - started by an elevated task); no action"
+
+    }
+    elseif ($market -and $scannerCount -eq 0) {
 
         if (((Get-Date) - $lastRecovery).TotalSeconds -lt $RecoveryCooldownSeconds) {
 
