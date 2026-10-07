@@ -130,7 +130,7 @@ function Test-ReportFresh {
     }
 
     try {
-        return (((Get-Date) - (Get-Item $report).LastWriteTime).TotalSeconds -le 180)
+        return (((Get-Date) - (Get-Item $report).LastWriteTime).TotalSeconds -le 360)
     }
     catch {
         return $false
