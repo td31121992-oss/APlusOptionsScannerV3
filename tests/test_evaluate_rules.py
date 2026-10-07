@@ -31,6 +31,12 @@ class PrepareTests(unittest.TestCase):
         self.assertAlmostEqual(t["_net"], t["_gross"] - t["_costs"], places=6)
         self.assertLess(t["_net"], t["_gross"])
 
+    def test_duplicate_instance_orphans_are_excluded(self) -> None:
+        dup = {**_trade("PT-20260910-100000-AAA-1", 101.3, 101.3), "exit_reason": "DUPLICATE_INSTANCE_ORPHAN"}
+        real = _trade("PT-20260910-100100-BBB-2", 101.3, 110.2)
+        out = prepare([dup, real], "2026-08-28")
+        self.assertEqual([t["paper_trade_id"] for t in out], ["PT-20260910-100100-BBB-2"])
+
 
 class MetricsTests(unittest.TestCase):
     def test_metrics_basic(self) -> None:

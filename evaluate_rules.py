@@ -77,6 +77,8 @@ def prepare(trades: Iterable[dict], since: str = "2026-08-28") -> list[dict]:
     for t in trades:
         if str(t.get("status", "")).upper() != "CLOSED":
             continue
+        if str(t.get("exit_reason", "")).upper() == "DUPLICATE_INSTANCE_ORPHAN":
+            continue                                   # artefact of two simultaneous scanner instances, not a trade
         tid = str(t.get("paper_trade_id", ""))
         try:
             day = datetime.strptime(tid[3:11], "%Y%m%d").date().isoformat()
