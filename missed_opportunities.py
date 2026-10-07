@@ -294,6 +294,14 @@ def main() -> int:
                 print(f"{d}: trade review -> {folder}")
     except Exception as exc:                       # noqa: BLE001
         print(f"trade review skipped: {type(exc).__name__}: {exc}")
+    if not args.backfill:
+        try:                                       # what each signal's ATM/OTM option did (read-only API calls, ~4 min); never blocks this report
+            import missed_option_returns
+            folder = missed_option_returns.run(args.day)
+            if folder:
+                print(f"{args.day}: option returns -> {folder}")
+        except Exception as exc:                   # noqa: BLE001
+            print(f"option returns skipped: {type(exc).__name__}: {exc}")
     summary = update_cumulative(results)
     print(f"cumulative: {summary['signals']} signals over {len(summary['days'])} days")
     return 0
