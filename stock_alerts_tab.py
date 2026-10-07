@@ -22,7 +22,11 @@ def _load_rows() -> list[dict[str, Any]]:
         try:                      # add the daily-indicator fields (breakouts, averages, supertrend); alerts stay safe without them
             from daily_indicators import enrich_rows, load_indicators
 
-            rows = enrich_rows(rows, load_indicators())
+            indicators = load_indicators()
+            rows = enrich_rows(rows, indicators)
+            from intraday_signals import enrich_intraday, load_book_stats
+
+            rows = enrich_intraday(rows, load_book_stats(), indicators)
         except Exception:         # noqa: BLE001
             pass
         return rows
