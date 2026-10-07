@@ -12,6 +12,7 @@ from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, char
 from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
 from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
 import dashboard_access
+import trading_mode
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -43,6 +44,20 @@ PORT = 8765
 MAIN_MOBILE_CSS = '\n<style id="aplus-mobile-css">\n<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n@media(max-width:760px){\n  body{font-size:14px!important;overflow-x:hidden}\n  #aplus-main-nav{position:sticky!important;top:0!important;z-index:9999!important;padding:8px!important;gap:6px!important;overflow-x:auto!important;flex-wrap:nowrap!important;-webkit-overflow-scrolling:touch}\n  #aplus-main-nav a{flex:0 0 auto!important;padding:9px 11px!important;font-size:11px!important;white-space:nowrap!important}\n  .header{padding:12px 14px!important;gap:10px!important;align-items:flex-start!important}\n  .brandrow{gap:8px!important}.aplus-logo{width:38px!important;height:38px!important}\n  .title{font-size:18px!important}.sub{font-size:10px!important}\n  .grid,.cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;padding:10px!important}\n  .card{padding:10px!important;border-radius:10px!important}\n  .label{font-size:10px!important}.value{font-size:18px!important}\n  .filterbar,.toolbar,.tabs{padding:0 10px 10px!important;gap:6px!important;overflow-x:auto!important;white-space:nowrap!important;flex-wrap:nowrap!important}\n  .tradefilter,.toolbar button,.toolbar select,.tab{padding:8px 10px!important;font-size:11px!important;flex:0 0 auto!important}\n  .tablewrap{padding:0 8px 12px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}\n  table{min-width:980px!important}\n  th,td{padding:8px!important;font-size:11px!important}\n  .grid{grid-template-columns:1fr!important}\n  .crisp-footer{grid-template-columns:1fr!important;padding:14px!important;gap:10px!important;text-align:center!important}\n  .cf-copy{text-align:center!important}.cf-title{font-size:17px!important}\n  .watermark{font-size:34px!important}\n}\n</style>\n'
 
 
+MODE_BAR_HTML = """
+<div id="aplus-mode-bar" style="position:fixed;right:12px;bottom:12px;z-index:9999;background:#121a2d;border:1px solid #27334d;border-radius:12px;padding:8px 12px;font:600 13px system-ui,sans-serif;color:#e7eefc;box-shadow:0 4px 18px rgba(0,0,0,.45);max-width:340px">
+<span id="aplus-mode-pill" style="padding:3px 10px;border-radius:999px;background:#1b6b3a">PAPER MODE</span>
+<button id="aplus-mode-btn" style="margin-left:8px;padding:5px 10px;border-radius:8px;border:1px solid #27334d;background:#0b1020;color:#e7eefc;cursor:pointer;font-weight:700">Switch to LIVE</button>
+<div id="aplus-mode-msg" style="margin-top:5px;font-weight:500;font-size:12px;color:#8ea0bd"></div></div>
+<script>(function(){var pill=document.getElementById('aplus-mode-pill'),btn=document.getElementById('aplus-mode-btn'),msg=document.getElementById('aplus-mode-msg'),cur='PAPER';
+function render(s){if(!s)return;cur=s.mode;if(s.mode==='LIVE'){pill.textContent='LIVE armed - order routing OFF';pill.style.background='#8a2b2b';btn.textContent='Back to PAPER';}else{pill.textContent='PAPER MODE';pill.style.background='#1b6b3a';btn.textContent='Switch to LIVE';}
+if(s.broker&&s.broker.connected&&s.mode==='LIVE'){msg.textContent='Broker connected ('+s.broker.client+')'+(s.broker.available_balance!=null?' - balance '+s.broker.available_balance:'');}}
+function load(){fetch('/api/mode',{cache:'no-store'}).then(function(r){return r.json()}).then(render).catch(function(){});}
+btn.onclick=function(){var body;if(cur==='LIVE'){body={mode:'PAPER'};}else{var c=prompt('This runs a read-only broker connection check and arms LIVE for today only.\nNo real orders are sent - order routing is not built yet.\nType LIVE to continue:');if(c===null)return;body={mode:'LIVE',confirm:c};}
+fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){msg.textContent=j.message||'';render(j.state);}).catch(function(){msg.textContent='Request failed.';});};
+load();setInterval(load,20000);})();</script>
+"""
+
 def _mobileize_html(html, host=None):
     if not isinstance(html, str):
         return html
@@ -53,6 +68,8 @@ def _mobileize_html(html, host=None):
         out = out.replace('<a href="/fno-market-watch"', link + '<a href="/fno-market-watch"', 1)
     if 'id="aplus-mobile-css"' not in out:
         out = out.replace("</head>", MAIN_MOBILE_CSS + "</head>", 1)
+    if 'id="aplus-mode-bar"' not in out and "</body>" in out:
+        out = out.replace("</body>", MODE_BAR_HTML + "</body>", 1)
     if host:
         out = out.replace("http://127.0.0.1:8766", f"http://{host}:8766")
     return out
@@ -396,7 +413,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">Low ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -423,7 +440,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
@@ -498,11 +515,30 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/mode":
+            body = json.dumps(trading_mode.get_state()).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/snapshot":
             body = json.dumps(snapshot()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         body = _mobileize_html(HTML, self.headers.get("Host","127.0.0.1").split(":")[0]).encode("utf-8")
         self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        def reply(code, payload):
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(code); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
+        if not dashboard_access.is_allowed(self.client_address[0]):
+            return reply(403, {"ok": False, "message": "Not allowed from this address."})
+        if self.path.split("?", 1)[0] != "/api/mode":
+            return reply(404, {"ok": False, "message": "Not found."})
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), 2000)
+            req = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:  # noqa: BLE001
+            return reply(400, {"ok": False, "message": "Bad request."})
+        ok, state, message = trading_mode.set_mode(str(req.get("mode", "")), confirm=str(req.get("confirm", "")), remote_addr=self.client_address[0])
+        return reply(200, {"ok": ok, "message": message, "state": state})
+
     def log_message(self, fmt, *args):
         return
 
