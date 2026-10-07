@@ -167,6 +167,13 @@ def health(base: Path, now: datetime, market: dict[str, Any]) -> dict[str, Any]:
             detail = str(hb.get("error", ""))[:80]
         items.append({"key": key, "level": "bad" if bad else "ok", "value": value, "detail": detail})
 
+    # historical options download (informational)
+    prog = _read_json(Path(os.getenv("APLUS_OPTIONS_HISTORY", r"E:\APlusData\expired_options")) / "_progress.json")
+    if isinstance(prog, dict) and prog.get("planned_total"):
+        items.append({"key": "Options history download", "level": "ok",
+                      "value": f"{prog.get('pct', 0)}% ({int(prog.get('stored_total', 0)):,}/{int(prog['planned_total']):,})",
+                      "detail": f"{int(prog.get('with_data', 0)):,} with data, {int(prog.get('empty', 0)):,} empty; last {prog.get('last', '')}"})
+
     # safety data freshness
     safety = base / "data" / "safety"
     mwpl_dates, mwpl_ban = [], 0
@@ -416,6 +423,29 @@ def news(base: Path, now: datetime) -> dict[str, Any]:
             "high_24h": sum(1 for a in ann if a.get("severity") == "HIGH")}
 
 
+# ----------------------------------------------------------------------------- missed opportunities
+def missed(base: Path, now: datetime) -> dict[str, Any]:
+    folder = base / "data" / "missed_opportunities"
+    cum = _read_json(folder / "cumulative.json")
+    if not isinstance(cum, dict):
+        return {"available": False}
+    days = sorted(p.name for p in folder.iterdir() if p.is_dir()) if folder.is_dir() else []
+    latest = days[-1] if days else None
+    latest_summary = _read_json(folder / latest / "summary.json") if latest else None
+    top: list[dict[str, Any]] = []
+    if latest:
+        try:
+            with (folder / latest / "signals.csv").open(newline="", encoding="utf-8") as handle:
+                rows = [r for r in csv.DictReader(handle) if r.get("fate") != "TRADED"]
+            rows.sort(key=lambda r: -float(r.get("close_pct") or 0))
+            top = [{"symbol": r["symbol"], "direction": r["direction"], "first_ready": r["first_ready"], "close_pct": float(r["close_pct"]),
+                    "fate": r["fate"]} for r in rows[:6]]
+        except (OSError, ValueError, KeyError):
+            pass
+    return {"available": True, "days": len(cum.get("days", [])), "signals": cum.get("signals", 0), "by_group": cum.get("by_group", []),
+            "latest_day": latest, "latest_by_group": (latest_summary or {}).get("by_group", []), "top_missed": top}
+
+
 # ----------------------------------------------------------------------------- payload
 def control_room_payload(base: Path = ROOT, now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(IST)
@@ -429,5 +459,6 @@ def control_room_payload(base: Path = ROOT, now: datetime | None = None) -> dict
         "funnel": _safe(lambda: funnel(base, now, market)),
         "positions": _safe(lambda: positions(base, now)),
         "news": _safe(lambda: news(base, now)),
+        "missed": _safe(lambda: missed(base, now)),
         "performance": _safe(lambda: performance(base)),
     }

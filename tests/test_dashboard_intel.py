@@ -125,7 +125,7 @@ class PayloadIsolationTests(unittest.TestCase):
     def test_empty_folder_never_raises_and_returns_every_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             payload = di.control_room_payload(Path(tmp), ist(2026, 10, 7, 10, 0))
-        for key in ("market", "health", "funnel", "positions", "performance", "news"):
+        for key in ("market", "health", "funnel", "positions", "performance", "news", "missed"):
             self.assertIn(key, payload)
         json.dumps(payload)   # must be serialisable
 
@@ -163,6 +163,47 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(n["high_24h"], 1)
         self.assertEqual(n["headlines"][0]["title"], "Nifty rises")
         self.assertEqual(di.news(Path(self.tmp.name, "nowhere"), now)["announcements"], [])
+
+
+class OptionsHistoryProgressTests(unittest.TestCase):
+    def test_progress_line_shown_when_file_exists(self) -> None:
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp, "hist")
+            _write(hist, "_progress.json", {"planned_total": 1000, "stored_total": 250, "pct": 25.0, "with_data": 200, "empty": 50, "last": "TCS 2025-09-01"})
+            with mock.patch.dict(os.environ, {"APLUS_OPTIONS_HISTORY": str(hist)}):
+                items = {i["key"]: i for i in di.health(Path(tmp, "base"), ist(2026, 10, 7, 10, 0), {"state": "OPEN"})["items"]}
+            self.assertIn("25.0%", items["Options history download"]["value"])
+            with mock.patch.dict(os.environ, {"APLUS_OPTIONS_HISTORY": str(Path(tmp, "none"))}):
+                keys = [i["key"] for i in di.health(Path(tmp, "base"), ist(2026, 10, 7, 10, 0), {"state": "OPEN"})["items"]]
+            self.assertNotIn("Options history download", keys)
+
+
+class MissedSectionTests(unittest.TestCase):
+    def test_not_available_without_a_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(di.missed(Path(tmp), ist(2026, 10, 7, 10, 0)), {"available": False})
+
+    def test_reads_cumulative_and_latest_day(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            folder = base / "data" / "missed_opportunities"
+            _write(folder, "cumulative.json", {"days": ["2026-10-05", "2026-10-06"], "signals": 40,
+                                               "by_group": [{"fate": "TRADED", "n": 5, "right_at_close_pct": 60.0, "median_close_pct": 0.4,
+                                                             "median_worst_pct": -0.3, "went_1pct_against": 20.0}]})
+            _write(folder / "2026-10-06", "summary.json", {"day": "2026-10-06", "by_group": []})
+            nl = chr(10)
+            _write(folder / "2026-10-06", "signals.csv", nl.join([
+                "symbol,direction,first_ready,entry_price,ready_cycles,fate,close_pct,best_pct,worst_pct",
+                "AAA,BULLISH,09:30,100,3,TRADED,2.0,3.0,-0.1",
+                "BBB,BULLISH,09:35,50,4,A_PLUS:late_vwap_extension,4.5,5.0,-0.2",
+                "CCC,BEARISH,10:00,80,2,V2_BLOCKED,1.0,1.5,-0.5"]) + nl)
+            m = di.missed(base, ist(2026, 10, 7, 10, 0))
+            self.assertTrue(m["available"])
+            self.assertEqual((m["days"], m["signals"], m["latest_day"]), (2, 40, "2026-10-06"))
+            self.assertEqual([t["symbol"] for t in m["top_missed"]], ["BBB", "CCC"])      # traded one excluded, best first
+            self.assertEqual(m["by_group"][0]["fate"], "TRADED")
 
 
 class ServerTests(unittest.TestCase):
