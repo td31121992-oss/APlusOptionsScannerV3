@@ -69,9 +69,12 @@ def supertrend_state(high: Sequence[float], low: Sequence[float], close: Sequenc
     return {"direction": direction, "upper": float(fub[-1]), "lower": float(flb[-1])}
 
 
-def compute_indicators(high: Sequence[float], low: Sequence[float], close: Sequence[float]) -> dict[str, Any]:
+def compute_indicators(high: Sequence[float], low: Sequence[float], close: Sequence[float],
+                       volume: Sequence[float] | None = None) -> dict[str, Any]:
     h, l, c = (np.asarray(x, dtype=float) for x in (high, low, close))
     out: dict[str, Any] = {"last_close": float(c[-1]) if len(c) else 0.0, "bars": int(len(c))}
+    if volume is not None and len(volume) >= 20:
+        out["avg_vol20"] = float(np.mean(np.asarray(volume, dtype=float)[-20:]))
     for name, n in RANGES.items():
         if len(h) >= n:
             out[f"hi_{name}"], out[f"lo_{name}"] = float(h[-n:].max()), float(l[-n:].min())
@@ -155,7 +158,7 @@ def fetch_and_write() -> int:
             continue
         keep = [i for i, t in enumerate(stamps) if datetime.fromtimestamp(t).date() < today]     # completed days only
         pick = lambda key: [d[key][i] for i in keep]                                             # noqa: E731
-        result[symbol] = compute_indicators(pick("high"), pick("low"), pick("close"))
+        result[symbol] = compute_indicators(pick("high"), pick("low"), pick("close"), pick("volume"))
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(), "count": len(result), "symbols": result}), encoding="utf-8")
     print(f"daily indicators for {len(result)} of {len(universe)} stocks -> {OUT}")

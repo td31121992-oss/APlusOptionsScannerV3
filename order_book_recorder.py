@@ -29,7 +29,7 @@ LOCK_PORT = 8797
 INTERVAL = 60
 OPEN, CLOSE = clock(9, 15), clock(15, 31)
 FIELDS = ["time", "symbol", "ltp", "volume", "last_qty", "buy_qty", "sell_qty", "bid", "bid_qty", "ask", "ask_qty",
-          "depth_buy5", "depth_sell5", "imbalance"]
+          "depth_buy5", "depth_sell5", "imbalance", "avg_price"]
 
 
 def _f(value: Any) -> float:
@@ -52,7 +52,7 @@ def book_row(symbol: str, quote: dict[str, Any], stamp: str) -> dict[str, Any]:
             "last_qty": _f(quote.get("last_quantity")), "buy_qty": _f(quote.get("buy_quantity")),
             "sell_qty": _f(quote.get("sell_quantity")), "bid": _f(b1.get("price")), "bid_qty": _f(b1.get("quantity")),
             "ask": _f(s1.get("price")), "ask_qty": _f(s1.get("quantity")), "depth_buy5": buy5, "depth_sell5": sell5,
-            "imbalance": round(imbalance, 4)}
+            "imbalance": round(imbalance, 4), "avg_price": _f(quote.get("average_price"))}
 
 
 def in_session(now: datetime) -> bool:
