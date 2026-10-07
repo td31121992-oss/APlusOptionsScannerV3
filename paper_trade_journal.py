@@ -456,7 +456,17 @@ class PaperTradeJournal:
                     "RUNNER_TRAIL_EXIT" if bool(trade.get("runner_mode"))
                     else ("PROFIT_PROTECTION_EXIT" if protected_stop > original_stop else "OPTION_STOP_LOSS")
                 )
-            elif force_close:
+            else:
+                lock_floor = self._profit_lock_floor(entry, high)
+                if lock_floor > 0 and price <= lock_floor:
+                    mode = self._profit_lock_mode()
+                    if mode == "ENFORCE":
+                        reason = "PROFIT_LOCK_EXIT"
+                    elif mode == "SHADOW" and not trade.get("lock_shadow_exit_at"):
+                        trade["lock_shadow_exit_at"] = when.isoformat()      # what the rule WOULD have done; trade untouched
+                        trade["lock_shadow_exit_price"] = round(price, 4)
+                        trade["lock_shadow_floor"] = round(lock_floor, 4)
+            if not reason and force_close:
                 # Session end: exit at the last valid mark (this branch is only
                 # reached with a valid positive price), never leave it open.
                 reason = force_close_reason
@@ -464,6 +474,28 @@ class PaperTradeJournal:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    @staticmethod
+    def _profit_lock_mode() -> str:
+        mode = str(os.getenv("APLUS_PROFIT_LOCK_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"OFF", "SHADOW", "ENFORCE"} else "SHADOW"
+
+    @staticmethod
+    def _profit_lock_floor(entry: float, high: float) -> float:
+        """Once the option has been up `trigger` (default 10%), never let the trade close below entry+lock
+        (default +2%); beyond that the floor trails `gap` (default 8 points) under the peak gain."""
+        if entry <= 0 or high <= 0:
+            return 0.0
+        try:
+            trigger = float(os.getenv("APLUS_PROFIT_LOCK_TRIGGER", "0.10"))
+            lock = float(os.getenv("APLUS_PROFIT_LOCK_PROFIT", "0.02"))
+            gap = float(os.getenv("APLUS_PROFIT_LOCK_TRAIL_GAP", "0.08"))
+        except ValueError:
+            return 0.0
+        gain = high / entry - 1.0
+        if trigger <= 0 or gain < trigger:
+            return 0.0
+        return entry * (1.0 + max(lock, gain - gap))
 
     def _close_at_last_mark(self, trade: dict[str, Any], when: datetime, reason: str) -> bool:
         """Session end with no fresh quote (e.g. the feed answers 401 after the close): close at the
