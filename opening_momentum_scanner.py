@@ -44,6 +44,7 @@ from safety_gate import SafetyGateEngine
 from scanner_authorization_state import scanner_authorization_is_blocked
 from trading_calendar import is_trading_day
 import market_context
+import order_block
 
 
 logger = get_logger(__name__)
@@ -748,9 +749,20 @@ class OpeningMomentumScanner:
                     candidate.option_error or '',
                 )
                 if plan is not None:
+                    candidate_record = candidate.to_dict()
+                    try:                      # shadow tag only: where price sits relative to a fresh order block
+                        day_candles = [
+                            c for c in (history_by_symbol.get(candidate.symbol) or [])
+                            if c.timestamp.date() == current_time.date()
+                        ]
+                        ob = order_block.order_block_state(day_candles, candidate.direction)
+                        candidate_record["ob_shadow"] = ob["state"]
+                        candidate_record["ob_zone"] = f"{ob['zone_low']}-{ob['zone_high']}" if ob["state"] != "NONE" else ""
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        candidate_record["ob_shadow"] = ""
                     record = self.paper_journal.record_trade(
                         plan=plan,
-                        candidate=candidate.to_dict(),
+                        candidate=candidate_record,
                         when=current_time,
                     )
                     trade_id = str(record.get("paper_trade_id") or "")
