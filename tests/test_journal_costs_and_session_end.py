@@ -132,6 +132,40 @@ class HighLowTimeTests(unittest.TestCase):
             self.assertEqual(len(tape.read_text(encoding="utf-8").splitlines()), 3)    # header + 2 marks
 
 
+class ProfitLockTests(unittest.TestCase):
+    def _run(self, mode: str, prices: list[float]):
+        os.environ["APLUS_PROFIT_LOCK_MODE"] = mode
+        self.addCleanup(os.environ.pop, "APLUS_PROFIT_LOCK_MODE", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(option_stop=1.0, option_target1=50.0)])
+            for i, price in enumerate(prices):
+                journal.update_open_positions(option_quotes={"123": {"last_price": price}},
+                                              when=datetime(2026, 10, 7, 10, 1 + i, tzinfo=IST))
+            return dict(journal.trades[0])
+
+    def test_floor_values(self) -> None:
+        f = PaperTradeJournal._profit_lock_floor
+        self.assertEqual(f(10.0, 10.9), 0.0)                       # below the +10% trigger: no floor
+        self.assertAlmostEqual(f(10.0, 11.0), 10.2)                # +10% -> lock +2%
+        self.assertAlmostEqual(f(10.0, 12.0), 11.2)                # +20% peak -> trails to +12%
+        self.assertAlmostEqual(f(10.0, 15.0), 10.0 * 1.42)         # +50% -> trails 8 points under the peak
+
+    def test_enforce_closes_a_winner_before_it_turns_into_a_loss(self) -> None:
+        t = self._run("ENFORCE", [10.5, 11.2, 10.9, 10.1])
+        self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "PROFIT_LOCK_EXIT", 10.1))
+        self.assertGreater(t["exit_price"], t["entry_price"])
+
+    def test_shadow_records_but_does_not_close(self) -> None:
+        t = self._run("SHADOW", [10.5, 11.2, 10.1])
+        self.assertEqual(t["status"], "OPEN")
+        self.assertEqual(t["lock_shadow_exit_price"], 10.1)
+
+    def test_off_and_below_trigger_do_nothing(self) -> None:
+        self.assertEqual(self._run("OFF", [11.2, 10.1])["status"], "OPEN")
+        t = self._run("ENFORCE", [10.5, 10.9, 9.9])                # never reached +10%
+        self.assertEqual(t["status"], "OPEN")
+
+
 class CarryoverTests(unittest.TestCase):
     def test_open_trade_is_closed_not_dropped_when_date_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

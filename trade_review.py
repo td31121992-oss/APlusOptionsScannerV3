@@ -77,6 +77,8 @@ def review_row(t: dict) -> dict[str, Any]:
         "captured_pct": round((exit_price - entry) / peak_gain * 100) if peak_gain > 0 else 0,
         "capital": round(_f(t.get("capital_deployed"))), "spread_pct": _f(t.get("spread_percent")),
         "gross": round(gross), "costs": round(costs), "net": round(gross - costs),
+        "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
+                        if t.get("lock_shadow_exit_at") else ""),
     }
 
 
@@ -96,14 +98,14 @@ def render(day: str, rows: list[dict]) -> str:
     out = [f"# Trade review {day}", "",
            f"{len(rows)} trades ({sum(1 for r in rows if r['status'] == 'OPEN')} still open, valued at last mark) | "
            f"winners {wins} | gross {gross:+,} | costs {costs:,} | **net {net:+,}**", "",
-           "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net | Profit-lock rule would exit |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         ex = f"{r['exit_price']:.2f} {r['exit_time']} {r['exit_reason']}".strip() if r["status"] == "CLOSED" else f"{r['exit_price']:.2f} OPEN"
         out.append(f"| {r['symbol']} | {str(r['direction'])[:4]} | {r['setup']} | {r['entry_time']} | {r['entry_price']:.2f} | "
                    f"{r['high']:.2f} ({r['high_time'] or '-'}) | {r['low']:.2f} ({r['low_time'] or '-'}) | {ex} | "
                    f"{r['mfe_pct']:+.0f} | {r['mae_pct']:+.0f} | {r['return_pct']:+.0f} | {r['captured_pct']}% | {r['stop_pct']:.0f} | "
-                   f"{r['capital']:,} | {r['gross']:+,} | {r['costs']:,} | {r['net']:+,} |")
+                   f"{r['capital']:,} | {r['gross']:+,} | {r['costs']:,} | {r['net']:+,} | {r['lock_shadow'] or '-'} |")
     for title, key in (("By setup", "setup"), ("By direction", "direction"), ("By entry hour", "hour")):
         data = rows if key != "hour" else [{**r, "hour": (r["entry_time"] or "??")[:2] + ":00"} for r in rows]
         out += ["", f"**{title}**", "", "| Group | Trades | Winners | Net |", "|---|---|---|---|"]
