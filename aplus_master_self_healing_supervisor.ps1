@@ -79,7 +79,8 @@ function Get-ScannerProcesses {
 # 24x7 background services (news/announcements). Independent of market hours and of Dhan.
 $Services = @(
     @{ Name = "Announcement service"; Script = "aplus_announcement_service.py" },
-    @{ Name = "News collector";       Script = "aplus_overnight_intelligence.py" }
+    @{ Name = "News collector";       Script = "aplus_overnight_intelligence.py" },
+    @{ Name = "Order book recorder";  Script = "order_book_recorder.py" }
 )
 $ServiceLastStart = @{}
 $ServiceCooldownSeconds = 300

@@ -202,6 +202,8 @@ class PaperTradeJournal:
             "direction": direction,
             "stage": str(plan.get("stage") or candidate.get("stage") or ""),
             "setup_family": str(plan.get("setup_family") or candidate.get("setup_family") or ""),
+            "ob_shadow": str(candidate.get("ob_shadow") or ""),
+            "ob_zone": str(candidate.get("ob_zone") or ""),
             "selection_tier": str(plan.get("selection_tier") or candidate.get("selection_tier") or ""),
             "status": "OPEN",
             "momentum_score": self._number(plan.get("momentum_score")),
