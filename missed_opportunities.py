@@ -286,6 +286,14 @@ def main() -> int:
         results.append(r)
         ov = r["overall"][0]
         print(f"{d}: {len(r['signals'])} signals, {ov['right_at_close_pct']}% right at close, median {ov['median_close_pct']:+.2f}%  -> {folder}", flush=True)
+    try:                                           # evening trade review (high/low/drawdown per trade); never blocks this report
+        import trade_review
+        for d in days:
+            folder = trade_review.write(d)
+            if folder:
+                print(f"{d}: trade review -> {folder}")
+    except Exception as exc:                       # noqa: BLE001
+        print(f"trade review skipped: {type(exc).__name__}: {exc}")
     summary = update_cumulative(results)
     print(f"cumulative: {summary['signals']} signals over {len(summary['days'])} days")
     return 0
