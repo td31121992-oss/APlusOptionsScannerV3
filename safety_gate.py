@@ -71,7 +71,7 @@ class SafetyGateConfig:
     portfolio_state_max_age_days: int = 0
 
     brokerage_per_executed_order: float = 20.0
-    exchange_transaction_charge_percent: float = 0.003
+    exchange_transaction_charge_percent: float = 0.03503
     sebi_turnover_fee_percent: float = 0.0001
     ipft_other_charge_percent: float = 0.0
     gst_percent: float = 18.0

@@ -47,9 +47,18 @@ Log "Refreshing Dhan token ahead of known mid-session expiry."
 
 $oldEnv = Join-Path $CAlphaRoot ".env"
 $oldStamp = if (Test-Path $oldEnv) { (Get-Item $oldEnv).LastWriteTimeUtc } else { [datetime]::MinValue }
-$out = & $Python $TokenScript 2>&1
-$exit = $LASTEXITCODE
-$out | Set-Content -LiteralPath $LastPath -Encoding UTF8
+# Up to 3 attempts, 40 s apart: a one-off "Invalid TOTP" (e.g. a code generated at a 30-second window
+# boundary, as on 2026-10-06 14:40:01) normally succeeds on the next window. No token is issued on a
+# failed attempt, so retrying is safe.
+$maxAttempts = 3
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $out = & $Python $TokenScript 2>&1
+    $exit = $LASTEXITCODE
+    $out | Set-Content -LiteralPath $LastPath -Encoding UTF8
+    if ($exit -eq 0 -and (($out -join [Environment]::NewLine) -match "DHAN_TOKEN_REFRESH_OK")) { break }
+    Log "WARN token refresh attempt $attempt of $maxAttempts failed (exit=$exit)."
+    if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 40 }
+}
 
 if ($exit -ne 0 -or -not (($out -join [Environment]::NewLine) -match "DHAN_TOKEN_REFRESH_OK")) {
     Log "ERROR token refresh failed exit=$exit. Scanner was NOT restarted."
@@ -74,7 +83,16 @@ Log "Checking scanner before controlled restart."
 $p = ScannerProcesses
 
 if ($p.Count -eq 0) {
-    Log "PASS token refreshed; scanner not running, so no restart was attempted."
+    # The scanner normally runs from an elevated task, whose command line this task cannot see. A fresh
+    # report proves it is alive, so say that instead of claiming it is not running.
+    $report = Join-Path $ProjectRoot "data\reports\intraday_movement_latest.json"
+    $fresh = $false
+    try { $fresh = (Test-Path $report) -and (((Get-Date) - (Get-Item $report).LastWriteTime).TotalSeconds -le 360) } catch { }
+    if ($fresh) {
+        Log "WARN token refreshed; scanner is running (fresh report) but is not visible to this task, so it was NOT restarted and keeps its current token."
+    } else {
+        Log "PASS token refreshed; scanner not running, so no restart was attempted."
+    }
     exit 0
 }
 if ($p.Count -gt 1) {
