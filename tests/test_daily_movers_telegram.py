@@ -32,5 +32,19 @@ class MoversTests(unittest.TestCase):
         self.assertEqual(text.count("(none)"), 2)
 
 
+class CardTests(unittest.TestCase):
+    def test_picture_card_is_written_as_a_portrait_png(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from PIL import Image
+
+        g, l = dm.compute_movers(MoversTests.ROWS)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = dm.render_card(date(2026, 10, 8), g, l, Path(tmp, "card.png"))
+            with Image.open(path) as img:
+                self.assertEqual(img.size, (1080, 1920))
+
+
 if __name__ == "__main__":
     unittest.main()
