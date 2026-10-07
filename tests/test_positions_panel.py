@@ -8,7 +8,7 @@ from positions_panel import POSITIONS_HTML
 
 class PanelTests(unittest.TestCase):
     def test_page_is_mobile_first_and_marked_paper(self) -> None:
-        for needle in ('name="viewport"', ">PAPER<", "/api/snapshot", "Open (", "Qty", "Avg", "LTP", "Target"):
+        for needle in ('name="viewport"', ">PAPER<", "/api/snapshot", "Open (", "Qty", "Avg", "LTP", "Target", "Managed by Mr. Darpan Bobhate"):
             self.assertIn(needle, POSITIONS_HTML)
 
     def test_snapshot_rows_carry_quantity_expiry_and_stop(self) -> None:

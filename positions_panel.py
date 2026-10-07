@@ -28,16 +28,18 @@ header h1{font-size:20px;margin:0;font-weight:800}.badge{background:#2a3350;colo
 .pnl{font-weight:800;font-size:19px;white-space:nowrap}.small{color:var(--muted);font-size:12.5px}.mid{margin:7px 0 4px}
 .detail{display:none;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--muted)}.card.open .detail{display:block}
 .detail div{display:flex;justify-content:space-between;padding:2px 0}.detail b{color:var(--text);font-weight:600}
+.by{font-weight:700;color:#9fb3ff;margin-top:1px}.foot{text-align:center;color:var(--muted);font-size:12px;padding:18px 0 6px}.foot b{color:var(--text)}
 .empty{text-align:center;color:var(--muted);padding:40px 0}
 nav{position:fixed;left:0;right:0;bottom:0;background:#0e1527;border-top:1px solid var(--line);display:flex;justify-content:space-around;padding:8px 0 calc(8px + env(safe-area-inset-bottom))}
 nav a{color:var(--muted);text-decoration:none;font-size:12px;font-weight:700;text-align:center;flex:1}nav a.on{color:var(--blue)}
 </style></head><body><div class="wrap">
-<header><div><h1>Positions</h1><div class="sub" id="asof">loading...</div></div><span class="badge">PAPER</span></header>
+<header><div><h1>Positions</h1><div class="sub" id="asof">loading...</div><div class="sub by">Managed by Mr. Darpan Bobhate</div></div><span class="badge">PAPER</span></header>
 <div class="summary"><div class="sub">Total P&amp;L (today)</div><div class="big" id="total">-</div>
 <div class="grid"><div><span>Open P&amp;L</span><b id="openpnl">-</b></div><div><span>Closed P&amp;L</span><b id="closedpnl">-</b></div>
 <div><span>Capital deployed</span><b id="cap">-</b></div><div><span>Win rate (closed)</span><b id="wr">-</b></div></div></div>
 <div class="tabs"><div class="tab on" data-t="OPEN" id="tOPEN">Open</div><div class="tab" data-t="CLOSED" id="tCLOSED">Closed</div><div class="tab" data-t="ALL" id="tALL">All</div></div>
 <div id="list"></div>
+<div class="foot">APlus Software &middot; Managed by <b>Mr. Darpan Bobhate</b><br>(F&amp;O Trader with 7 years of experience)</div>
 </div>
 <nav><a href="/" >Dashboard</a><a href="/positions" class="on">Positions</a><a href="/control-room">Control room</a><a href="/alerts">Alerts</a></nav>
 <script>
