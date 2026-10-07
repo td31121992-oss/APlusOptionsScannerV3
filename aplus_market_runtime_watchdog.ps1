@@ -9,9 +9,14 @@ $Today = $Now.ToString("yyyy-MM-dd")
 $Hm = [int]$Now.ToString("HHmm")
 
 function Get-PythonProc([string]$pattern) {
-    @(Get-CimInstance Win32_Process | Where-Object {
-        $_.Name -match '^python(.exe)?$' -and $_.CommandLine -match $pattern
+    # A venv python.exe launcher spawns the real interpreter with the SAME command line, so one
+    # process looks like two. Return ROOT processes only (parent not itself a match), otherwise
+    # the duplicate-killer below force-stops the real scanner every run.
+    $all = @(Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -match '^pythonw?(.exe)?$' -and $_.CommandLine -match $pattern
     })
+    $ids = @($all | ForEach-Object { [int]$_.ProcessId })
+    @($all | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
 }
 
 function Ensure-OneProcess(
