@@ -372,12 +372,18 @@ class PaperTradeJournal:
                         raw = None
                 price = self._quote_price(raw)
             except Exception as exc:
+                if force_close and self._close_at_last_mark(trade, when, force_close_reason):
+                    closed_now.append(trade)
+                    continue
                 self._mark_unavailable(
                     trade, when, status="MARKET_DATA_ERROR",
                     error_type=type(exc).__name__, force_close=force_close,
                 )
                 continue
             if price <= 0:
+                if force_close and self._close_at_last_mark(trade, when, force_close_reason):
+                    closed_now.append(trade)
+                    continue
                 self._mark_unavailable(
                     trade, when, status="NO_VALID_MARK",
                     error_type="", force_close=force_close,
@@ -458,6 +464,23 @@ class PaperTradeJournal:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    def _close_at_last_mark(self, trade: dict[str, Any], when: datetime, reason: str) -> bool:
+        """Session end with no fresh quote (e.g. the feed answers 401 after the close): close at the
+        last real mark if it is at most 15 minutes old. Nothing is invented; stale marks stay open."""
+        price = self._number(trade.get("last_option_price"))
+        marked = self._parse_time(trade.get("last_successful_mark_at"))
+        if price <= 0 or marked is None:
+            return False
+        try:
+            age = (when - marked).total_seconds()
+        except TypeError:
+            return False
+        if age < 0 or age > 900:
+            return False
+        trade["mark_status"] = "LAST_MARK_AT_SESSION_END"
+        self._close_trade(trade, when, price, f"{reason}_LAST_MARK")
+        return True
 
     @staticmethod
     def _mark_unavailable(

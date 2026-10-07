@@ -77,6 +77,22 @@ class SessionEndTests(unittest.TestCase):
             self.assertEqual(journal.trades[0]["status"], "OPEN")
             self.assertEqual(journal.trades[0]["pnl_data_status"], "INCOMPLETE_MARK")
 
+    def test_session_end_without_a_quote_uses_a_recent_last_mark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(
+                last_option_price=10.8, last_successful_mark_at="2026-10-07T15:29:12+05:30")])
+            when = datetime(2026, 10, 7, 15, 30, 44, tzinfo=IST)
+            journal.update_open_positions(option_quotes={}, when=when, force_close=True)
+            t = journal.trades[0]
+            self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "SESSION_END_LAST_MARK", 10.8))
+
+    def test_session_end_does_not_close_on_a_stale_mark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(
+                last_option_price=10.8, last_successful_mark_at="2026-10-07T14:00:00+05:30")])
+            journal.update_open_positions(option_quotes={}, when=datetime(2026, 10, 7, 15, 30, 44, tzinfo=IST), force_close=True)
+            self.assertEqual(journal.trades[0]["status"], "OPEN")
+
 
 class HighLowTimeTests(unittest.TestCase):
     def _mark(self, journal, price, hh, mm):
