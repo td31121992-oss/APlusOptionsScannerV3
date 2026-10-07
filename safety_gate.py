@@ -64,7 +64,7 @@ class SafetyGateConfig:
     trade_risk_percent: float = 10.0
     maximum_daily_loss_percent: float = 0.0  # 0 = no daily-loss stop; set APLUS_SAFETY_MAX_DAILY_LOSS_PERCENT to enable
     maximum_open_positions: int = 0  # 0 = unlimited; set APLUS_SAFETY_MAX_OPEN_POSITIONS to cap
-    maximum_total_premium_percent: float = 20.0
+    maximum_total_premium_percent: float = 0.0  # 0 = no cap on total deployed premium; set APLUS_SAFETY_MAX_TOTAL_PREMIUM_PERCENT to enable
     maximum_trades_per_day: int = 0  # 0 = unlimited; quality/risk gates decide
     maximum_consecutive_losses: int = 0  # 0 = no cooling-off; set APLUS_SAFETY_MAX_CONSECUTIVE_LOSSES to enable
     available_balance_buffer_percent: float = 5.0
@@ -167,7 +167,7 @@ class SafetyGateConfig:
             maximum_total_premium_percent=_env_float(
                 "APLUS_SAFETY_MAX_TOTAL_PREMIUM_PERCENT",
                 defaults.maximum_total_premium_percent,
-                minimum=0.01,
+                minimum=0.0,
             ),
             maximum_trades_per_day=_env_int(
                 "APLUS_SAFETY_MAX_TRADES_PER_DAY",
@@ -906,7 +906,10 @@ class SafetyGateEngine:
             and open_positions >= self.config.maximum_open_positions
         ):
             reasons.append("Maximum open-position count has been reached")
-        if open_premium + proposed_premium > maximum_total_premium:
+        if (
+            self.config.maximum_total_premium_percent > 0
+            and open_premium + proposed_premium > maximum_total_premium
+        ):
             reasons.append("Total deployed option premium would exceed limit")
         if self.config.maximum_trades_per_day > 0 and trades_today >= self.config.maximum_trades_per_day:
             reasons.append("Maximum trades per day has been reached")

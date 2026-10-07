@@ -84,5 +84,23 @@ class LossLimitTests(unittest.TestCase):
         self.assertIn("CONSECUTIVE_LOSS_LIMIT", text)
 
 
+class PremiumCapTests(unittest.TestCase):
+    HEAVY = {"open_premium": 400000.0, "realized_pnl_today": 0.0, "consecutive_losses": 0}
+
+    def test_default_has_no_premium_cap(self) -> None:
+        self.assertEqual(sg.SafetyGateConfig().maximum_total_premium_percent, 0.0)
+        cfg = sg.SafetyGateConfig.from_env()            # the 0.0 default must load (env minimum lowered to 0)
+        self.assertEqual(cfg.maximum_total_premium_percent, 0.0)
+
+    def test_large_deployed_premium_not_blocked_by_default(self) -> None:
+        check = _gate_check(self.HEAVY, sg.SafetyGateConfig())
+        self.assertNotIn("premium", check.message.lower())
+
+    def test_explicit_cap_still_blocks(self) -> None:
+        check = _gate_check(self.HEAVY, sg.SafetyGateConfig(maximum_total_premium_percent=20.0))
+        self.assertEqual(getattr(check.status, "value", check.status), "BLOCK")
+        self.assertIn("premium", check.message.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
