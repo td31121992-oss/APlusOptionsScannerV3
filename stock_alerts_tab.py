@@ -18,7 +18,14 @@ def _load_rows() -> list[dict[str, Any]]:
     try:
         obj = json.loads(path.read_text(encoding="utf-8"))
         rows = obj.get("rows") if isinstance(obj, dict) else []
-        return [x for x in rows if isinstance(x, dict)]
+        rows = [x for x in rows if isinstance(x, dict)]
+        try:                      # add the daily-indicator fields (breakouts, averages, supertrend); alerts stay safe without them
+            from daily_indicators import enrich_rows, load_indicators
+
+            rows = enrich_rows(rows, load_indicators())
+        except Exception:         # noqa: BLE001
+            pass
+        return rows
     except Exception:
         return []
 
