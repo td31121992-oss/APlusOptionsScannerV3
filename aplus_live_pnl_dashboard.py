@@ -14,6 +14,8 @@ from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
 import dashboard_access
 import trading_mode
 from positions_panel import POSITIONS_HTML
+import decision_desk
+import trade_chart
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -67,6 +69,10 @@ def _mobileize_html(html, host=None):
         link = ('<a href="/control-room" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                 'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTROL ROOM</a>\n')
         out = out.replace('<a href="/fno-market-watch"', link + '<a href="/fno-market-watch"', 1)
+    if 'href="/decision-desk"' not in out:
+        dd_link = ('<a href="/decision-desk" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">DECISION DESK</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', dd_link + '<a href="/fno-market-watch"', 1)
     if 'href="/positions"' not in out:
         pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                     'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
@@ -450,7 +456,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
@@ -524,6 +530,24 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(control_room_payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             except Exception as exc:  # noqa: BLE001
                 body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/static/lightweight-charts.js":
+            try:
+                body = (ROOT / "static" / "lightweight-charts.js").read_bytes()
+            except OSError:
+                body = b"/* chart library missing */"
+            self.send_response(200); self.send_header("Content-Type","application/javascript; charset=utf-8"); self.send_header("Cache-Control","public, max-age=86400"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/trade":
+            body = trade_chart.TRADE_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/trade-chart":
+            body = json.dumps(trade_chart.payload(str(parse_query(self.path).get("id") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/decision-desk":
+            body = decision_desk.DECISION_DESK_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/decision-desk":
+            body = json.dumps(decision_desk.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/positions":
             body = POSITIONS_HTML.encode("utf-8")
