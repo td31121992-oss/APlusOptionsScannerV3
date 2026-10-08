@@ -20,7 +20,7 @@ ALKEM|Alkem Laboratories|Pharmaceuticals|Singh family (Samprada Singh)|1973
 AMBER|Amber Enterprises|Room ACs and electronics manufacturing|Jasbir Singh and family|1990
 AMBUJACEM|Ambuja Cements|Cement|Adani Group (acquired 2022)|1983
 ANANDRATHI|Anand Rathi Wealth|Wealth management|Anand Rathi family|~1995
-ANGELONE|Angel One|Stockbroking and fintech|Dinesh Thakkar and family|1987
+ANGELONE|Angel One|Stockbroking and fintech|Dinesh Thakkar and family|1987 (company 1996)
 APLAPOLLO|APL Apollo Tubes|Structural steel tubes|Sanjay Gupta (Apollo group)|1986
 APOLLOHOSP|Apollo Hospitals|Hospitals and healthcare|Reddy family (Dr Prathap C. Reddy)|1983
 ASHOKLEY|Ashok Leyland|Commercial vehicles|Hinduja Group|1948
@@ -45,7 +45,7 @@ BHEL|Bharat Heavy Electricals|Power and industrial equipment|Government of India
 BIOCON|Biocon|Biopharmaceuticals|Kiran Mazumdar-Shaw|1978
 BLUESTARCO|Blue Star|Air conditioning and refrigeration|Advani family|1943
 BOSCHLTD|Bosch Ltd|Auto parts and technology|Robert Bosch GmbH, Germany|1951
-BPCL|Bharat Petroleum|Oil refining and fuel marketing|Government of India|1952
+BPCL|Bharat Petroleum|Oil refining and fuel marketing|Government of India|1976 (roots earlier)
 BRITANNIA|Britannia Industries|Biscuits and bakery foods|Wadia group (Nusli Wadia)|1892
 BSE|BSE Ltd|Stock exchange|Widely held, no promoter|1875
 CAMS|Computer Age Management Services|Mutual-fund registrar and transfer agent|Professionally managed|1988
@@ -56,7 +56,7 @@ CHOLAFIN|Cholamandalam Investment and Finance|NBFC (vehicle finance)|Murugappa G
 CIPLA|Cipla|Pharmaceuticals|Hamied family|1935
 COALINDIA|Coal India|Coal mining|Government of India|1975
 COCHINSHIP|Cochin Shipyard|Shipbuilding and ship repair|Government of India|1972
-COFORGE|Coforge|IT services|Professionally managed (formerly NIIT Technologies)|1990
+COFORGE|Coforge|IT services|Professionally managed (formerly NIIT Technologies)|1992 (as NIIT Technologies)
 COLPAL|Colgate-Palmolive India|Oral care|Colgate-Palmolive, USA|1937
 CONCOR|Container Corporation of India|Rail container logistics|Government of India|1988
 CROMPTON|Crompton Greaves Consumer Electricals|Fans, lighting and appliances|Professionally managed, no promoter|2015 (brand 1937)
@@ -83,7 +83,7 @@ GODREJPROP|Godrej Properties|Real estate developer|Godrej family|1985
 GVT&D|GE Vernova T&D India|Power transmission equipment|GE Vernova, USA|1957
 HAL|Hindustan Aeronautics|Aircraft and helicopters|Government of India|1940
 HAVELLS|Havells India|Electricals and consumer durables|Gupta family (Qimat Rai Gupta)|1958
-HCLTECH|HCL Technologies|IT services|Shiv Nadar|1976
+HCLTECH|HCL Technologies|IT services|Shiv Nadar|1991 (group 1976)
 HDFCAMC|HDFC Asset Management|Mutual funds|HDFC Bank (after merger) and abrdn|1999
 HDFCBANK|HDFC Bank|Private bank|Widely held, no promoter after the HDFC merger|1994
 HDFCLIFE|HDFC Life Insurance|Life insurance|HDFC Bank group|2000
@@ -100,7 +100,7 @@ ICICIPRULI|ICICI Prudential Life Insurance|Life insurance|ICICI Bank and Prudent
 IDEA|Vodafone Idea|Telecom|Vodafone Group, Aditya Birla Group; Government of India holds a stake|1995 (merger 2018)
 IDFCFIRSTB|IDFC First Bank|Private bank|Widely held, no promoter|2015 (bank)
 IEX|Indian Energy Exchange|Electricity trading exchange|Widely held|2008
-INDHOTEL|Indian Hotels Company (Taj)|Hotels|Tata Group|1899
+INDHOTEL|Indian Hotels Company (Taj)|Hotels|Tata Group|1902
 INDIANB|Indian Bank|Public-sector bank|Government of India|1907
 INDIGO|InterGlobe Aviation (IndiGo)|Airline|Rahul Bhatia and Gangwal family|2006
 INDUSINDBK|IndusInd Bank|Private bank|Hinduja group (promoters)|1994
@@ -154,7 +154,7 @@ NMDC|NMDC|Iron ore mining|Government of India|1958
 NTPC|NTPC|Power generation|Government of India|1975
 NYKAA|FSN E-Commerce Ventures (Nykaa)|Beauty and fashion e-commerce|Falguni Nayar and family|2012
 OBEROIRLTY|Oberoi Realty|Real estate developer|Vikas Oberoi|1998
-OFSS|Oracle Financial Services Software|Banking software|Oracle Corporation, USA|1992
+OFSS|Oracle Financial Services Software|Banking software|Oracle Corporation, USA|1990
 OIL|Oil India|Oil and gas exploration|Government of India|1959
 ONGC|Oil and Natural Gas Corporation|Oil and gas exploration|Government of India|1956
 PAGEIND|Page Industries (Jockey India)|Innerwear and apparel|Genomal family|1994
@@ -170,7 +170,7 @@ PIIND|PI Industries|Agrochemicals|Mehra family (Salil Singhal)|1946
 PNB|Punjab National Bank|Public-sector bank|Government of India|1894
 PNBHOUSING|PNB Housing Finance|Housing finance|Punjab National Bank and Carlyle|1988
 POLICYBZR|PB Fintech (PolicyBazaar)|Online insurance marketplace|Yashish Dahiya and Alok Bansal (founders)|2008
-POLYCAB|Polycab India|Cables and wires|Jaisinghani family|1996
+POLYCAB|Polycab India|Cables and wires|Jaisinghani family|1964 (company 1996)
 POWERGRID|Power Grid Corporation|Power transmission|Government of India|1989
 POWERINDIA|Hitachi Energy India|Power technologies|Hitachi Energy, Japan|1949
 PREMIERENE|Premier Energies|Solar cells and modules|Chiranjeevi Saluja and family|1995
@@ -204,14 +204,14 @@ TECHM|Tech Mahindra|IT services|Mahindra Group|1986
 TIINDIA|Tube Investments of India|Engineering, bicycles and EVs|Murugappa Group|1949
 TITAN|Titan Company|Watches and jewellery|Tata Group and Tamil Nadu government (TIDCO)|1984
 TMPV|Tata Motors Passenger Vehicles|Cars (Tata, Jaguar Land Rover)|Tata Group|1945 (listed as a separate entity after the 2025 demerger)
-TORNTPHARM|Torrent Pharmaceuticals|Pharmaceuticals|Mehta family (Torrent Group)|1972
+TORNTPHARM|Torrent Pharmaceuticals|Pharmaceuticals|Mehta family (Torrent Group)|1959
 TRENT|Trent (Westside, Zudio)|Retail|Tata Group|1952
 TVSMOTOR|TVS Motor Company|Two-wheelers|Venu Srinivasan and TVS family|1978
 UJJIVANSFB|Ujjivan Small Finance Bank|Small finance bank|Widely held (earlier promoter Ujjivan Financial Services)|2017 (microfinance 2005)
 ULTRACEMCO|UltraTech Cement|Cement|Aditya Birla Group|1983
 UNIONBANK|Union Bank of India|Public-sector bank|Government of India|1919
 UNITDSPR|United Spirits|Alcohol (McDowell's, Royal Challenge)|Diageo, UK|-
-UNOMINDA|Uno Minda|Auto components|Minda family (Ashok Minda)|1958
+UNOMINDA|Uno Minda|Auto components|Minda family (Ashok Minda)|1992 (group 1958)
 UPL|UPL|Agrochemicals|Shroff family (Jai and Vikram Shroff)|1969
 VBL|Varun Beverages|PepsiCo bottler and distributor|Jaipuria family (RJ Corp)|1995
 VEDL|Vedanta|Mining and metals|Anil Agarwal (through Volcan Investments)|1976
