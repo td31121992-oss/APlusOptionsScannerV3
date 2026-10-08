@@ -631,6 +631,15 @@ class OpeningMomentumScanner:
             if not hasattr(self, "_v2_shadow_seen") or getattr(self, "_v2_shadow_day", None) != current_time.date():
                 self._v2_shadow_seen, self._v2_shadow_day = set(), current_time.date()
             v2_shadow.log_new(extra_top10, shadow_ranking, current_time, self._v2_shadow_seen)
+            # second scenario: no ranking rule at all (every stock may qualify on its own strength)
+            norank_ranking = rank_raw_movers(universe=universe, quote_map=quote_map, top_n=max(len(universe), 300))
+            norank_pass, _ = evaluate_entry_ready(
+                candidates=pre_v2_candidates, mover_ranking=norank_ranking, now=current_time, config=v2_config,
+            )
+            extra_norank = [x for x in norank_pass if (x.symbol, x.direction) not in live_keys]
+            if not hasattr(self, "_v2_norank_seen") or getattr(self, "_v2_norank_day", None) != current_time.date():
+                self._v2_norank_seen, self._v2_norank_day = set(), current_time.date()
+            v2_shadow.log_new(extra_norank, norank_ranking, current_time, self._v2_norank_seen, scenario="norank")
         except Exception:      # noqa: BLE001 - shadow logging must never affect trading
             pass
         for blocked in v2_blocked:
