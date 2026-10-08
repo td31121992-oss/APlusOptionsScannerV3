@@ -106,6 +106,12 @@ def enrich_rows(rows: Sequence[Mapping[str, Any]], indicators: Mapping[str, Mapp
             ma = float(ind.get(ma_key) or 0)
             r[key] = bool(ltp > 0 and prev > 0 and ma > 0 and ((prev < ma < ltp) or (prev > ma > ltp)))
         pdh, pdl = float(ind.get("pdh") or 0), float(ind.get("pdl") or 0)
+        try:
+            day_open = float(r.get("open_0915") or r.get("day_open") or 0)
+        except (TypeError, ValueError):
+            day_open = 0.0
+        r["open_above_pdh"] = bool(day_open > 0 and pdh > 0 and day_open > pdh)          # gapped up: the 09:15 open was above the previous day's high
+        r["open_below_pdl"] = bool(day_open > 0 and pdl > 0 and day_open < pdl)          # gapped down: the 09:15 open was below the previous day's low
         r["pdh_breakout"] = bool(ltp > 0 and pdh > 0 and ltp > pdh)
         r["pdl_breakdown"] = bool(ltp > 0 and pdl > 0 and ltp < pdl)
         flip = ""
