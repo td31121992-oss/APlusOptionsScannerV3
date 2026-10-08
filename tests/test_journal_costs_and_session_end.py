@@ -93,6 +93,22 @@ class SessionEndTests(unittest.TestCase):
             journal.update_open_positions(option_quotes={}, when=datetime(2026, 10, 7, 15, 30, 44, tzinfo=IST), force_close=True)
             self.assertEqual(journal.trades[0]["status"], "OPEN")
 
+    def test_failed_price_request_at_session_end_still_closes_at_the_last_mark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(
+                last_option_price=10.8, last_successful_mark_at="2026-10-07T15:29:06+05:30")])
+            when = datetime(2026, 10, 7, 15, 30, 6, tzinfo=IST)
+            journal.mark_open_positions_unavailable(when, error_type="DhanMarketDataAuthorizationError", force_close=True)   # the 401 path
+            t = journal.trades[0]
+            self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "SESSION_END_LAST_MARK", 10.8))
+
+    def test_failed_price_request_during_the_day_never_closes_anything(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(
+                last_option_price=10.8, last_successful_mark_at="2026-10-07T11:00:00+05:30")])
+            journal.mark_open_positions_unavailable(datetime(2026, 10, 7, 11, 1, tzinfo=IST), error_type="Timeout", force_close=False)
+            self.assertEqual(journal.trades[0]["status"], "OPEN")
+
 
 class HighLowTimeTests(unittest.TestCase):
     def _mark(self, journal, price, hh, mm):
