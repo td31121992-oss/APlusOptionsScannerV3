@@ -34,16 +34,17 @@ nav{position:fixed;left:0;right:0;bottom:0;background:#0e1527;border-top:1px sol
 nav a{color:var(--muted);text-decoration:none;font-size:12px;font-weight:700;text-align:center;flex:1}nav a.on{color:var(--blue)}
 </style></head><body><div class="wrap">
 <header><div><h1>Positions</h1><div class="sub" id="asof">loading...</div><div class="sub by">Managed by Mr. Darpan Bobhate</div></div><span class="badge">PAPER</span></header>
-<div class="summary"><div class="sub">Total P&amp;L (today)</div><div class="big" id="total">-</div>
+<div class="summary"><div class="row"><div class="sub">Total P&amp;L (today) &middot; <span id="npos">-</span> positions</div><div class="badge" id="share" style="cursor:pointer">Share</div></div><div class="big" id="total">-</div>
 <div class="grid"><div><span>Open P&amp;L</span><b id="openpnl">-</b></div><div><span>Closed P&amp;L</span><b id="closedpnl">-</b></div>
 <div><span>Capital deployed</span><b id="cap">-</b></div><div><span>Win rate (closed)</span><b id="wr">-</b></div></div></div>
 <div class="tabs"><div class="tab on" data-t="OPEN" id="tOPEN">Open</div><div class="tab" data-t="CLOSED" id="tCLOSED">Closed</div><div class="tab" data-t="ALL" id="tALL">All</div></div>
+<div class="tabs" id="flt"><div class="tab on" data-p="ALL" id="pALL">All</div><div class="tab" data-p="PROFIT" id="pPROFIT">In profit</div><div class="tab" data-p="LOSS" id="pLOSS">In loss</div></div>
 <div id="list"></div>
 <div class="foot">APlus Software &middot; Managed by <b>Mr. Darpan Bobhate</b><br>(F&amp;O Trader with 7 years of experience)</div>
 </div>
 <nav><a href="/" >Dashboard</a><a href="/positions" class="on">Positions</a><a href="/control-room">Control room</a><a href="/alerts">Alerts</a></nav>
 <script>
-var tab="OPEN",data=null,openIds={};
+var tab="OPEN",pf="ALL",data=null,openIds={};
 function inr(n,d){n=Number(n)||0;return(n<0?"-":"")+"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:d==null?2:d,maximumFractionDigits:d==null?2:d})}
 function cls(n){return Number(n)>=0?"pos":"neg"}
 function sgn(n){n=Number(n)||0;return(n>0?"+":"")+n.toFixed(2)}
@@ -54,11 +55,15 @@ function render(){
  var t=document.getElementById("total");t.textContent=inr(data.total_pnl);t.className="big "+cls(data.total_pnl);
  var o=document.getElementById("openpnl");o.textContent=inr(data.open_pnl);o.className=cls(data.open_pnl);
  var c=document.getElementById("closedpnl");c.textContent=inr(data.closed_pnl);c.className=cls(data.closed_pnl);
- document.getElementById("cap").textContent=inr(data.capital,0);document.getElementById("wr").textContent=(data.win_rate||0)+"%";
+ document.getElementById("npos").textContent=data.trade_count||0;document.getElementById("cap").textContent=inr(data.capital,0);document.getElementById("wr").textContent=(data.win_rate||0)+"%";
  document.getElementById("asof").textContent=(data.trading_day||"")+", "+(data.trading_date||"")+" - updated "+(data.updated_at||"");
  document.getElementById("tOPEN").textContent="Open ("+open.length+")";document.getElementById("tCLOSED").textContent="Closed ("+closed.length+")";
  ["OPEN","CLOSED","ALL"].forEach(function(k){document.getElementById("t"+k).className="tab"+(tab===k?" on":"")});
  var show=tab==="OPEN"?open:tab==="CLOSED"?closed:rows;
+ var nP=show.filter(function(x){return Number(x.pnl)>0}).length,nL=show.filter(function(x){return Number(x.pnl)<0}).length;
+ document.getElementById("pALL").textContent="All ("+show.length+")";document.getElementById("pPROFIT").textContent="In profit ("+nP+")";document.getElementById("pLOSS").textContent="In loss ("+nL+")";
+ ["ALL","PROFIT","LOSS"].forEach(function(k){document.getElementById("p"+k).className="tab"+(pf===k?" on":"")});
+ if(pf==="PROFIT")show=show.filter(function(x){return Number(x.pnl)>0});if(pf==="LOSS")show=show.filter(function(x){return Number(x.pnl)<0});
  if(!show.length){document.getElementById("list").innerHTML='<div class="empty">No '+(tab==="ALL"?"":tab.toLowerCase()+" ")+'positions</div>';return}
  document.getElementById("list").innerHTML=show.map(function(x){
   var bull=/BULL/i.test(x.side||""),opt=(String(x.side||"").split(" ").pop()||""),pnl=Number(x.pnl)||0,isOpen=x.status==="OPEN";
@@ -77,6 +82,8 @@ function render(){
 }
 document.getElementById("list").addEventListener("click",function(e){var c=e.target.closest(".card");if(!c)return;var id=c.getAttribute("data-id");openIds[id]=!openIds[id];c.classList.toggle("open")});
 document.querySelector(".tabs").addEventListener("click",function(e){var t=e.target.getAttribute("data-t");if(t){tab=t;render()}});
+document.getElementById("flt").addEventListener("click",function(e){var p=e.target.getAttribute("data-p");if(p){pf=p;render()}});
+document.getElementById("share").addEventListener("click",function(){var d=data||{},txt="APlus paper P&L "+inr(d.total_pnl)+" on "+(d.trade_count||0)+" positions ("+(d.trading_date||"")+") - managed by Mr. Darpan Bobhate";if(navigator.share){navigator.share({title:"APlus positions",text:txt}).catch(function(){})}else if(navigator.clipboard){navigator.clipboard.writeText(txt);document.getElementById("share").textContent="Copied"}});
 function load(){fetch("/api/snapshot",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d;render()}).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
 load();setInterval(load,5000);
 </script></body></html>
