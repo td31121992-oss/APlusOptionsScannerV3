@@ -14,6 +14,7 @@ from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
 import dashboard_access
 import trading_mode
 from positions_panel import POSITIONS_HTML
+import decision_desk
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -67,6 +68,10 @@ def _mobileize_html(html, host=None):
         link = ('<a href="/control-room" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                 'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTROL ROOM</a>\n')
         out = out.replace('<a href="/fno-market-watch"', link + '<a href="/fno-market-watch"', 1)
+    if 'href="/decision-desk"' not in out:
+        dd_link = ('<a href="/decision-desk" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">DECISION DESK</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', dd_link + '<a href="/fno-market-watch"', 1)
     if 'href="/positions"' not in out:
         pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                     'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
@@ -524,6 +529,12 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(control_room_payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             except Exception as exc:  # noqa: BLE001
                 body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/decision-desk":
+            body = decision_desk.DECISION_DESK_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/decision-desk":
+            body = json.dumps(decision_desk.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/positions":
             body = POSITIONS_HTML.encode("utf-8")
