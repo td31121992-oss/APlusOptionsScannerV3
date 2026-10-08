@@ -26,6 +26,7 @@ class ShadowTests(unittest.TestCase):
             self.assertEqual(v2_shadow.log_new([c1, c2], RANK, when, seen, Path(tmp)), 0)       # same day: not repeated
             rows = list(csv.DictReader(Path(tmp, "2026-10-08.csv").open(encoding="utf-8")))
             self.assertEqual([(r["symbol"], r["top10_rank"]) for r in rows], [("AAA", "7"), ("BBB", "9")])
+            self.assertEqual({r["scenario"] for r in rows}, {"top10"})
 
     def test_report_compares_extra_passes_with_the_rest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -42,6 +43,7 @@ class ShadowTests(unittest.TestCase):
             self.assertIn("**Extra top-10 passes:** n=1", text)
             self.assertIn("**Other V2-blocked:** n=1", text)
             self.assertIn("**Live trades:** n=1", text)
+            self.assertIn("NO rank rule at all", text)
             self.assertIsNone(v2_shadow.report(Path(tmp, "empty")))
 
 

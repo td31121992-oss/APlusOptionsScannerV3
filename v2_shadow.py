@@ -16,11 +16,11 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "data" / "shadow_v2"
-FIELDS = ["time", "symbol", "direction", "ltp", "top10_rank", "stage", "setup_family", "from_open_pct"]
+FIELDS = ["scenario", "time", "symbol", "direction", "ltp", "top10_rank", "stage", "setup_family", "from_open_pct"]
 
 
 def log_new(extra: Iterable[Any], shadow_rank: dict[str, Any], when: datetime, seen: set[tuple[str, str]],
-            out_dir: Path = OUT) -> int:
+            out_dir: Path = OUT, scenario: str = "top10") -> int:
     """Append candidates that pass top-10 but not top-5, once per symbol/direction per day. Returns rows written."""
     ranks: dict[tuple[str, str], tuple[int, float]] = {}
     for side, key in (("BULLISH", "top_up"), ("BEARISH", "top_down")):
@@ -33,7 +33,7 @@ def log_new(extra: Iterable[Any], shadow_rank: dict[str, Any], when: datetime, s
             continue
         seen.add(key)
         rank, from_open = ranks.get(key, (0, 0.0))
-        rows.append({"time": when.strftime("%H:%M:%S"), "symbol": key[0], "direction": key[1],
+        rows.append({"scenario": scenario, "time": when.strftime("%H:%M:%S"), "symbol": key[0], "direction": key[1],
                      "ltp": getattr(c, "ltp", ""), "top10_rank": rank, "stage": getattr(c, "stage", ""),
                      "setup_family": getattr(c, "setup_family", ""), "from_open_pct": from_open})
     if rows:
@@ -58,7 +58,7 @@ def _stats(values: list[float], best: list[float]) -> str:
 
 def report(root: Path = ROOT) -> Path | None:
     """Writes data/shadow_v2/summary.md comparing outcomes (ATM option, hindsight, entry at first-ready candle +1%)."""
-    groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "other_v2_blocked": ([], []), "traded": ([], [])}
+    groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], [])}
     per_day = []
     for csv_path in sorted((root / "data" / "shadow_v2").glob("20*.csv")):
         day = csv_path.stem
@@ -67,7 +67,9 @@ def report(root: Path = ROOT) -> Path | None:
             continue
         try:
             opts = {(r["symbol"], r["dir"]): r for r in json.loads(returns.read_text(encoding="utf-8")) if r["kind"] == "ATM"}
-            extra = {(r["symbol"], r["direction"]) for r in csv.DictReader(csv_path.open(encoding="utf-8"))}
+            logged = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+            extra = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario", "top10") == "top10"}
+            norank = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "norank"} - extra
         except (OSError, ValueError, KeyError):
             continue
         day_extra = ([], [])
@@ -75,6 +77,8 @@ def report(root: Path = ROOT) -> Path | None:
             fate = str(r.get("fate", ""))
             if key in extra:
                 group = "extra"
+            elif key in norank:
+                group = "norank_only"
             elif fate.startswith("V2_BLOCKED"):
                 group = "other_v2_blocked"
             elif fate == "TRADED":
@@ -93,6 +97,7 @@ def report(root: Path = ROOT) -> Path | None:
              "Compares the signals that would pass if the V2 limit were top-10 (but not top-5) with the live trades and the other V2-blocked signals.",
              "Outcome = at-the-money option bought at the first-ready candle +1% and held to the close; hindsight, before real fills.", "",
              f"- **Extra top-10 passes:** {_stats(*groups['extra'])}",
+             f"- **Extra with NO rank rule at all (beyond top-10):** {_stats(*groups['norank_only'])}",
              f"- **Other V2-blocked:** {_stats(*groups['other_v2_blocked'])}",
              f"- **Live trades:** {_stats(*groups['traded'])}", "", "| Day | Extra top-10 passes |", "|---|---|"]
     lines += [f"| {day} | {_stats(*vals)} |" for day, vals in per_day]
