@@ -81,6 +81,7 @@ def compute_indicators(high: Sequence[float], low: Sequence[float], close: Seque
     for n in (50, 100, 200):
         out[f"dma{n}"] = sma(c, n)
     out["ema20"] = ema(c, 20)
+    out["pdh"], out["pdl"] = (float(h[-1]), float(l[-1])) if len(h) else (0.0, 0.0)
     st = supertrend_state(h, l, c)
     out["st_dir"], out["st_upper"], out["st_lower"] = st["direction"], st["upper"], st["lower"]
     return out
@@ -104,6 +105,9 @@ def enrich_rows(rows: Sequence[Mapping[str, Any]], indicators: Mapping[str, Mapp
         for key, ma_key in (("dma200_breakout", "dma200"), ("dma100_breakout", "dma100"), ("dma50_breakout", "dma50"), ("ema20_breakout", "ema20")):
             ma = float(ind.get(ma_key) or 0)
             r[key] = bool(ltp > 0 and prev > 0 and ma > 0 and ((prev < ma < ltp) or (prev > ma > ltp)))
+        pdh, pdl = float(ind.get("pdh") or 0), float(ind.get("pdl") or 0)
+        r["pdh_breakout"] = bool(ltp > 0 and pdh > 0 and ltp > pdh)
+        r["pdl_breakdown"] = bool(ltp > 0 and pdl > 0 and ltp < pdl)
         flip = ""
         if ltp > 0 and ind.get("st_dir"):
             if ind["st_dir"] == -1 and ltp > float(ind.get("st_upper") or 1e18):

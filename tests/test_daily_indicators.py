@@ -56,5 +56,18 @@ class IndicatorTests(unittest.TestCase):
         self.assertIn("range_5d_bo", fired)
 
 
+class PreviousDayTests(unittest.TestCase):
+    def test_previous_day_high_low_breakouts(self) -> None:
+        h, l, c = series()
+        ind = {"AAA": di.compute_indicators(h, l, c)}
+        self.assertEqual((ind["AAA"]["pdh"], ind["AAA"]["pdl"]), (h[-1], l[-1]))
+        up = di.enrich_rows([{"symbol": "AAA", "ltp": h[-1] + 1}], ind)[0]
+        dn = di.enrich_rows([{"symbol": "AAA", "ltp": l[-1] - 1}], ind)[0]
+        self.assertTrue(up["pdh_breakout"] and not up["pdl_breakdown"])
+        self.assertTrue(dn["pdl_breakdown"] and not dn["pdh_breakout"])
+        fired = {a["rule_id"] for a in evaluate_rows([up, dn])}
+        self.assertTrue({"pdh_bo", "pdl_bd"} <= fired)
+
+
 if __name__ == "__main__":
     unittest.main()

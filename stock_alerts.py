@@ -38,6 +38,8 @@ RULES: tuple[AlertRule, ...] = (
     AlertRule("ema_20_bo", "Moving Average Breakout", "20 EMA BO/BD", ("ema20_breakout", "ema_20_breakout", "above_20_ema", "below_20_ema")),
     AlertRule("supertrend", "Supertrend", "Supertrend close above/close below 1D", ("supertrend_direction", "supertrend_1d", "supertrend_signal")),
     AlertRule("volume_breakout_5m", "Volume Breakout", "Volume Breakout 5min", ("volume_breakout_5m", "volume_breakout", "volume_spike_5m")),
+    AlertRule("pdh_bo", "Previous Day Levels", "Previous Day High Breakout", ("pdh_breakout",), "UP"),
+    AlertRule("pdl_bd", "Previous Day Levels", "Previous Day Low Breakdown", ("pdl_breakdown",), "DOWN"),
     AlertRule("day_high", "APlus Price", "Day High Breakout", ("day_high_breakout", "new_day_high"), "UP"),
     AlertRule("day_low", "APlus Price", "Day Low Breakdown", ("day_low_breakdown", "new_day_low"), "DOWN"),
     AlertRule("strong_up", "APlus Momentum", "Strong Up ≥ 1%", ("strong_up", "from_open_strong_up"), "UP"),
