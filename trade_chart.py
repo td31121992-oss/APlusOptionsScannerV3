@@ -100,6 +100,14 @@ def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
             option = _candles(int(float(t["option_security_id"])), "NSE_FNO", "OPTSTK", day)
     except Exception as exc:                                # noqa: BLE001
         error = type(exc).__name__
+    stock_marks: list[dict[str, Any]] = []
+    try:
+        import stock_chart
+
+        ind = json.loads((root / "data" / "reports" / "daily_indicators.json").read_text(encoding="utf-8")).get("symbols", {}).get(symbol)
+        stock_marks = stock_chart.marks(stock, ind)
+    except Exception:                                       # noqa: BLE001
+        pass
     entry_t = str(t.get("entry_time") or "")
     try:
         entry_epoch = int(datetime.fromisoformat(entry_t).timestamp()) + 19800
@@ -118,7 +126,7 @@ def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
            "option_label": f"{symbol} {int(_f(t.get('strike'))) if _f(t.get('strike')).is_integer() else _f(t.get('strike'))} {t.get('option_type', '')}",
            "expiry": str(t.get("expiry") or ""), "qty": qty, "entry_epoch": entry_epoch, "exit_epoch": exit_epoch,
            "last": last, "pnl": round((last - entry) * qty, 2) if entry > 0 and last > 0 else 0.0,
-           "exit_reason": t.get("exit_reason") or "", "levels": levels(t), "stock": stock, "option": option,
+           "exit_reason": t.get("exit_reason") or "", "levels": levels(t), "stock": stock, "option": option, "stock_marks": stock_marks,
            "setup": t.get("setup_family") or ""}
     _CACHE[trade_id] = (time.time(), out)
     return out
@@ -149,14 +157,19 @@ TRADE_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><tit
 var id=new URLSearchParams(location.search).get("id")||"",charts={};
 function mk(el){var c=LightweightCharts.createChart(document.getElementById(el),{layout:{background:{color:"#121a2d"},textColor:"#8ea0bd"},grid:{vertLines:{color:"#1d2842"},horzLines:{color:"#1d2842"}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:"#27334d"},rightPriceScale:{borderColor:"#27334d"},autoSize:true});
  var s=c.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"});return{chart:c,series:s,lines:[]}}
-function fill(k,el,candles,lv,entry){if(!charts[k])charts[k]=mk(el);var o=charts[k];
+function fill(k,el,candles,lv,entry,xm){if(!charts[k])charts[k]=mk(el);var o=charts[k];
  o.series.setData((candles||[]).map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));
- o.lines.forEach(function(l){o.series.removePriceLine(l)});o.lines=[];
- (lv||[]).forEach(function(l){var col=l.name==="SL"?"#ff6363":l.name==="Entry"?"#f5b942":"#2ecc71";
+ o.lines.forEach(function(l){o.series.removePriceLine(l)});o.lines=[];var ps=[],mkr=[];
+ (lv||[]).forEach(function(l){ps.push(l.price);var col=l.name==="SL"?"#ff6363":l.name==="Entry"?"#f5b942":"#2ecc71";
   o.lines.push(o.series.createPriceLine({price:l.price,color:col,lineWidth:2,lineStyle:l.name==="Entry"?0:2,axisLabelVisible:true,title:l.name+" "+l.price.toFixed(2)}))});
- var ps=(lv||[]).map(function(l){return l.price});if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);
+ var XC={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363"};
+ (xm||[]).forEach(function(m){ps.push(m.price);var day=m.key.indexOf("day")===0;
+  o.lines.push(o.series.createPriceLine({price:m.price,color:XC[m.key],lineWidth:day?1:1,lineStyle:3,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
+  if(m.time){mkr.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:XC[m.key],shape:m.key==="dayhigh"?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
+ if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);
   o.series.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r)return{priceRange:{minValue:lo,maxValue:hi}};return{priceRange:{minValue:Math.min(r.priceRange.minValue,lo),maxValue:Math.max(r.priceRange.maxValue,hi)},margins:r.margins}}})}
- if(entry&&(candles||[]).length){var t=0;for(var i=0;i<candles.length;i++){if(candles[i].t<=entry)t=candles[i].t}if(t)o.series.setMarkers([{time:t,position:"belowBar",color:"#f5b942",shape:"arrowUp",text:"Entry"}])}}
+ if(entry&&(candles||[]).length){var t=0;for(var i=0;i<candles.length;i++){if(candles[i].t<=entry)t=candles[i].t}if(t)mkr.push({time:t,position:"belowBar",color:"#f5b942",shape:"arrowUp",text:"Entry"})}
+ mkr.sort(function(a,b){return a.time-b.time});o.series.setMarkers(mkr)}
 function chips(el,lv){document.getElementById(el).innerHTML=(lv||[]).map(function(l){var c=l.name==="SL"?"sl":l.name==="Entry"?"e":"t";return'<span class="'+c+'">'+l.name+' <b>'+l.price.toFixed(2)+'</b></span>'}).join("")}
 function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
  if(!d.ok){document.getElementById("meta").textContent=d.error||"not found";return}
@@ -165,7 +178,7 @@ function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-s
  var p=document.getElementById("pnl");p.textContent=(d.pnl<0?"-":"")+"₹"+Math.abs(d.pnl).toLocaleString("en-IN",{maximumFractionDigits:2});p.className=d.pnl>=0?"pos":"neg";
  document.getElementById("state").textContent=(d.status==="OPEN"?"Last ":"Exit ")+d.last.toFixed(2)+(d.error?" - chart data issue: "+d.error:"");
  document.getElementById("optTitle").textContent="Option - "+d.option_label+" (5-minute)";document.getElementById("stkTitle").textContent="Stock - "+d.symbol+" (5-minute)";
- fill("opt","optChart",d.option,d.levels.option,d.entry_epoch);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
+ fill("opt","optChart",d.option,d.levels.option,d.entry_epoch);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
  if(!d.option.length&&!d.stock.length)document.getElementById("meta").textContent+=" - no candles yet";
  }).catch(function(){document.getElementById("meta").textContent="connection lost - retrying"})}
 load();setInterval(load,15000);
