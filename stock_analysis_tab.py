@@ -586,7 +586,8 @@ STOCK_ANALYSIS_HTML = r"""<!doctype html>
 ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.notice{margin-top:10px;padding:10px 12px;border:1px solid #3a2e60;background:#15112a;border-radius:10px;color:#cfc5f7;font-size:11px}
 @media(max-width:1000px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr}}
  @media(max-width:600px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:0 10px 16px}.header{padding:12px}.toolbar{padding:10px}.title{font-size:19px}.rows,.intel-sections{grid-template-columns:1fr}#chart{height:300px}}
-</style></head>
+</style><script src="/static/lightweight-charts.js"></script>
+</head>
 <body>
 <div class="nav">
 <a href="/">LIVE TRADING</a><a href="/fno-market-watch">F&amp;O MARKET WATCH</a><a href="/stock-analysis">STOCK ANALYSIS</a>
@@ -604,6 +605,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
  <div class="grid">
+ <div class="panel"><div class="pt">Price chart with day levels <span class="sub" style="font-weight:400">PDH / PDL, day high / low with times</span></div><div class="body"><div id="lvchart" style="height:420px"></div><div id="lvlegend" style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:13px"></div></div></div>
  <div class="panel"><div class="pt"><a id="chartlink" href="#" style="float:right;font-size:12px;font-weight:700;color:#4c8dff;text-decoration:none">Open chart with day high/low, PDH, PDL &rsaquo;</a>Why is it moving? <span class="sub" style="font-weight:400">likely drivers, not confirmed causes</span></div><div class="body" id="why"></div></div>
  <div class="panel"><div class="pt">Company</div><div class="body" id="company"></div></div>
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
@@ -634,9 +636,27 @@ function drawChart(points){
   let grid="";for(let i=0;i<5;i++){const yy=p+(h-2*p)*i/4;grid+="<line class='gridline' x1='"+p+"' y1='"+yy+"' x2='"+(w-p)+"' y2='"+yy+"'/>";}
   q("#chart").innerHTML="<svg viewBox='0 0 "+w+" "+h+"' width='100%' height='100%' preserveAspectRatio='none'>"+grid+"<polyline class='chartline' points='"+line+"'/><text class='point' x='"+p+"' y='"+(h-8)+"'>"+esc(points[0].time)+"</text><text class='point' x='"+(w-p)+"' y='"+(h-8)+"' text-anchor='end'>"+esc(points[points.length-1].time)+"</text></svg>";
 }
+var LVC={chart:null,series:null,lines:[],sym:""};
+function drawLv(sym){
+  if(typeof LightweightCharts==="undefined"||!sym)return;
+  fetch("/api/stock-day-chart?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){
+    if(!d.ok){document.getElementById("lvlegend").textContent=d.error||"chart not available";return}
+    if(!LVC.chart){LVC.chart=LightweightCharts.createChart(document.getElementById("lvchart"),{layout:{background:{color:"#121a2d"},textColor:"#8ea0bd"},grid:{vertLines:{color:"#1d2842"},horzLines:{color:"#1d2842"}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:"#27334d"},rightPriceScale:{borderColor:"#27334d"},autoSize:true});
+      LVC.series=LVC.chart.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"})}
+    var COL={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363"};
+    LVC.series.setData(d.candles.map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));
+    LVC.lines.forEach(function(l){LVC.series.removePriceLine(l)});LVC.lines=[];var mk=[],ps=[];
+    d.marks.forEach(function(m){ps.push(m.price);var day=m.key.indexOf("day")===0;
+      LVC.lines.push(LVC.series.createPriceLine({price:m.price,color:COL[m.key],lineWidth:day?2:1,lineStyle:day?0:2,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
+      if(m.time){mk.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:COL[m.key],shape:m.key==="dayhigh"?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
+    mk.sort(function(a,b){return a.time-b.time});LVC.series.setMarkers(mk);
+    if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);LVC.series.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r)return{priceRange:{minValue:lo,maxValue:hi}};return{priceRange:{minValue:Math.min(r.priceRange.minValue,lo),maxValue:Math.max(r.priceRange.maxValue,hi)},margins:r.margins}}})}
+    document.getElementById("lvlegend").innerHTML=d.marks.map(function(m){return "<span><span style='display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;background:"+COL[m.key]+"'></span>"+m.name+" <b>"+m.price.toFixed(2)+"</b>"+(m.hm?" <span class='sub'>at "+m.hm+"</span>":" <span class='sub'>"+m.label+"</span>")+"</span>"}).join("");
+    if(LVC.sym!==sym){LVC.chart.timeScale().fitContent();LVC.sym=sym}
+  }).catch(function(){})}
 function render(d){
   (function(){var sym=(d.market&&d.market.symbol)||(d.symbol||"");if(!sym){q("#why").innerHTML="";return}
-   q("#chartlink").href="/stock-chart?symbol="+encodeURIComponent(sym);
+   q("#chartlink").href="/stock-chart?symbol="+encodeURIComponent(sym);drawLv(sym);
    fetch("/api/why-moving?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(w){
     if(!w.ok){q("#why").innerHTML="<div class='sub'>"+esc(w.error||"not available")+"</div>";return}
     var icon={market:"&#127757;",sector:"&#127981;",group:"&#128279;",announcement:"&#128226;",news:"&#128240;",gap:"&#8597;",level:"&#128205;",volume:"&#128202;",vwap:"&#12336;",flow:"&#9878;",trend:"&#128200;"};

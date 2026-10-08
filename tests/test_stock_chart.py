@@ -31,6 +31,8 @@ class MarkTests(unittest.TestCase):
         self.assertIn("createPriceLine", sc.STOCK_CHART_HTML)
         self.assertIn("/stock-chart?symbol=", sat.STOCK_ANALYSIS_HTML)
         self.assertIn("stock_marks", tc.TRADE_HTML)
+        self.assertIn("id=\"lvchart\"", sat.STOCK_ANALYSIS_HTML)
+        self.assertIn("/api/stock-day-chart", sat.STOCK_ANALYSIS_HTML)
         self.assertTrue(callable(dash.stock_chart.payload))
 
 
