@@ -71,7 +71,7 @@ function render(){
   +'<div class="row mid"><div class="small">Qty <b style="color:var(--text)">'+qty.toLocaleString("en-IN")+'</b> &nbsp; Avg <b style="color:var(--text)">'+Number(x.entry).toFixed(2)+'</b></div>'
   +'<div class="small">'+(isOpen?"LTP":"Exit")+' <b style="color:var(--text)">'+Number(last).toFixed(2)+'</b> <span class="'+cls(x.return_pct)+'">('+sgn(x.return_pct)+'%)</span></div></div>'
   +'<div class="row small"><div>'+(x.sl?'SL '+Number(x.sl).toFixed(2):'')+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'
-  +'<div class="detail"><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+(x.high_time||"")+'</b></div>'
+  +'<div class="detail"><div><a href="/trade?id='+encodeURIComponent(x.id)+'" style="color:var(--blue);font-weight:800;text-decoration:none">Open stock + option charts &rsaquo;</a></div><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+(x.high_time||"")+'</b></div>'
   +'<div><span>Lowest since entry</span><b>'+(x.low?Number(x.low).toFixed(2):"-")+' '+(x.low_time||"")+'</b></div>'
   +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div></div></div>'}).join("")
 }
