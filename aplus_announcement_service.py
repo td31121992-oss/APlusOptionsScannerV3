@@ -72,6 +72,11 @@ def main() -> int:
         try:
             result = af.poll_once(make_session(), now, dry_run=dry)
             failures = 0
+            try:                      # news watch (US visa / PERM etc.); its own failures never affect the announcement poll
+                import news_watch
+                result["news_watch"] = news_watch.scan(now, send=af.send_telegram, dry_run=dry)
+            except Exception as nw_exc:  # noqa: BLE001
+                result["news_watch"] = {"error": f"{type(nw_exc).__name__}"}
             heartbeat("ok", result)
             log(f"poll ok {result}")
             if once or dry:
