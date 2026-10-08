@@ -601,6 +601,8 @@ class PaperTradeJournal:
         self._ensure_date(when.date())
         for trade in self.trades:
             if str(trade.get("status") or "").upper() == "OPEN":
+                if force_close and self._close_at_last_mark(trade, when, "SESSION_END"):
+                    continue                      # session end and the price request failed: close at the last real mark
                 self._mark_unavailable(
                     trade, when, status=mark_status,
                     error_type=error_type, force_close=force_close,
