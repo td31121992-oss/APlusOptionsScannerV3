@@ -604,6 +604,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
  <div class="grid">
+ <div class="panel"><div class="pt">Why is it moving? <span class="sub" style="font-weight:400">likely drivers, not confirmed causes</span></div><div class="body" id="why"></div></div>
  <div class="panel"><div class="pt">Company</div><div class="body" id="company"></div></div>
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
@@ -634,6 +635,11 @@ function drawChart(points){
   q("#chart").innerHTML="<svg viewBox='0 0 "+w+" "+h+"' width='100%' height='100%' preserveAspectRatio='none'>"+grid+"<polyline class='chartline' points='"+line+"'/><text class='point' x='"+p+"' y='"+(h-8)+"'>"+esc(points[0].time)+"</text><text class='point' x='"+(w-p)+"' y='"+(h-8)+"' text-anchor='end'>"+esc(points[points.length-1].time)+"</text></svg>";
 }
 function render(d){
+  (function(){var sym=(d.market&&d.market.symbol)||(d.symbol||"");if(!sym){q("#why").innerHTML="";return}
+   fetch("/api/why-moving?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(w){
+    if(!w.ok){q("#why").innerHTML="<div class='sub'>"+esc(w.error||"not available")+"</div>";return}
+    var icon={market:"&#127757;",sector:"&#127981;",group:"&#128279;",announcement:"&#128226;",news:"&#128240;",gap:"&#8597;",level:"&#128205;",volume:"&#128202;",vwap:"&#12336;",flow:"&#9878;",trend:"&#128200;"};
+    q("#why").innerHTML="<div style='margin-bottom:8px;font-weight:700'>"+esc(w.summary)+"</div>"+(w.drivers||[]).map(function(x){return "<div style='display:flex;gap:8px;padding:5px 0;border-top:1px solid #27334d'><span>"+(icon[x.kind]||"&#8226;")+"</span><div style='flex:1'><b>"+esc(x.title)+"</b>"+(x.detail?"<div class='sub'>"+esc(x.detail)+"</div>":"")+"</div><span class='sub'>"+esc(x.time||"")+"</span></div>"}).join("")}).catch(function(){})})();
   var pr=d.profile;q("#company").innerHTML=pr?("<div style='font-size:17px;font-weight:800'>"+esc(pr.name)+"</div><div style='margin:4px 0'>"+esc(pr.business)+"</div><div class='sub'><b>Owner / promoter:</b> "+esc(pr.owner)+"</div><div class='sub'><b>Founded:</b> "+esc(pr.founded)+"</div><div class='sub' style='margin-top:6px;font-size:11px'>"+esc(pr.note)+"</div>"):"<div class='sub'>No company profile for this symbol.</div>";
   const m=d.market||{},t=d.technical||{},c=d.candidate||{};
   const intel=d.intelligence||{},sections=intel.sections||[];

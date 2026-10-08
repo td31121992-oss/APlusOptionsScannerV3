@@ -18,6 +18,7 @@ import decision_desk
 import trade_chart
 import company_profiles
 import market_mood
+import why_moving
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -543,6 +544,9 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 body = b"/* chart library missing */"
             self.send_response(200); self.send_header("Content-Type","application/javascript; charset=utf-8"); self.send_header("Cache-Control","public, max-age=86400"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/why-moving":
+            body = json.dumps(why_moving.payload(str(parse_query(self.path).get("symbol") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/market-mood":
             body = json.dumps(market_mood.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
