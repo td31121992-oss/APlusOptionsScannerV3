@@ -45,6 +45,7 @@ from scanner_authorization_state import scanner_authorization_is_blocked
 from trading_calendar import is_trading_day
 import market_context
 import order_block
+import v2_shadow
 
 
 logger = get_logger(__name__)
@@ -613,12 +614,25 @@ class OpeningMomentumScanner:
         # Quality-first: trade count is an outcome, never a quota.
         actionable = selective_entry_ready
         v2_config = V2GateConfig()
+        pre_v2_candidates = list(actionable)
         actionable, v2_blocked = evaluate_entry_ready(
             candidates=actionable,
             mover_ranking=v2_movers,
             now=current_time,
             config=v2_config,
         )
+        try:      # SHADOW ONLY: what would pass the V2 gate if the top-5 limit were top-10 (logged, never traded)
+            shadow_ranking = rank_raw_movers(universe=universe, quote_map=quote_map, top_n=10)
+            shadow_pass, _ = evaluate_entry_ready(
+                candidates=pre_v2_candidates, mover_ranking=shadow_ranking, now=current_time, config=v2_config,
+            )
+            live_keys = {(x.symbol, x.direction) for x in actionable}
+            extra_top10 = [x for x in shadow_pass if (x.symbol, x.direction) not in live_keys]
+            if not hasattr(self, "_v2_shadow_seen") or getattr(self, "_v2_shadow_day", None) != current_time.date():
+                self._v2_shadow_seen, self._v2_shadow_day = set(), current_time.date()
+            v2_shadow.log_new(extra_top10, shadow_ranking, current_time, self._v2_shadow_seen)
+        except Exception:      # noqa: BLE001 - shadow logging must never affect trading
+            pass
         for blocked in v2_blocked:
             candidate = next(
                 (

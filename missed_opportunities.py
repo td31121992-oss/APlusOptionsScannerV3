@@ -302,6 +302,13 @@ def main() -> int:
                 print(f"{args.day}: option returns -> {folder}")
         except Exception as exc:                   # noqa: BLE001
             print(f"option returns skipped: {type(exc).__name__}: {exc}")
+    try:                                           # V2 top-10 shadow comparison (local files only); never blocks this report
+        import v2_shadow
+        out = v2_shadow.report()
+        if out:
+            print(f"v2 shadow summary -> {out}")
+    except Exception as exc:                       # noqa: BLE001
+        print(f"v2 shadow summary skipped: {type(exc).__name__}: {exc}")
     summary = update_cumulative(results)
     print(f"cumulative: {summary['signals']} signals over {len(summary['days'])} days")
     return 0
