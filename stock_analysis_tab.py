@@ -604,7 +604,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
  <div class="grid">
- <div class="panel"><div class="pt">Why is it moving? <span class="sub" style="font-weight:400">likely drivers, not confirmed causes</span></div><div class="body" id="why"></div></div>
+ <div class="panel"><div class="pt"><a id="chartlink" href="#" style="float:right;font-size:12px;font-weight:700;color:#4c8dff;text-decoration:none">Open chart with day high/low, PDH, PDL &rsaquo;</a>Why is it moving? <span class="sub" style="font-weight:400">likely drivers, not confirmed causes</span></div><div class="body" id="why"></div></div>
  <div class="panel"><div class="pt">Company</div><div class="body" id="company"></div></div>
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
@@ -636,6 +636,7 @@ function drawChart(points){
 }
 function render(d){
   (function(){var sym=(d.market&&d.market.symbol)||(d.symbol||"");if(!sym){q("#why").innerHTML="";return}
+   q("#chartlink").href="/stock-chart?symbol="+encodeURIComponent(sym);
    fetch("/api/why-moving?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(w){
     if(!w.ok){q("#why").innerHTML="<div class='sub'>"+esc(w.error||"not available")+"</div>";return}
     var icon={market:"&#127757;",sector:"&#127981;",group:"&#128279;",announcement:"&#128226;",news:"&#128240;",gap:"&#8597;",level:"&#128205;",volume:"&#128202;",vwap:"&#12336;",flow:"&#9878;",trend:"&#128200;"};
