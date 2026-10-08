@@ -69,5 +69,21 @@ class PreviousDayTests(unittest.TestCase):
         self.assertTrue({"pdh_bo", "pdl_bd"} <= fired)
 
 
+class OpenedBeyondPreviousDayTests(unittest.TestCase):
+    def test_open_above_pdh_and_below_pdl_use_the_0915_open(self) -> None:
+        h, l, c = series()
+        ind = {"AAA": di.compute_indicators(h, l, c)}
+        pdh, pdl = ind["AAA"]["pdh"], ind["AAA"]["pdl"]
+        up = di.enrich_rows([{"symbol": "AAA", "ltp": pdh - 5, "open_0915": pdh + 1}], ind)[0]          # opened above PDH, now back below it
+        dn = di.enrich_rows([{"symbol": "AAA", "ltp": pdl + 5, "open_0915": pdl - 1}], ind)[0]
+        inside = di.enrich_rows([{"symbol": "AAA", "ltp": pdl, "open_0915": (pdh + pdl) / 2}], ind)[0]
+        self.assertTrue(up["open_above_pdh"] and not up["open_below_pdl"])
+        self.assertTrue(dn["open_below_pdl"] and not dn["open_above_pdh"])
+        self.assertFalse(inside["open_above_pdh"] or inside["open_below_pdl"])
+        fired = {a["rule_id"] for a in evaluate_rows([up, dn])}
+        self.assertTrue({"open_above_pdh", "open_below_pdl"} <= fired)
+        self.assertFalse(di.enrich_rows([{"symbol": "AAA", "ltp": 1.0}], ind)[0]["open_below_pdl"])      # no open price -> silent
+
+
 if __name__ == "__main__":
     unittest.main()
