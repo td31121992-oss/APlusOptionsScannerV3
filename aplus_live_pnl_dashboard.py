@@ -16,6 +16,7 @@ import trading_mode
 from positions_panel import POSITIONS_HTML
 import decision_desk
 import trade_chart
+import company_profiles
 try:  # the control room must never stop the main dashboard from starting
     from dashboard_intel import control_room_payload
     from dashboard_control_room_page import CONTROL_ROOM_HTML
@@ -501,7 +502,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/stock-analysis":
             q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
-            body=json.dumps(analysis_payload(day,symbol)).encode("utf-8")
+            _analysis = analysis_payload(day,symbol)
+            _analysis["profile"] = company_profiles.get(symbol)
+            body=json.dumps(_analysis).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/stock-option-chain":
             q=parse_query(self.path); symbol=q.get("symbol") or ""; expiry=q.get("expiry") or ""

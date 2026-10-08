@@ -604,6 +604,7 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
  <div class="grid">
+ <div class="panel"><div class="pt">Company</div><div class="body" id="company"></div></div>
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
  </div>
@@ -633,6 +634,7 @@ function drawChart(points){
   q("#chart").innerHTML="<svg viewBox='0 0 "+w+" "+h+"' width='100%' height='100%' preserveAspectRatio='none'>"+grid+"<polyline class='chartline' points='"+line+"'/><text class='point' x='"+p+"' y='"+(h-8)+"'>"+esc(points[0].time)+"</text><text class='point' x='"+(w-p)+"' y='"+(h-8)+"' text-anchor='end'>"+esc(points[points.length-1].time)+"</text></svg>";
 }
 function render(d){
+  var pr=d.profile;q("#company").innerHTML=pr?("<div style='font-size:17px;font-weight:800'>"+esc(pr.name)+"</div><div style='margin:4px 0'>"+esc(pr.business)+"</div><div class='sub'><b>Owner / promoter:</b> "+esc(pr.owner)+"</div><div class='sub'><b>Founded:</b> "+esc(pr.founded)+"</div><div class='sub' style='margin-top:6px;font-size:11px'>"+esc(pr.note)+"</div>"):"<div class='sub'>No company profile for this symbol.</div>";
   const m=d.market||{},t=d.technical||{},c=d.candidate||{};
   const intel=d.intelligence||{},sections=intel.sections||[];
   q("#intelligence").innerHTML="<div class='intel-confidence'>Evidence confidence: "+esc(intel.confidence||"INSUFFICIENT_DATA")+" • Technical "+esc(intel.technical_alignment||"unknown")+" • Sector "+esc(intel.sector_alignment||"unknown")+" • Options "+esc(intel.options_alignment||"unknown")+"</div><div class='intel-sections'>"+sections.map(s=>"<section class='intel-section'><h3>"+esc(s.title)+"</h3><ul>"+(s.items||[]).map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></section>").join("")+"</div>";
