@@ -182,6 +182,30 @@ class ProfitLockTests(unittest.TestCase):
         self.assertEqual(t["status"], "OPEN")
 
 
+class StopShadowTests(unittest.TestCase):
+    """COLPAL-style path: entry 10, T1 12, T2 13.5, T3 15; peak 14.2 then fade. Shadows never change the real trade."""
+    def _run(self, prices: list[float]):
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(option_stop=8.0, option_target1=12.0, option_target2=13.5, option_target3=15.0)])
+            for i, price in enumerate(prices):
+                journal.update_open_positions(option_quotes={"123": {"last_price": price}},
+                                              when=datetime(2026, 10, 7, 10, 1 + i, tzinfo=IST))
+            return dict(journal.trades[0])
+
+    def test_ladder_and_trail_exit_higher_than_the_real_plus8_stop(self) -> None:
+        t = self._run([12.1, 13.6, 14.2, 11.9, 10.7])
+        self.assertEqual((t["status"], t["exit_price"]), ("CLOSED", 10.7))                 # real rule only exits at the +8% stop (10.8)
+        self.assertEqual(t["shadow_ladder_exit_price"], 11.9)                              # ladder floor = target 1 (12.0)
+        self.assertEqual(t["shadow_trail60_exit_price"], 11.9)                             # 10 + 0.6*4.2 = 12.52 -> first mark below
+        self.assertNotIn("shadow_ladder_at_real_exit", t)
+
+    def test_untriggered_shadow_closes_at_real_exit_price(self) -> None:
+        t = self._run([9.0, 7.9])                                                          # plain stop loss, no target reached
+        self.assertEqual(t["exit_reason"], "OPTION_STOP_LOSS")
+        self.assertEqual(t["shadow_ladder_exit_price"], 7.9)
+        self.assertTrue(t["shadow_trail60_at_real_exit"])
+
+
 class CarryoverTests(unittest.TestCase):
     def test_open_trade_is_closed_not_dropped_when_date_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

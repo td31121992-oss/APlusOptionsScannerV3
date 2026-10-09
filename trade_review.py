@@ -80,7 +80,15 @@ def review_row(t: dict) -> dict[str, Any]:
         "ob": str(t.get("ob_shadow") or ""),
         "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
                         if t.get("lock_shadow_exit_at") else ""),
+        "ladder_shadow": _shadow(t, "ladder", exit_price), "trail60_shadow": _shadow(t, "trail60", exit_price),
     }
+
+
+def _shadow(t: dict, name: str, real_exit: float) -> str:
+    if not t.get(f"shadow_{name}_exit_at"):
+        return ""
+    px = _f(t.get(f"shadow_{name}_exit_price"))
+    return f"{px:.2f} ({(px - real_exit) * _f(t.get('quantity')):+,.0f})"
 
 
 def summarize(rows: list[dict], key: str) -> list[tuple[str, int, int, int]]:
@@ -99,14 +107,14 @@ def render(day: str, rows: list[dict]) -> str:
     out = [f"# Trade review {day}", "",
            f"{len(rows)} trades ({sum(1 for r in rows if r['status'] == 'OPEN')} still open, valued at last mark) | "
            f"winners {wins} | gross {gross:+,} | costs {costs:,} | **net {net:+,}**", "",
-           "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net | Order block | Profit-lock rule would exit |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net | Order block | Profit-lock rule would exit | Ladder (T2 locks T1) exit (vs real Rs) | Trail60 exit (vs real Rs) |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         ex = f"{r['exit_price']:.2f} {r['exit_time']} {r['exit_reason']}".strip() if r["status"] == "CLOSED" else f"{r['exit_price']:.2f} OPEN"
         out.append(f"| {r['symbol']} | {str(r['direction'])[:4]} | {r['setup']} | {r['entry_time']} | {r['entry_price']:.2f} | "
                    f"{r['high']:.2f} ({r['high_time'] or '-'}) | {r['low']:.2f} ({r['low_time'] or '-'}) | {ex} | "
                    f"{r['mfe_pct']:+.0f} | {r['mae_pct']:+.0f} | {r['return_pct']:+.0f} | {r['captured_pct']}% | {r['stop_pct']:.0f} | "
-                   f"{r['capital']:,} | {r['gross']:+,} | {r['costs']:,} | {r['net']:+,} | {r['ob'] or '-'} | {r['lock_shadow'] or '-'} |")
+                   f"{r['capital']:,} | {r['gross']:+,} | {r['costs']:,} | {r['net']:+,} | {r['ob'] or '-'} | {r['lock_shadow'] or '-'} | {r['ladder_shadow'] or '-'} | {r['trail60_shadow'] or '-'} |")
     for title, key in (("By setup", "setup"), ("By direction", "direction"), ("By entry hour", "hour")):
         data = rows if key != "hour" else [{**r, "hour": (r["entry_time"] or "??")[:2] + ":00"} for r in rows]
         out += ["", f"**{title}**", "", "| Group | Trades | Winners | Net |", "|---|---|---|---|"]
