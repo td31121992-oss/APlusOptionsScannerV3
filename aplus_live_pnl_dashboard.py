@@ -15,6 +15,7 @@ import dashboard_access
 import trading_mode
 from positions_panel import POSITIONS_HTML
 import decision_desk
+import live_scanner
 import trade_chart
 import company_profiles
 import market_mood
@@ -77,6 +78,10 @@ def _mobileize_html(html, host=None):
         dd_link = ('<a href="/decision-desk" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                    'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">DECISION DESK</a>\n')
         out = out.replace('<a href="/fno-market-watch"', dd_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/live-scanner"' not in out:
+        ls_link = ('<a href="/live-scanner" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">LIVE SCANNER</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', ls_link + '<a href="/fno-market-watch"', 1)
     if 'href="/positions"' not in out:
         pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                     'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
@@ -570,6 +575,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/trade-chart":
             body = json.dumps(trade_chart.payload(str(parse_query(self.path).get("id") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/live-scanner":
+            body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/live-scanner":
+            q = parse_query(self.path)
+            try:
+                limit = int(q.get("limit") or 200)
+            except ValueError:
+                limit = 200
+            body = json.dumps(live_scanner.payload(str(q.get("group") or "ALL").upper(), limit, ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/decision-desk":
             body = decision_desk.DECISION_DESK_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
