@@ -80,7 +80,8 @@ function Get-ScannerProcesses {
 $Services = @(
     @{ Name = "Announcement service"; Script = "aplus_announcement_service.py" },
     @{ Name = "News collector";       Script = "aplus_overnight_intelligence.py" },
-    @{ Name = "Order book recorder";  Script = "order_book_recorder.py" }
+    @{ Name = "Order book recorder";  Script = "order_book_recorder.py" },
+    @{ Name = "Chirag shadow";        Script = "chirag_shadow.py" }
 )
 $ServiceLastStart = @{}
 $ServiceCooldownSeconds = 300
