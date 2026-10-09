@@ -204,6 +204,9 @@ class PaperTradeJournal:
             "setup_family": str(plan.get("setup_family") or candidate.get("setup_family") or ""),
             "ob_shadow": str(candidate.get("ob_shadow") or ""),
             "ob_zone": str(candidate.get("ob_zone") or ""),
+            "breadth_tag": str(candidate.get("breadth_tag") or ""),
+            "breadth_up": candidate.get("breadth_up", ""), "breadth_down": candidate.get("breadth_down", ""),
+            "breadth_pct_with": candidate.get("breadth_pct_with", ""), "breadth_evidence": candidate.get("breadth_evidence", ""),
             "selection_tier": str(plan.get("selection_tier") or candidate.get("selection_tier") or ""),
             "status": "OPEN",
             "momentum_score": self._number(plan.get("momentum_score")),
@@ -452,6 +455,8 @@ class PaperTradeJournal:
                 protected_stop = max(protected_stop, runner_floor, gain_trail)
                 trade["runner_stop"] = round(protected_stop, 4)
 
+            self._record_stop_shadows(trade, entry, high, price, when)
+
             reason = ""
             if protected_stop > 0 and price <= protected_stop:
                 reason = (
@@ -476,6 +481,65 @@ class PaperTradeJournal:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    @staticmethod
+    def _stop_shadow_floors(trade: dict[str, Any], entry: float, high: float) -> dict[str, float]:
+        """Stop floors of two SHADOW variants (never used for real exits), given the targets reached so far.
+        ladder:  T1 -> entry, T2 -> target 1 price, T3 -> target 2 price (each step locks the previous target).
+        trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
+        t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
+        out = {"ladder": 0.0, "trail60": 0.0}
+        if t1:
+            out["ladder"] = out["trail60"] = entry
+        if t2:
+            out["ladder"] = max(out["ladder"], float(trade.get("option_target1") or 0))
+            out["trail60"] = max(out["trail60"], entry + 0.6 * max(0.0, high - entry))
+        if t3:
+            out["ladder"] = max(out["ladder"], float(trade.get("option_target2") or 0))
+        return out
+
+    def _record_half10_shadow(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
+        """Shadow: book half the position at +10% (limit fill at exactly +10%), stop the rest at entry, then trail it at
+        60% of the peak gain once target 2 is reached. Records the booking and the exit of the remaining half."""
+        if entry <= 0 or trade.get("shadow_half10_exit_at"):
+            return
+        if not trade.get("shadow_half10_book_at"):
+            if high >= entry * 1.10:
+                trade["shadow_half10_book_at"] = when.isoformat()
+                trade["shadow_half10_book_price"] = round(entry * 1.10, 4)
+            else:
+                return
+        floor = entry
+        if trade.get("target2_hit_at"):
+            floor = max(floor, entry + 0.6 * max(0.0, high - entry))
+        if price <= floor:
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+
+    def _record_stop_shadows(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
+        try:
+            floors = self._stop_shadow_floors(trade, entry, high)
+        except (TypeError, ValueError):
+            return
+        self._record_half10_shadow(trade, entry, high, price, when)
+        for name, floor in floors.items():
+            if floor > 0 and price <= floor and not trade.get(f"shadow_{name}_exit_at"):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                trade[f"shadow_{name}_exit_price"] = round(price, 4)
+                trade[f"shadow_{name}_floor"] = round(floor, 4)
+
+    @staticmethod
+    def _finish_stop_shadows(trade: dict[str, Any], when: datetime, price: float) -> None:
+        """The real trade is closing: a shadow that never triggered exits at the same price (never better than reality)."""
+        if not trade.get("shadow_half10_exit_at"):
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+            trade["shadow_half10_at_real_exit"] = True
+        for name in ("ladder", "trail60"):
+            if not trade.get(f"shadow_{name}_exit_at"):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()
+                trade[f"shadow_{name}_exit_price"] = round(price, 4)
+                trade[f"shadow_{name}_at_real_exit"] = True
 
     @staticmethod
     def _profit_lock_mode() -> str:
@@ -540,6 +604,7 @@ class PaperTradeJournal:
         trade["last_mark_evaluated_at"] = when.isoformat()
 
     def _close_trade(self, trade: dict[str, Any], when: datetime, exit_price: float, reason: str) -> None:
+        self._finish_stop_shadows(trade, when, exit_price)
         entry = self._number(trade.get("entry_price"))
         qty = self._integer(trade.get("quantity"))
         gross = (exit_price - entry) * qty
