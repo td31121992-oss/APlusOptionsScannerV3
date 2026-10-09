@@ -32,6 +32,13 @@ from trade_costs import round_trip_costs
 logger = logging.getLogger(__name__)
 
 
+
+# SHADOW exit variants (never used for real exits). Peak-drop variants: once the option is up `act` from entry, exit when it
+# falls `dd` below its highest price. Names look like peak8_a30 (8% below the peak, active after +30%).
+PEAK_VARIANTS = [(dd, act) for act in (0.20, 0.30) for dd in (0.06, 0.08, 0.10, 0.12)]
+PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd, act in PEAK_VARIANTS)
+STOP_SHADOW_NAMES = ("ladder", "trail60") + PEAK_NAMES
+
 class PaperTradeJournal:
     """Persist generated paper option trades and de-duplicate repeated signals."""
 
@@ -489,6 +496,8 @@ class PaperTradeJournal:
         trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
         t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
         out = {"ladder": 0.0, "trail60": 0.0}
+        for (dd, act), name in zip(PEAK_VARIANTS, PEAK_NAMES):
+            out[name] = high * (1.0 - dd) if high >= entry * (1.0 + act) else 0.0
         if t1:
             out["ladder"] = out["trail60"] = entry
         if t2:
@@ -535,7 +544,7 @@ class PaperTradeJournal:
             trade["shadow_half10_exit_at"] = when.isoformat()
             trade["shadow_half10_exit_price"] = round(price, 4)
             trade["shadow_half10_at_real_exit"] = True
-        for name in ("ladder", "trail60"):
+        for name in STOP_SHADOW_NAMES:
             if not trade.get(f"shadow_{name}_exit_at"):
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()
                 trade[f"shadow_{name}_exit_price"] = round(price, 4)

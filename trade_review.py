@@ -81,6 +81,7 @@ def review_row(t: dict) -> dict[str, Any]:
         "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
                         if t.get("lock_shadow_exit_at") else ""),
         "half10_shadow": _half10(t, exit_price),
+        **_shadow_deltas(t, exit_price),
         "breadth": (f"{t.get('breadth_tag')} ({t.get('breadth_pct_with')}% with, ev {t.get('breadth_evidence')})" if t.get("breadth_tag") else ""),
         "ladder_shadow": _shadow(t, "ladder", exit_price), "trail60_shadow": _shadow(t, "trail60", exit_price),
     }
@@ -102,6 +103,33 @@ def _half10(t: dict, real_exit: float) -> str:
     booked = bool(t.get("shadow_half10_book_at"))
     blended = 0.5 * _f(t.get("shadow_half10_book_price")) + 0.5 * rest if booked else rest
     return f"{'booked ' if booked else 'not reached '}{blended:.2f} ({(blended - real_exit) * qty:+,.0f})"
+
+
+def _shadow_names() -> tuple[str, ...]:
+    try:
+        from paper_trade_journal import STOP_SHADOW_NAMES
+        return tuple(STOP_SHADOW_NAMES)
+    except Exception:                                      # noqa: BLE001
+        return ("ladder", "trail60")
+
+
+def _shadow_deltas(t: dict, real_exit: float) -> dict[str, Any]:
+    """Rupees each shadow exit rule would have made versus the real exit (0 when it never triggered before the real exit)."""
+    qty, out = _f(t.get("quantity")), {}
+    for name in _shadow_names():
+        px = _f(t.get(f"shadow_{name}_exit_price"))
+        hit = bool(t.get(f"shadow_{name}_exit_at")) and not t.get(f"shadow_{name}_at_real_exit")
+        out[f"d_{name}"] = round((px - real_exit) * qty) if t.get(f"shadow_{name}_exit_at") else 0
+        out[f"hit_{name}"] = int(hit)
+    entry = _f(t.get("entry_price"))
+    if t.get("shadow_half10_exit_at") and entry > 0:
+        rest = _f(t.get("shadow_half10_exit_price"))
+        booked = bool(t.get("shadow_half10_book_at"))
+        blended = 0.5 * _f(t.get("shadow_half10_book_price")) + 0.5 * rest if booked else rest
+        out["d_half10"], out["hit_half10"] = round((blended - real_exit) * qty), int(booked)
+    else:
+        out["d_half10"], out["hit_half10"] = 0, 0
+    return out
 
 
 def summarize(rows: list[dict], key: str) -> list[tuple[str, int, int, int]]:
@@ -132,6 +160,16 @@ def render(day: str, rows: list[dict]) -> str:
         data = rows if key != "hour" else [{**r, "hour": (r["entry_time"] or "??")[:2] + ":00"} for r in rows]
         out += ["", f"**{title}**", "", "| Group | Trades | Winners | Net |", "|---|---|---|---|"]
         out += [f"| {k} | {n} | {w} | {v:+,} |" for k, n, w, v in summarize(data, key)]
+    names = [n for n in _shadow_names()] + ["half10"]
+    if any(f"d_{n}" in rows[0] for n in names):
+        labels = {"ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60"}
+        out += ["", "**Exit-rule comparison (shadow, nothing traded)** - rupees versus the real exits above, summed over today's trades", "",
+                "| Rule | Trades where it acted | Extra Rs vs real |", "|---|---|---|"]
+        for n in names:
+            if f"d_{n}" not in rows[0]:
+                continue
+            lab = labels.get(n) or (f"Exit {n.split('_')[0][4:]}% below the peak, after +{n.split('_a')[1]}% reached" if n.startswith("peak") else n)
+            out.append(f"| {lab} | {sum(r.get('hit_' + n, 0) for r in rows)} of {len(rows)} | {sum(r.get('d_' + n, 0) for r in rows):+,} |")
     gave_back = [r for r in rows if r["mfe_pct"] >= 15 and r["return_pct"] <= 5]
     if gave_back:
         out += ["", "**Gave back a gain** (peak at least +15%, ended at +5% or less): "

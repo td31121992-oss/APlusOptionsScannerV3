@@ -210,6 +210,17 @@ class StopShadowTests(unittest.TestCase):
         self.assertNotIn("shadow_half10_book_at", t)
         self.assertEqual(t["shadow_half10_exit_price"], 7.9)
 
+    def test_peak_drop_shadows_exit_below_the_peak(self) -> None:
+        t = self._run([12.1, 13.6, 14.2, 13.4, 13.0, 12.5, 12.4])     # peak 14.2 (+42%); 8% below = 13.06, 12% below = 12.496
+        self.assertEqual(t["shadow_peak8_a30_exit_price"], 13.0)
+        self.assertEqual(t["shadow_peak12_a30_exit_price"], 12.4)
+        self.assertEqual(t["shadow_peak8_a20_exit_price"], 13.0)
+        self.assertEqual(t["status"], "OPEN")                          # real trade untouched (stop 8.0 / +8% lock = 10.8)
+
+    def test_peak_drop_shadow_waits_for_its_activation_level(self) -> None:
+        t = self._run([10.5, 10.9, 10.2])                              # never reached +20%/+30%: no peak shadow triggered
+        self.assertNotIn("shadow_peak8_a20_exit_at", t)
+
     def test_untriggered_shadow_closes_at_real_exit_price(self) -> None:
         t = self._run([9.0, 7.9])                                                          # plain stop loss, no target reached
         self.assertEqual(t["exit_reason"], "OPTION_STOP_LOSS")
