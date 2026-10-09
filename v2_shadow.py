@@ -58,7 +58,8 @@ def _stats(values: list[float], best: list[float]) -> str:
 
 def report(root: Path = ROOT) -> Path | None:
     """Writes data/shadow_v2/summary.md comparing outcomes (ATM option, hindsight, entry at first-ready candle +1%)."""
-    groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], [])}
+    groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], []),
+                                                         "est_trend": ([], [])}
     per_day = []
     for csv_path in sorted((root / "data" / "shadow_v2").glob("20*.csv")):
         day = csv_path.stem
@@ -70,6 +71,7 @@ def report(root: Path = ROOT) -> Path | None:
             logged = list(csv.DictReader(csv_path.open(encoding="utf-8")))
             extra = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario", "top10") == "top10"}
             norank = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "norank"} - extra
+            est = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "est_trend"}
         except (OSError, ValueError, KeyError):
             continue
         day_extra = ([], [])
@@ -87,6 +89,9 @@ def report(root: Path = ROOT) -> Path | None:
                 continue
             groups[group][0].append(float(r["close"]))
             groups[group][1].append(float(r["best"]))
+            if key in est and fate.startswith("V2_BLOCKED"):
+                groups["est_trend"][0].append(float(r["close"]))
+                groups["est_trend"][1].append(float(r["best"]))
             if group == "extra":
                 day_extra[0].append(float(r["close"]))
                 day_extra[1].append(float(r["best"]))
@@ -98,6 +103,7 @@ def report(root: Path = ROOT) -> Path | None:
              "Outcome = at-the-money option bought at the first-ready candle +1% and held to the close; hindsight, before real fills.", "",
              f"- **Extra top-10 passes:** {_stats(*groups['extra'])}",
              f"- **Extra with NO rank rule at all (beyond top-10):** {_stats(*groups['norank_only'])}",
+             f"- **Established-trend setups V2 blocked (the proposed widening, before the 3-per-side cap):** {_stats(*groups['est_trend'])}",
              f"- **Other V2-blocked:** {_stats(*groups['other_v2_blocked'])}",
              f"- **Live trades:** {_stats(*groups['traded'])}", "", "| Day | Extra top-10 passes |", "|---|---|"]
     lines += [f"| {day} | {_stats(*vals)} |" for day, vals in per_day]
