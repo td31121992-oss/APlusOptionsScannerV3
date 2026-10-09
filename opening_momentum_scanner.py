@@ -783,6 +783,18 @@ class OpeningMomentumScanner:
                         candidate_record["ob_zone"] = f"{ob['zone_low']}-{ob['zone_high']}" if ob["state"] != "NONE" else ""
                     except Exception:         # noqa: BLE001 - never affects trading
                         candidate_record["ob_shadow"] = ""
+                    try:                      # shadow tag only: market-breadth rule (see breadth_gate.py)
+                        import breadth_gate
+                        _ind_path = Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json"
+                        try:
+                            _ind = json.loads(_ind_path.read_text(encoding="utf-8")).get("symbols", {})
+                        except (OSError, ValueError):
+                            _ind = {}
+                        candidate_record.update(breadth_gate.evaluate(
+                            candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []), _ind,
+                            float(getattr(candidate, "recent_relative_volume_15m", 0) or 0)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
                         candidate=candidate_record,
