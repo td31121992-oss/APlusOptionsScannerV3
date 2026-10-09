@@ -498,11 +498,30 @@ class PaperTradeJournal:
             out["ladder"] = max(out["ladder"], float(trade.get("option_target2") or 0))
         return out
 
+    def _record_half10_shadow(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
+        """Shadow: book half the position at +10% (limit fill at exactly +10%), stop the rest at entry, then trail it at
+        60% of the peak gain once target 2 is reached. Records the booking and the exit of the remaining half."""
+        if entry <= 0 or trade.get("shadow_half10_exit_at"):
+            return
+        if not trade.get("shadow_half10_book_at"):
+            if high >= entry * 1.10:
+                trade["shadow_half10_book_at"] = when.isoformat()
+                trade["shadow_half10_book_price"] = round(entry * 1.10, 4)
+            else:
+                return
+        floor = entry
+        if trade.get("target2_hit_at"):
+            floor = max(floor, entry + 0.6 * max(0.0, high - entry))
+        if price <= floor:
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+
     def _record_stop_shadows(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
         try:
             floors = self._stop_shadow_floors(trade, entry, high)
         except (TypeError, ValueError):
             return
+        self._record_half10_shadow(trade, entry, high, price, when)
         for name, floor in floors.items():
             if floor > 0 and price <= floor and not trade.get(f"shadow_{name}_exit_at"):
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
@@ -512,6 +531,10 @@ class PaperTradeJournal:
     @staticmethod
     def _finish_stop_shadows(trade: dict[str, Any], when: datetime, price: float) -> None:
         """The real trade is closing: a shadow that never triggered exits at the same price (never better than reality)."""
+        if not trade.get("shadow_half10_exit_at"):
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+            trade["shadow_half10_at_real_exit"] = True
         for name in ("ladder", "trail60"):
             if not trade.get(f"shadow_{name}_exit_at"):
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()

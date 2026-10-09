@@ -199,6 +199,17 @@ class StopShadowTests(unittest.TestCase):
         self.assertEqual(t["shadow_trail60_exit_price"], 11.9)                             # 10 + 0.6*4.2 = 12.52 -> first mark below
         self.assertNotIn("shadow_ladder_at_real_exit", t)
 
+    def test_half10_books_at_plus_10_then_stops_rest_at_entry(self) -> None:
+        t = self._run([10.5, 11.2, 10.6, 9.9])                     # +10% touched, then back through entry (10.0)
+        self.assertEqual(t["shadow_half10_book_price"], 11.0)
+        self.assertEqual(t["shadow_half10_exit_price"], 9.9)
+        self.assertEqual(t["status"], "OPEN")                      # real trade untouched (its stop is 8.0)
+
+    def test_half10_never_booked_follows_the_real_exit(self) -> None:
+        t = self._run([9.0, 7.9])
+        self.assertNotIn("shadow_half10_book_at", t)
+        self.assertEqual(t["shadow_half10_exit_price"], 7.9)
+
     def test_untriggered_shadow_closes_at_real_exit_price(self) -> None:
         t = self._run([9.0, 7.9])                                                          # plain stop loss, no target reached
         self.assertEqual(t["exit_reason"], "OPTION_STOP_LOSS")
