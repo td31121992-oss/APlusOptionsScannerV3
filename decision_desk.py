@@ -91,6 +91,11 @@ def payload(root: Path = ROOT) -> dict[str, Any]:
         return {"ok": False, "error": "scanner report not available", "rows": []}
     regime = _regime(root)
     rows = build_rows(report, regime)
+    try:
+        import gate_times
+        gate_times.attach(rows, root)
+    except Exception:                                      # noqa: BLE001 - times are optional
+        pass
     return {"ok": True, "generated_at": report.get("generated_at", ""), "phase": report.get("session_phase", ""),
             "regime": regime, "entry_ready": report.get("entry_ready_count", 0), "traded_today": report.get("paper_trades_today", 0),
             "counts": {"traded": sum(r["status"] == "TRADED" for r in rows),
@@ -116,11 +121,12 @@ td.n{text-align:right}.ok{color:var(--green);font-weight:700}.no{color:var(--red
 <h1>Decision Desk</h1><div class="sub" id="asof">loading...</div>
 <div class="bar" id="stats"></div>
 <div class="bar" id="chips"><span class="chip on" data-f="ALL">All</span><span class="chip" data-f="TRADED">Traded</span><span class="chip" data-f="PASS">Passed every gate</span><span class="chip" data-f="BLOCKED">Blocked</span><span class="chip" data-f="CE">Calls</span><span class="chip" data-f="PE">Puts</span></div>
-<div class="scroll"><table><thead><tr><th>Symbol</th><th>Side</th><th>Setup</th><th class="n">Qual</th><th class="n">From open %</th><th class="n">RVOL / 15m</th><th class="n">VWAP dist %</th><th class="n">ADX / RSI</th><th class="n">ATR5 %</th><th class="n">Stop % / RR</th><th>A+ gate</th><th>V2 gate</th><th>Market</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
-<div class="note">Read-only view of the scanner's latest cycle. "Qual" is the trade-quality score, "ATR5" the 5-minute average range as % of price, "Stop % / RR" the underlying stop distance and reward-to-risk to target 1. A gate shows the first reason it failed. Paper trading only.</div>
+<div class="scroll"><table><thead><tr><th>Symbol</th><th>Side</th><th>Setup</th><th class="n">Qual</th><th class="n">From open %</th><th class="n">RVOL / 15m</th><th class="n">VWAP dist %</th><th class="n">ADX / RSI</th><th class="n">ATR5 %</th><th class="n">Stop % / RR</th><th>First ready</th><th>A+ gate (since)</th><th>V2 gate (since)</th><th>Market</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="note">Read-only view of the scanner's latest cycle. "Qual" is the trade-quality score, "ATR5" the 5-minute average range as % of price, "First ready" is the first scan in which the stock was entry-ready; the time beside each gate is when that gate last changed to what it says now (PASS or block). "Stop % / RR" the underlying stop distance and reward-to-risk to target 1. A gate shows the first reason it failed. Paper trading only.</div>
 </div><script>
 var f="ALL",data=null;
 function g(s){if(!s||s==="-")return'<span class="sub">-</span>';return s==="PASS"?'<span class="ok">PASS</span>':'<span class="no">'+s.replace(/A_PLUS_WAIT_/,"wait ").replace(/_/g," ").toLowerCase()+'</span>'}
+function tm(t){return t?' <span class="sub">'+t+'</span>':''}
 function show(r){if(f==="ALL")return true;if(f==="TRADED")return r.status==="TRADED";if(f==="CE"||f==="PE")return r.side===f;
  var blk=/BLOCK|REJECT/.test(r.gate_aplus+r.gate_v2+r.gate_regime);if(f==="BLOCKED")return blk;return !blk&&r.gate_aplus==="PASS"&&r.gate_v2==="PASS"}
 function render(){if(!data)return;var d=data;
@@ -128,10 +134,10 @@ function render(){if(!data)return;var d=data;
  document.getElementById("stats").innerHTML='<div class="stat">Entry-ready <b>'+d.entry_ready+'</b></div><div class="stat">Passed every gate <b>'+d.counts.passed_all+'</b></div><div class="stat">Blocked <b>'+d.counts.blocked+'</b></div><div class="stat">Traded today <b>'+d.traded_today+'</b></div>';
  var rows=(d.rows||[]).filter(show);
  document.getElementById("rows").innerHTML=rows.length?rows.map(function(r){
-  var st=r.status==="TRADED"?'<span class="pill t">TRADED</span>':/BLOCK|REJECT|WAIT/.test(r.status)?'<span class="pill b">'+r.status.replace(/_/g," ").toLowerCase()+'</span>':'<span class="pill w">'+r.status+'</span>';
+  var st=r.status==="TRADED"?'<span class="pill t">TRADED</span>'+tm(r.traded_at):/BLOCK|REJECT|WAIT/.test(r.status)?'<span class="pill b">'+r.status.replace(/_/g," ").toLowerCase()+'</span>':'<span class="pill w">'+r.status+'</span>';
   return '<tr><td class="sym">'+r.symbol+'</td><td>'+r.side+' <span class="sub">'+(r.direction||"").slice(0,4).toLowerCase()+'</span></td><td>'+(r.setup||"").replace(/_/g," ").toLowerCase()+'</td><td class="n">'+r.quality+'</td>'
   +'<td class="n '+(r.move_open>=0?"ok":"no")+'">'+r.move_open+'</td><td class="n">'+r.rvol+' / '+r.rvol_15m+'</td><td class="n">'+r.vwap_dist+'</td><td class="n">'+r.adx+' / '+r.rsi+'</td><td class="n">'+r.atr5_pct+'</td><td class="n">'+r.risk_pct+' / '+r.rr+'</td>'
-  +'<td>'+g(r.gate_aplus)+'</td><td>'+g(r.gate_v2)+'</td><td>'+g(r.gate_regime)+'</td><td>'+st+'</td></tr>'}).join(""):'<tr><td colspan="14" class="sub" style="padding:24px;text-align:center">No candidates match</td></tr>'}
+  +'<td>'+(r.first_ready||'<span class="sub">-</span>')+'</td><td>'+g(r.gate_aplus)+tm(r.aplus_since)+'</td><td>'+g(r.gate_v2)+tm(r.v2_since)+'</td><td>'+g(r.gate_regime)+'</td><td>'+st+'</td></tr>'}).join(""):'<tr><td colspan="15" class="sub" style="padding:24px;text-align:center">No candidates match</td></tr>'}
 document.getElementById("chips").addEventListener("click",function(e){var t=e.target.getAttribute("data-f");if(!t)return;f=t;[].forEach.call(document.querySelectorAll(".chip"),function(c){c.className="chip"+(c.getAttribute("data-f")===f?" on":"")});render()});
 function load(){fetch("/api/decision-desk",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d.ok?d:null;if(!d.ok)document.getElementById("asof").textContent=d.error;render()}).catch(function(){})}
 load();setInterval(load,10000);
