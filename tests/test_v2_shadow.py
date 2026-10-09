@@ -46,6 +46,19 @@ class ShadowTests(unittest.TestCase):
             self.assertIn("NO rank rule at all", text)
             self.assertIsNone(v2_shadow.report(Path(tmp, "empty")))
 
+    def test_established_trend_scenario_is_logged_and_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            when = datetime(2026, 10, 8, 10, 0, tzinfo=IST)
+            c = SimpleNamespace(symbol="AAA", direction="BULLISH", ltp=100.0, stage="S", setup_family="ESTABLISHED_TREND")
+            v2_shadow.log_new([c], RANK, when, set(), root / "data" / "shadow_v2", scenario="est_trend")
+            (root / "data" / "missed_opportunities" / "2026-10-08").mkdir(parents=True)
+            opts = [{"symbol": "AAA", "dir": "BULLISH", "kind": "ATM", "fate": "V2_BLOCKED:x", "close": 8.0, "best": 31.0}]
+            Path(root, "data", "missed_opportunities", "2026-10-08", "option_returns.json").write_text(json.dumps(opts), encoding="utf-8")
+            text = v2_shadow.report(root).read_text(encoding="utf-8")
+            self.assertIn("Established-trend setups V2 blocked", text)
+            self.assertIn("before the 3-per-side cap):** n=1", text)
+
 
 if __name__ == "__main__":
     unittest.main()

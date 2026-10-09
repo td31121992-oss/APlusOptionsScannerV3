@@ -640,6 +640,11 @@ class OpeningMomentumScanner:
             if not hasattr(self, "_v2_norank_seen") or getattr(self, "_v2_norank_day", None) != current_time.date():
                 self._v2_norank_seen, self._v2_norank_day = set(), current_time.date()
             v2_shadow.log_new(extra_norank, norank_ranking, current_time, self._v2_norank_seen, scenario="norank")
+            # third scenario: only ESTABLISHED_TREND setups that V2's rank rule blocked (test of letting them through, cap 3 per side)
+            est_trend = [x for x in extra_norank if str(getattr(x, "setup_family", "")).upper() == "ESTABLISHED_TREND"]
+            if not hasattr(self, "_v2_est_seen") or getattr(self, "_v2_est_day", None) != current_time.date():
+                self._v2_est_seen, self._v2_est_day = set(), current_time.date()
+            v2_shadow.log_new(est_trend, norank_ranking, current_time, self._v2_est_seen, scenario="est_trend")
         except Exception:      # noqa: BLE001 - shadow logging must never affect trading
             pass
         for blocked in v2_blocked:
