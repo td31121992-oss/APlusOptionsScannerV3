@@ -16,6 +16,7 @@ import trading_mode
 from positions_panel import POSITIONS_HTML
 import decision_desk
 import live_scanner
+import trade_journal
 import trade_chart
 import company_profiles
 import market_mood
@@ -82,6 +83,10 @@ def _mobileize_html(html, host=None):
         ls_link = ('<a href="/live-scanner" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                    'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">LIVE SCANNER</a>\n')
         out = out.replace('<a href="/fno-market-watch"', ls_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/journal"' not in out:
+        j_link = ('<a href="/journal" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                  'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">JOURNAL</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', j_link + '<a href="/fno-market-watch"', 1)
     if 'href="/positions"' not in out:
         pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                     'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
@@ -576,6 +581,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/trade-chart":
             body = json.dumps(trade_chart.payload(str(parse_query(self.path).get("id") or "")), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/journal":
+            body = trade_journal.JOURNAL_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/journal":
+            q = parse_query(self.path)
+            body = json.dumps(trade_journal.payload(str(q.get("from") or ""), str(q.get("to") or ""), ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/journal.csv":
+            q = parse_query(self.path)
+            body = trade_journal.export_csv(str(q.get("from") or ""), str(q.get("to") or ""), ROOT).encode("utf-8-sig")
+            self.send_response(200); self.send_header("Content-Type","text/csv; charset=utf-8"); self.send_header("Content-Disposition","attachment; filename=aplus_trade_journal.csv"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/live-scanner":
             body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -610,6 +626,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(code); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
         if not dashboard_access.is_allowed(self.client_address[0]):
             return reply(403, {"ok": False, "message": "Not allowed from this address."})
+        if self.path.split("?", 1)[0] == "/api/journal-note":
+            try:
+                length = min(int(self.headers.get("Content-Length") or 0), 20000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                entry = trade_journal.save_note(str(req.get("id", "")), str(req.get("note", "")), list(req.get("tags") or []), int(req.get("rating") or 0), ROOT)
+                return reply(200, {"ok": True, "entry": entry})
+            except Exception:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": "Could not save the note."})
         if self.path.split("?", 1)[0] != "/api/mode":
             return reply(404, {"ok": False, "message": "Not found."})
         try:
