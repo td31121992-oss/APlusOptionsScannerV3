@@ -28,7 +28,7 @@ class GateTimesTests(unittest.TestCase):
             for stamp, rep in seq:
                 (d / f"intraday_movement_20261009_{stamp.replace(':', '')}.json").write_text(json.dumps(rep), encoding="utf-8")
             rows = [{"symbol": "AAA", "direction": "BULLISH"}]
-            gate_times.attach(rows, Path(tmp))
+            gate_times.attach(rows, Path(tmp), date(2026, 10, 9))
             r = rows[0]
             self.assertEqual(r["first_ready"], "09:25")
             self.assertEqual(r["aplus_since"], "09:27")        # rejected 09:25-09:26, passed from 09:27

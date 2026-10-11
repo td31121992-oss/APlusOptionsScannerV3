@@ -65,9 +65,9 @@ def load(root: Path = ROOT, today: date | None = None) -> dict[tuple[str, str], 
         return {k: dict(v) for k, v in _STATE["times"].items()}
 
 
-def attach(rows: list[dict[str, Any]], root: Path = ROOT) -> None:
+def attach(rows: list[dict[str, Any]], root: Path = ROOT, today: date | None = None) -> None:
     try:
-        times = load(root)
+        times = load(root, today)
     except Exception:                                      # noqa: BLE001
         return
     for r in rows:
