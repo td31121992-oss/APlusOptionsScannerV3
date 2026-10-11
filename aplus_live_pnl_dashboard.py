@@ -16,6 +16,8 @@ import trading_mode
 from positions_panel import POSITIONS_HTML
 import decision_desk
 import live_scanner
+import money_flow
+import sector_analysis
 import trade_journal
 import mobile_app
 import trade_chart
@@ -88,6 +90,14 @@ def _mobileize_html(html, host=None):
         j_link = ('<a href="/journal" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">JOURNAL</a>'+chr(10))
         out = out.replace('<a href="/fno-market-watch"', j_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/money-flow"' not in out:
+        mf_link = ('<a href="/money-flow" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">MONEY FLOW</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', mf_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/sector-analysis"' not in out:
+        sa_link = ('<a href="/sector-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTORS</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', sa_link + '<a href="/fno-market-watch"', 1)
     if 'href="/positions"' not in out:
         pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
                     'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
@@ -605,6 +615,23 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_query(self.path)
             body = trade_journal.export_csv(str(q.get("from") or ""), str(q.get("to") or ""), ROOT).encode("utf-8-sig")
             self.send_response(200); self.send_header("Content-Type","text/csv; charset=utf-8"); self.send_header("Content-Disposition","attachment; filename=aplus_trade_journal.csv"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/sector-analysis":
+            body = sector_analysis.SECTOR_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/sector-analysis":
+            body = json.dumps(sector_analysis.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/money-flow":
+            body = money_flow.MONEY_FLOW_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/money-flow":
+            q = parse_query(self.path)
+            try:
+                window = int(q.get("window") or 0)
+            except ValueError:
+                window = 0
+            body = json.dumps(money_flow.payload(window, ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/live-scanner":
             body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
