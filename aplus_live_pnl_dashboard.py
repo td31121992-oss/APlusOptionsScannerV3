@@ -17,6 +17,7 @@ from positions_panel import POSITIONS_HTML
 import decision_desk
 import live_scanner
 import trade_journal
+import mobile_app
 import trade_chart
 import company_profiles
 import market_mood
@@ -94,7 +95,7 @@ def _mobileize_html(html, host=None):
     if 'id="aplus-mobile-css"' not in out:
         out = out.replace("</head>", MAIN_MOBILE_CSS + "</head>", 1)
     if 'id="aplus-mood"' not in out and "</body>" in out:
-        out = out.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1)
+        out = out.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1)
     if 'id="aplus-mode-bar"' not in out and "</body>" in out:
         out = out.replace("</body>", MODE_BAR_HTML + "</body>", 1)
     if host:
@@ -581,8 +582,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/trade-chart":
             body = json.dumps(trade_chart.payload(str(parse_query(self.path).get("id") or "")), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/manifest.webmanifest":
+            body = mobile_app.manifest_json()
+            self.send_response(200); self.send_header("Content-Type","application/manifest+json"); self.send_header("Cache-Control","no-cache"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/sw.js":
+            body = mobile_app.SERVICE_WORKER.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/javascript"); self.send_header("Cache-Control","no-cache"); self.send_header("Service-Worker-Allowed","/"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/static/icon-192.png", "/static/icon-512.png"):
+            try:
+                body = (ROOT / "static" / path.rsplit("/", 1)[1]).read_bytes()
+            except OSError:
+                body = b""
+            self.send_response(200 if body else 404); self.send_header("Content-Type","image/png"); self.send_header("Cache-Control","public, max-age=86400"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/journal":
-            body = trade_journal.JOURNAL_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            body = trade_journal.JOURNAL_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/journal":
             q = parse_query(self.path)
@@ -593,7 +606,7 @@ class Handler(BaseHTTPRequestHandler):
             body = trade_journal.export_csv(str(q.get("from") or ""), str(q.get("to") or ""), ROOT).encode("utf-8-sig")
             self.send_response(200); self.send_header("Content-Type","text/csv; charset=utf-8"); self.send_header("Content-Disposition","attachment; filename=aplus_trade_journal.csv"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/live-scanner":
-            body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/live-scanner":
             q = parse_query(self.path)
@@ -604,13 +617,13 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(live_scanner.payload(str(q.get("group") or "ALL").upper(), limit, ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/decision-desk":
-            body = decision_desk.DECISION_DESK_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            body = decision_desk.DECISION_DESK_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/decision-desk":
             body = json.dumps(decision_desk.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/positions":
-            body = POSITIONS_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            body = POSITIONS_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + "</body>", 1).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/mode":
             body = json.dumps(trading_mode.get_state()).encode("utf-8")
@@ -641,7 +654,8 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(length) or b"{}")
         except Exception:  # noqa: BLE001
             return reply(400, {"ok": False, "message": "Bad request."})
-        ok, state, message = trading_mode.set_mode(str(req.get("mode", "")), confirm=str(req.get("confirm", "")), remote_addr=self.client_address[0])
+        remote = mobile_app.effective_remote(self.headers, self.client_address[0])      # proxied (tailscale serve) requests are not "this PC"
+        ok, state, message = trading_mode.set_mode(str(req.get("mode", "")), confirm=str(req.get("confirm", "")), remote_addr=remote)
         return reply(200, {"ok": ok, "message": message, "state": state})
 
     def log_message(self, fmt, *args):
