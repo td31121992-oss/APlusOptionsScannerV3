@@ -182,6 +182,53 @@ class ProfitLockTests(unittest.TestCase):
         self.assertEqual(t["status"], "OPEN")
 
 
+class UserLadderTests(unittest.TestCase):
+    """Darpan's exit ladder: +5% -> entry, +10% -> +3%, +20% -> +13%, +30% -> +22%, then +2 points per further +5%."""
+    def test_floor_values(self) -> None:
+        from paper_trade_journal import user_ladder_floor as f
+        self.assertEqual(f(100.0, 104.9), 0.0)
+        self.assertAlmostEqual(f(100.0, 105.0), 100.0)
+        self.assertAlmostEqual(f(100.0, 110.0), 103.0)
+        self.assertAlmostEqual(f(100.0, 119.9), 103.0)
+        self.assertAlmostEqual(f(100.0, 120.0), 113.0)
+        self.assertAlmostEqual(f(100.0, 130.0), 122.0)
+        self.assertAlmostEqual(f(100.0, 134.9), 122.0)
+        self.assertAlmostEqual(f(100.0, 135.0), 124.0)
+        self.assertAlmostEqual(f(100.0, 150.0), 130.0)
+
+    def _run(self, mode: str, prices: list[float]):
+        os.environ["APLUS_EXIT_LADDER_MODE"] = mode
+        self.addCleanup(os.environ.pop, "APLUS_EXIT_LADDER_MODE", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-07", [_open_trade(option_stop=8.0, option_target1=50.0)])
+            for i, price in enumerate(prices):
+                journal.update_open_positions(option_quotes={"123": {"last_price": price}}, when=datetime(2026, 10, 7, 10, 1 + i, tzinfo=IST))
+            return dict(journal.trades[0])
+
+    def test_shadow_records_but_does_not_close(self) -> None:
+        t = self._run("SHADOW", [10.5, 10.0])                          # +5% reached, then back to entry
+        self.assertEqual(t["status"], "OPEN")
+        self.assertEqual(t["shadow_user_ladder_exit_price"], 10.0)
+
+    def test_enforce_exits_at_entry_after_five_percent(self) -> None:
+        t = self._run("ENFORCE", [10.5, 10.0])
+        self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "PROFIT_PROTECTION_EXIT", 10.0))
+
+    def test_enforce_locks_three_percent_after_ten(self) -> None:
+        t = self._run("ENFORCE", [11.2, 10.9, 10.25])                  # +12% -> lock +3% = 10.30; 10.25 breaks it
+        self.assertEqual((t["exit_reason"], t["exit_price"]), ("PROFIT_PROTECTION_EXIT", 10.25))
+        t2 = self._run("ENFORCE", [11.2, 10.9, 10.4])                  # stays above the lock: still open
+        self.assertEqual(t2["status"], "OPEN")
+
+    def test_enforce_locks_thirteen_after_twenty_and_twentytwo_after_thirty(self) -> None:
+        self.assertEqual(self._run("ENFORCE", [12.5, 11.2])["exit_price"], 11.2)          # +25% -> lock +13% = 11.30
+        self.assertEqual(self._run("ENFORCE", [13.2, 12.1])["exit_price"], 12.1)          # +32% -> lock +22% = 12.20
+
+    def test_default_mode_keeps_the_old_rules(self) -> None:
+        t = self._run("", [10.5, 10.0])                                # unset/invalid -> SHADOW: old rules, trade stays open
+        self.assertEqual(t["status"], "OPEN")
+
+
 class StopShadowTests(unittest.TestCase):
     """COLPAL-style path: entry 10, T1 12, T2 13.5, T3 15; peak 14.2 then fade. Shadows never change the real trade."""
     def _run(self, prices: list[float]):

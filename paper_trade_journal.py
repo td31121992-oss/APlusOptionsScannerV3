@@ -37,7 +37,27 @@ logger = logging.getLogger(__name__)
 # falls `dd` below its highest price. Names look like peak8_a30 (8% below the peak, active after +30%).
 PEAK_VARIANTS = [(dd, act) for act in (0.20, 0.30) for dd in (0.06, 0.08, 0.10, 0.12)]
 PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd, act in PEAK_VARIANTS)
-STOP_SHADOW_NAMES = ("ladder", "trail60") + PEAK_NAMES
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES
+
+
+def user_ladder_floor(entry: float, high: float) -> float:
+    """Darpan's exit ladder, driven by the highest price reached (the lock only ever moves up):
+    +5% -> stop at entry | +10% -> lock +3% | +20% -> lock +13% | +30% -> lock +22%, then +2 points of lock for every further +5% of gain.
+    Returns the stop price, or 0.0 while the option has not yet reached +5%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)               # rounded so exactly +20% is not read as 19.999999
+    if gain >= 30.0:
+        lock = 22.0 + 2.0 * int((gain - 30.0) // 5.0)
+    elif gain >= 20.0:
+        lock = 13.0
+    elif gain >= 10.0:
+        lock = 3.0
+    elif gain >= 5.0:
+        lock = 0.0
+    else:
+        return 0.0
+    return entry * (1.0 + lock / 100.0)
 
 class PaperTradeJournal:
     """Persist generated paper option trades and de-duplicate repeated signals."""
@@ -449,18 +469,22 @@ class PaperTradeJournal:
 
             original_stop = self._number(trade.get("option_stop"))
             protected_stop = original_stop
-            if trade.get("target1_hit_at"):
-                protected_stop = max(protected_stop, entry)
-            if trade.get("target2_hit_at"):
-                protected_stop = max(protected_stop, entry * 1.08)
-            if trade.get("target3_hit_at"):
-                if not bool(trade.get("runner_mode")):
-                    trade["runner_mode"] = True
-                    trade["runner_activated_at"] = when.isoformat()
-                runner_floor = entry * 1.15
-                gain_trail = entry + max(0.0, high - entry) * 0.70
-                protected_stop = max(protected_stop, runner_floor, gain_trail)
-                trade["runner_stop"] = round(protected_stop, 4)
+            if self._exit_ladder_mode() == "ENFORCE":
+                protected_stop = max(original_stop, user_ladder_floor(entry, high))      # +5% -> entry, +10% -> +3%, +20% -> +13%, +30% -> +22% ...
+                trade["ladder_stop"] = round(protected_stop, 4)
+            else:
+                if trade.get("target1_hit_at"):
+                    protected_stop = max(protected_stop, entry)
+                if trade.get("target2_hit_at"):
+                    protected_stop = max(protected_stop, entry * 1.08)
+                if trade.get("target3_hit_at"):
+                    if not bool(trade.get("runner_mode")):
+                        trade["runner_mode"] = True
+                        trade["runner_activated_at"] = when.isoformat()
+                    runner_floor = entry * 1.15
+                    gain_trail = entry + max(0.0, high - entry) * 0.70
+                    protected_stop = max(protected_stop, runner_floor, gain_trail)
+                    trade["runner_stop"] = round(protected_stop, 4)
 
             self._record_stop_shadows(trade, entry, high, price, when)
 
@@ -490,12 +514,18 @@ class PaperTradeJournal:
         return closed_now
 
     @staticmethod
+    def _exit_ladder_mode() -> str:
+        """APLUS_EXIT_LADDER_MODE: SHADOW (default: recorded on every trade, real exits unchanged) or ENFORCE (the ladder IS the exit rule)."""
+        mode = str(os.getenv("APLUS_EXIT_LADDER_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"SHADOW", "ENFORCE"} else "SHADOW"
+
+    @staticmethod
     def _stop_shadow_floors(trade: dict[str, Any], entry: float, high: float) -> dict[str, float]:
         """Stop floors of two SHADOW variants (never used for real exits), given the targets reached so far.
         ladder:  T1 -> entry, T2 -> target 1 price, T3 -> target 2 price (each step locks the previous target).
         trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
         t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
-        out = {"ladder": 0.0, "trail60": 0.0}
+        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high)}
         for (dd, act), name in zip(PEAK_VARIANTS, PEAK_NAMES):
             out[name] = high * (1.0 - dd) if high >= entry * (1.0 + act) else 0.0
         if t1:
