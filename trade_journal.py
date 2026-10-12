@@ -103,6 +103,16 @@ def lessons(r: dict[str, Any]) -> list[str]:
     return out
 
 
+def _event_text(t: dict[str, Any]) -> str:
+    like = str(t.get("event_like", "")).lower() in ("true", "1")
+    if t.get("event_like", "") == "":
+        return ""
+    if not like:
+        return "not an event day"
+    agrees = str(t.get("event_agrees", "")).lower() in ("true", "1")
+    return f"EVENT-LIKE: gap {_f(t.get('event_gap_pct')):+.1f}%, volume {_f(t.get('event_rvol')):.1f}x, move since open {_f(t.get('event_move_open_pct')):+.1f}% ({'agrees with' if agrees else 'against'} the gap)"
+
+
 def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]], root: Path) -> dict[str, Any]:
     r = trade_review.review_row(t)
     day = _day(t)
@@ -127,6 +137,7 @@ def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]],
         "underlying_entry": _f(t.get("underlying_entry")), "underlying_stop": _f(t.get("underlying_stop")),
         "safety": t.get("safety_decision") or "", "regime": regime, "entry_reason": t.get("entry_reason") or "",
         "targets_hit": ", ".join(hits), "hold_min": hold, "breadth": r["breadth"], "ob": r["ob"],
+        "event": _event_text(t),
         **{k: r[k] for k in ("entry_time", "entry_price", "high", "high_time", "low", "low_time", "exit_price", "exit_time", "status", "exit_reason",
                               "stop_pct", "mfe_pct", "mae_pct", "return_pct", "captured_pct", "capital", "spread_pct", "gross", "costs", "net")},
     }
@@ -314,7 +325,7 @@ function render(){if(!D)return;var s=D.stats;
 function detail(t){var j=t.journal,sh=Object.keys(t).filter(function(k){return k.indexOf("d_")===0&&t[k]!==0}).map(function(k){return esc(k.slice(2))+": "+m(t[k])}).join(" | ");
  var tags=D.tags.map(function(x){return '<span class="chip'+(j.tags.indexOf(x)>=0?" on":"")+'" data-tag="'+x+'">'+x+'</span>'}).join("");
  return '<tr class="detail"><td colspan="15"><div class="kv"><div><span>Contract</span> '+esc(t.contract)+'</div><div><span>Quantity</span> '+t.lot_qty+'</div><div><span>Stage / tier</span> '+esc(t.stage)+' / '+esc(t.tier)+'</div><div><span>Pivot state</span> '+esc(t.pivot_state)+'</div>'
-  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div>'
+  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div>'
   +'<div><span>High</span> '+t.high+' @ '+(t.high_time||"-")+'</div><div><span>Low</span> '+t.low+' @ '+(t.low_time||"-")+'</div><div><span>Targets hit</span> '+esc(t.targets_hit||"none")+'</div><div><span>Stop distance</span> '+t.stop_pct+'%</div>'
   +'<div><span>Gross / costs / net</span> '+m(t.gross)+' / '+m(t.costs)+' / '+m(t.net)+'</div><div><span>Kept of peak</span> '+(t.return_pct>0?t.captured_pct+'%':'n/a (not a winner)')+'</div></div>'
   +(t.lessons.length?t.lessons.map(function(x){return '<div class="lesson">&#9679; '+esc(x)+'</div>'}).join(""):'<div class="sub">No automatic lesson for this trade.</div>')

@@ -497,6 +497,24 @@ class OpeningMomentumScanner:
             quote_map=quote_map,
             now=current_time,
         )
+        try:      # SHADOW ONLY: event-day checkpoint log (see event_tags.py); never affects trading
+            import event_tags
+            _seg = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, Mapping) else {}
+            self._event_volumes = {}
+            for _row in (fno_market_watch or {}).get("rows", []):
+                _raw = _seg.get(str(_row.get("security_id"))) or _seg.get(_row.get("security_id"))
+                if isinstance(_raw, Mapping):
+                    self._event_volumes[_row["symbol"]] = float(_raw.get("volume") or 0)
+            try:
+                self._event_ind = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json").read_text(encoding="utf-8")).get("symbols", {})
+            except (OSError, ValueError):
+                self._event_ind = getattr(self, "_event_ind", {})
+            if not hasattr(self, "_event_state"):
+                self._event_state = {}
+            event_tags.observe((fno_market_watch or {}).get("rows", []), self._event_volumes, self._event_ind, current_time,
+                               self._event_state, Path(self.config.paths.data_dir).parent)
+        except Exception:      # noqa: BLE001 - never affects trading
+            pass
 
         # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
         paper_position_update = self._monitor_paper_positions_from_quote_map(
@@ -798,6 +816,13 @@ class OpeningMomentumScanner:
                         candidate_record.update(breadth_gate.evaluate(
                             candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []), _ind,
                             float(getattr(candidate, "recent_relative_volume_15m", 0) or 0)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: event-day flag (see event_tags.py)
+                        import event_tags
+                        candidate_record.update(event_tags.trade_tags(
+                            candidate.symbol, (fno_market_watch or {}).get("rows", []), getattr(self, "_event_volumes", {}),
+                            getattr(self, "_event_ind", {}), current_time))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
                     record = self.paper_journal.record_trade(
