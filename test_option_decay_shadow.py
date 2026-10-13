@@ -27,6 +27,23 @@ class OptionDecayShadowTests(unittest.TestCase):
                                   when=self.t0+timedelta(minutes=95))
         self.assertEqual(r["shadow_exit_planner_verdict"], "EXIT_CANDIDATE_SHADOW")
 
+    def test_put_uses_downward_underlying_move_as_favourable(self):
+        trade = dict(self.trade, option_type="PE",
+                     shadow_underlying_peak=97.0,
+                     shadow_underlying_peak_at=self.t0.isoformat())
+        r = evaluate_decay_shadow(trade, underlying_price=97.2, option_price=9.4,
+                                  when=self.t0+timedelta(minutes=65))
+        self.assertEqual(r["shadow_exit_planner_verdict"], "DECAY_RISK_SHADOW")
+        self.assertAlmostEqual(r["shadow_exit_planner_underlying_peak_move_pct"],
+                               (100.0/97.0-1.0)*100.0, places=3)
+
+    def test_call_does_not_treat_downward_move_as_favourable(self):
+        trade = dict(self.trade, option_type="CE")
+        r = evaluate_decay_shadow(trade, underlying_price=97.0, option_price=9.0,
+                                  when=self.t0+timedelta(minutes=100))
+        self.assertEqual(r["shadow_exit_planner_verdict"], "NO_DECAY_EXIT_SIGNAL_SHADOW")
+        self.assertFalse(r["shadow_exit_planner_qualified_move"])
+
     def test_no_signal_without_underlying_move(self):
         r = evaluate_decay_shadow(self.trade, underlying_price=100.2, option_price=9.0,
                                   when=self.t0+timedelta(minutes=100))
