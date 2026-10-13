@@ -235,6 +235,8 @@ class PaperTradeJournal:
             "entry_minute": candidate.get("entry_minute", ""), "entry_premium": candidate.get("entry_premium", ""),
             "f_time_0945": candidate.get("f_time_0945", ""), "f_premium_5": candidate.get("f_premium_5", ""),
             "f_all": candidate.get("f_all", ""), "day_regime": str(candidate.get("day_regime") or ""),
+            "rule_verdict": str(candidate.get("rule_verdict") or ""), "rule_reasons": str(candidate.get("rule_reasons") or ""),
+            "rule_nifty_pct_open": candidate.get("rule_nifty_pct_open", ""),
             "event_like": candidate.get("event_like", ""), "event_gap_pct": candidate.get("event_gap_pct", ""),
             "event_rvol": candidate.get("event_rvol", ""), "event_move_open_pct": candidate.get("event_move_open_pct", ""),
             "event_agrees": candidate.get("event_agrees", ""),

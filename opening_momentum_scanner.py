@@ -833,6 +833,20 @@ class OpeningMomentumScanner:
                             _ep, current_time, entry_tags.regime_of(getattr(self, "_market_context", None))))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # entry rules (see entry_rules.py): tag in SHADOW, skip the entry in ENFORCE
+                        import entry_rules
+                        if entry_rules.mode() != "OFF":
+                            _same = sum(1 for x in self.paper_journal.open_positions(current_time)
+                                        if str(x.get("direction") or "").upper() == str(candidate.direction).upper())
+                            _ctx = getattr(self, "_market_context", None) or {}
+                            _verdict = entry_rules.evaluate(candidate.direction, current_time.hour * 60 + current_time.minute,
+                                                            _ctx.get("nifty_pct_open"), _same)
+                            candidate_record.update(_verdict)
+                            if entry_rules.mode() == "ENFORCE" and _verdict["rule_verdict"] != "PASS":
+                                candidate.paper_trade_status = "ENTRY_RULE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
                         candidate=candidate_record,
