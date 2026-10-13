@@ -825,6 +825,14 @@ class OpeningMomentumScanner:
                             getattr(self, "_event_ind", {}), current_time))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: entry-quality flags (see entry_tags.py)
+                        import entry_tags
+                        _opt = plan.get("option_contract") or {}
+                        _ep = _opt.get("limit_price") or _opt.get("ask") or _opt.get("ltp")
+                        candidate_record.update(entry_tags.evaluate(
+                            _ep, current_time, entry_tags.regime_of(getattr(self, "_market_context", None))))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
                         candidate=candidate_record,
