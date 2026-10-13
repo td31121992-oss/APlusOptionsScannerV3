@@ -44,17 +44,24 @@ def evaluate_decay_shadow(trade: Mapping[str, Any], *, underlying_price: Any,
         when = when.replace(tzinfo=entry_time.tzinfo)
     elif when.tzinfo and entry_time.tzinfo is None:
         entry_time = entry_time.replace(tzinfo=when.tzinfo)
-    old_up = max(u0, _num(trade.get("shadow_underlying_peak"), u0))
+    option_type = str(trade.get("option_type") or "").strip().upper()
+    is_put = option_type in {"PE", "PUT"}
+    # Calls favour a rising underlying; puts favour a falling underlying.
+    old_peak = _num(trade.get("shadow_underlying_peak"), u0)
+    old_peak = min(u0, old_peak) if is_put else max(u0, old_peak)
     old_op = max(o0, _num(trade.get("shadow_option_peak"), o0))
-    old_up_at = _dt(trade.get("shadow_underlying_peak_at")) or entry_time
+    old_peak_at = _dt(trade.get("shadow_underlying_peak_at")) or entry_time
     old_op_at = _dt(trade.get("shadow_option_peak_at")) or entry_time
-    up, up_at = (u, when) if u > old_up else (old_up, old_up_at)
+    is_new_favourable_extreme = u < old_peak if is_put else u > old_peak
+    peak, peak_at = (u, when) if is_new_favourable_extreme else (old_peak, old_peak_at)
     op, op_at = (o, when) if o > old_op else (old_op, old_op_at)
 
     holding = max(0.0, (when-entry_time).total_seconds()/60.0)
-    stalled = max(0.0, (when-up_at).total_seconds()/60.0)
-    move = (u/u0-1)*100
-    peak_move = (up/u0-1)*100
+    stalled = max(0.0, (when-peak_at).total_seconds()/60.0)
+    # These are direction-adjusted favourable-move metrics; positive means the
+    # underlying moved in the option's favour. For puts the favourable extreme is a low.
+    move = ((u0/u)-1)*100 if is_put else (u/u0-1)*100
+    peak_move = ((u0/peak)-1)*100 if is_put else (peak/u0-1)*100
     retrace = peak_move-move
     option_change = (o/o0-1)*100
     option_dd = max(0.0, (op-o)/op*100) if op else 0.0
@@ -79,8 +86,8 @@ def evaluate_decay_shadow(trade: Mapping[str, Any], *, underlying_price: Any,
         "shadow_exit_planner_retrace_from_peak_pct_points": round(retrace, 4),
         "shadow_exit_planner_option_change_pct": round(option_change, 4),
         "shadow_exit_planner_option_drawdown_pct": round(option_dd, 4),
-        "shadow_underlying_peak": round(up, 4),
-        "shadow_underlying_peak_at": up_at.isoformat(),
+        "shadow_underlying_peak": round(peak, 4),
+        "shadow_underlying_peak_at": peak_at.isoformat(),
         "shadow_option_peak": round(op, 4),
         "shadow_option_peak_at": op_at.isoformat(),
         "shadow_exit_planner_qualified_move": bool(qualified),
