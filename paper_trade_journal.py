@@ -82,6 +82,13 @@ class PaperTradeJournal:
         "last_quote_time", "last_option_price", "highest_option_price",
         "lowest_option_price", "mfe_amount", "mae_amount",
         "highest_option_price_at", "lowest_option_price_at",
+        "shadow_exit_planner_mode", "shadow_exit_planner_verdict", "shadow_exit_planner_updated_at",
+        "shadow_exit_planner_holding_minutes", "shadow_exit_planner_minutes_since_underlying_peak",
+        "shadow_exit_planner_underlying_move_pct", "shadow_exit_planner_underlying_peak_move_pct",
+        "shadow_exit_planner_retrace_from_peak_pct_points", "shadow_exit_planner_option_change_pct",
+        "shadow_exit_planner_option_drawdown_pct", "shadow_underlying_peak", "shadow_underlying_peak_at",
+        "shadow_option_peak", "shadow_option_peak_at", "shadow_exit_planner_qualified_move",
+        "shadow_exit_planner_underlying_stalled", "shadow_exit_planner_note",
         "last_successful_mark_at", "last_mark_evaluated_at", "mark_status",
         "last_mark_error_type", "last_mark_error_status",
         "position_lifecycle_status", "position_status_reason",
@@ -394,6 +401,7 @@ class PaperTradeJournal:
     def update_open_positions(
         self, *, option_quotes: Mapping[str, Any], when: datetime,
         force_close: bool = False, force_close_reason: str = "SESSION_END",
+        underlying_quotes: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Update PAPER positions from real option LTPs; no broker orders."""
         self._ensure_date(when.date())
@@ -465,6 +473,20 @@ class PaperTradeJournal:
             trade["lowest_option_price"] = round(low, 4)
             trade["mfe_amount"] = round((high - entry) * qty, 2)
             trade["mae_amount"] = round((low - entry) * qty, 2)
+
+            # APLUS_OPTION_DECAY_SHADOW_V1: research-only; isolated from exits.
+            try:
+                from option_decay_shadow import evaluate_decay_shadow
+                raw_underlying = (underlying_quotes or {}).get(str(trade.get("symbol") or "").upper())
+                underlying_price = self._number(raw_underlying.get("last_price")) if isinstance(raw_underlying, Mapping) else 0.0
+                if underlying_price > 0:
+                    trade.update(evaluate_decay_shadow(
+                        trade, underlying_price=underlying_price,
+                        option_price=price, when=when,
+                    ))
+            except Exception as shadow_exc:  # noqa: BLE001
+                logger.debug("Option decay shadow skipped for %s: %s",
+                             trade.get("paper_trade_id"), shadow_exc)
 
             for hit_field, target_field in (
                 ("target1_hit_at", "option_target1"),

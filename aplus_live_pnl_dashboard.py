@@ -399,6 +399,9 @@ def snapshot():
             "setup": str(t.get("setup_family") or "-"),
             "quality": _num(t.get("momentum_score") or t.get("trade_quality_score")),
             "clean": _num(t.get("clean_trend_score")),
+            "shadow_verdict": str(t.get("shadow_exit_planner_verdict") or "NOT_AVAILABLE"),
+            "shadow_option_drawdown_pct": _num(t.get("shadow_exit_planner_option_drawdown_pct")),
+            "shadow_stall_minutes": _num(t.get("shadow_exit_planner_minutes_since_underlying_peak")),
             **_hl_fields(t),
         })
 
@@ -465,7 +468,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th><th>Decay Shadow</th><th class="right">Opt DD / Stall</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -492,7 +495,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td title="Shadow-only research; never an exit instruction">${x.shadow_verdict||"NOT_AVAILABLE"}</td><td class="right">${Number(x.shadow_option_drawdown_pct||0).toFixed(2)}% / ${Number(x.shadow_stall_minutes||0).toFixed(0)}m</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);

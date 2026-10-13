@@ -517,11 +517,30 @@ class OpeningMomentumScanner:
             pass
 
         # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
+        # Reuse the same NSE_EQ batch already fetched; no extra API request.
+        underlying_quotes_for_shadow = {}
+        try:
+            underlying_segment = quote_map.get("NSE_EQ", {})
+            if isinstance(underlying_segment, Mapping):
+                for instrument in universe:
+                    sid = str(instrument.security_id)
+                    raw_underlying = underlying_segment.get(sid)
+                    if raw_underlying is None:
+                        try:
+                            raw_underlying = underlying_segment.get(int(sid))
+                        except (TypeError, ValueError):
+                            raw_underlying = None
+                    if isinstance(raw_underlying, Mapping):
+                        underlying_quotes_for_shadow[str(instrument.symbol).upper()] = raw_underlying
+        except Exception as shadow_exc:  # noqa: BLE001
+            logger.debug("Underlying quote map for decay shadow unavailable: %s", shadow_exc)
+
         paper_position_update = self._monitor_paper_positions_from_quote_map(
             now=current_time,
             quote_map=quote_map,
             positions=open_paper_positions,
             force_close=False,
+            underlying_quotes=underlying_quotes_for_shadow,
         )
 
         radar_ranked = sorted(
@@ -1186,6 +1205,7 @@ class OpeningMomentumScanner:
         quote_map: Mapping[str, Any],
         positions: list[Mapping[str, Any]] | None,
         force_close: bool,
+        underlying_quotes: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         active = list(positions or [])
         if not active:
@@ -1212,6 +1232,7 @@ class OpeningMomentumScanner:
                 when=now,
                 force_close=force_close,
                 force_close_reason="SESSION_END",
+                underlying_quotes=underlying_quotes,
             )
             return {
                 "closed": closed,
