@@ -48,8 +48,8 @@ def evaluate_decay_shadow(trade: Mapping[str, Any], *, underlying_price: Any,
     old_op = max(o0, _num(trade.get("shadow_option_peak"), o0))
     old_up_at = _dt(trade.get("shadow_underlying_peak_at")) or entry_time
     old_op_at = _dt(trade.get("shadow_option_peak_at")) or entry_time
-    up, up_at = (u, when) if u >= old_up else (old_up, old_up_at)
-    op, op_at = (o, when) if o >= old_op else (old_op, old_op_at)
+    up, up_at = (u, when) if u > old_up else (old_up, old_up_at)
+    op, op_at = (o, when) if o > old_op else (old_op, old_op_at)
 
     holding = max(0.0, (when-entry_time).total_seconds()/60.0)
     stalled = max(0.0, (when-up_at).total_seconds()/60.0)
