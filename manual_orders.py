@@ -111,3 +111,23 @@ def validate_stop(trade: Mapping[str, Any], stop: float) -> tuple[bool, str]:
 
 def enabled() -> bool:
     return os.getenv("APLUS_MANUAL_CONTROLS", "ON").strip().upper() != "OFF"
+
+
+def heartbeat(root: Path | str, when: datetime | None = None) -> None:
+    """Called by the journal on every position update, so the dashboard can tell whether the RUNNING scanner understands manual
+    commands (a scanner started before this feature existed never writes it)."""
+    try:
+        path = _dir(root) / "heartbeat.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"ts": (when or datetime.now()).isoformat(timespec="seconds")}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def scanner_ready(root: Path | str, max_age_seconds: int = 240, now: datetime | None = None) -> bool:
+    try:
+        ts = json.loads((_dir(root) / "heartbeat.json").read_text(encoding="utf-8"))["ts"]
+        age = ((now or datetime.now()) - datetime.fromisoformat(ts).replace(tzinfo=None)).total_seconds()
+        return -5 <= age <= max_age_seconds
+    except (OSError, ValueError, KeyError, TypeError):
+        return False

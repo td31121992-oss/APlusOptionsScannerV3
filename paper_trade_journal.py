@@ -597,6 +597,7 @@ class PaperTradeJournal:
             if not manual_orders.enabled():
                 return
             root = getattr(self, "manual_root", None) or self.state_dir.parent.parent
+            manual_orders.heartbeat(root, when)
             state = manual_orders.desired_state(manual_orders.read(root, when.date().isoformat()))
             for trade in self.trades:
                 if str(trade.get("status") or "").upper() != "OPEN":

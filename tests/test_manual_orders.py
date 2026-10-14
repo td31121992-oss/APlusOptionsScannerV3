@@ -44,6 +44,22 @@ class ManualOrderFileTests(unittest.TestCase):
         self.assertFalse(mo.validate_stop({**trade, "status": "CLOSED"}, 11.0)[0])
 
 
+class HeartbeatTests(unittest.TestCase):
+    def test_ready_only_with_fresh_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(mo.scanner_ready(tmp, now=T(5).replace(tzinfo=None)))
+            mo.heartbeat(tmp, T(5).replace(tzinfo=None))
+            self.assertTrue(mo.scanner_ready(tmp, now=T(6).replace(tzinfo=None)))
+            self.assertFalse(mo.scanner_ready(tmp, now=datetime(2026, 10, 14, 11, 0)))     # stale
+
+    def test_journal_writes_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            j = _journal(tmp, "2026-10-14", [_open_trade(entry_time="2026-10-14T10:00:00+05:30")])
+            j.manual_root = Path(tmp)
+            j.update_open_positions(option_quotes={"123": {"last_price": 10.2}}, when=T(1))
+            self.assertTrue((Path(tmp) / "data" / "manual_orders" / "heartbeat.json").exists())
+
+
 class JournalAppliesManualCommands(unittest.TestCase):
     def _journal(self, tmp):
         j = _journal(tmp, "2026-10-14", [_open_trade(entry_time="2026-10-14T10:00:00+05:30")])

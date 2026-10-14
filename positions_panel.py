@@ -69,6 +69,7 @@ function ctl(x){
   +'<div class="preview small">Type a % to see the stop price for this trade.</div>'
   +'<div class="line"><button class="setstop">Set stop</button>'+(x.manual_stop?'<button class="grey clrstop">Clear</button>':'')+'</div>'
   +'<div class="line"><button class="red exitnow">Exit now at market</button></div>'
+  +(data&&data.manual_ready===false?'<div class="msg" style="color:#ffb454">Manual controls are NOT active yet: the running scanner has not loaded them (needs a restart). Commands are refused until then.</div>':'')
   +'<div class="msg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade; applies at the next position update.</div></div>'}
 function stopPrice(box){
  var p=parseFloat(box.querySelector(".pctin").value),d=box.querySelector(".dirsel").value,e=Number(box.getAttribute("data-entry"));

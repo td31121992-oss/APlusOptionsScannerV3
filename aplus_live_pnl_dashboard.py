@@ -406,6 +406,7 @@ def snapshot():
         })
 
     return {
+        "manual_ready": (lambda m: m.enabled() and m.scanner_ready(ROOT))(__import__("manual_orders")),
         "updated_at": datetime.now().strftime("%H:%M:%S"),
         "trading_date": datetime.now().strftime("%d-%b-%Y"),
         "trading_day": datetime.now().strftime("%A"),
@@ -692,6 +693,8 @@ class Handler(BaseHTTPRequestHandler):
                 import manual_orders
                 if not manual_orders.enabled():
                     return reply(403, {"ok": False, "message": "Manual controls are switched off (APLUS_MANUAL_CONTROLS=OFF)."})
+                if not manual_orders.scanner_ready(ROOT):
+                    return reply(503, {"ok": False, "message": "The running scanner has not loaded manual controls yet (it needs a restart), so nothing was queued. Use the stop-loss/exit it already has, or restart the scanner."})
                 length = min(int(self.headers.get("Content-Length") or 0), 2000)
                 req = json.loads(self.rfile.read(length) or b"{}")
                 tid = str(req.get("id", "")).strip()
