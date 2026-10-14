@@ -135,7 +135,7 @@ def fetch_history(security_id: int, days: int = 16) -> pd.DataFrame | None:
     end = (date.today() + timedelta(days=1)).isoformat()
     r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=30, json={
         "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
-        "fromDate": f"{start} 09:15:00", "toDate": f"{end} 15:30:00"},
+        "fromDate": f"{start} 09:00:00", "toDate": f"{end} 15:30:00"},
         headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
     if r.status_code != 200:
         return None

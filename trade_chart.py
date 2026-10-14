@@ -68,9 +68,10 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
     token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+    # fromDate must be 09:00:00, not 09:15:00: Dhan drops the 09:15 minute otherwise and the first candle loses the real open / low.
     r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=25, json={
         "securityId": str(int(security_id)), "exchangeSegment": segment, "instrument": instrument, "interval": "5", "oi": False,
-        "fromDate": f"{day} 09:15:00", "toDate": f"{day} 15:30:00"},
+        "fromDate": f"{day} 09:00:00", "toDate": f"{day} 15:30:00"},
         headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
     if r.status_code != 200:
         return []

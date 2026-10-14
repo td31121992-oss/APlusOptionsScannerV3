@@ -156,7 +156,7 @@ def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
         security_id = int(getattr(underlying, "security_id"))
         segment = str(getattr(underlying, "exchange_segment", "NSE_EQ") or "NSE_EQ").upper()
 
-        start = datetime.strptime(f"{safe_day} 09:15:00", "%Y-%m-%d %H:%M:%S")
+        start = datetime.strptime(f"{safe_day} 09:00:00", "%Y-%m-%d %H:%M:%S")
         end = datetime.now()
         if end <= start:
             return []

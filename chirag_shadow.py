@@ -256,7 +256,7 @@ class Dhan:
     def intraday(self, sid: int | str, segment: str, instrument: str, start: str, end: str) -> pd.DataFrame | None:
         return self.frame(self.post("https://api.dhan.co/v2/charts/intraday", {
             "securityId": str(sid), "exchangeSegment": segment, "instrument": instrument, "interval": "5", "oi": False,
-            "fromDate": f"{start} 09:15:00", "toDate": f"{end} 15:30:00"}))
+            "fromDate": f"{start} 09:00:00", "toDate": f"{end} 15:30:00"}))
 
     def daily(self, sid: int | str) -> pd.DataFrame | None:
         start = (date.today() - timedelta(days=170)).isoformat()
