@@ -45,7 +45,10 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
 STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0)}
 STOCK_BURST_ARM_PCT = 0.5
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS)
+# Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
+# instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
+VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS)
 
 
 def _first_lock_pct() -> float:
@@ -257,6 +260,8 @@ class PaperTradeJournal:
             "ctx_mins_since_ext": candidate.get("ctx_mins_since_ext", ""), "ctx_last15_pct": candidate.get("ctx_last15_pct", ""),
             "ctx_last30_pct": candidate.get("ctx_last30_pct", ""), "ctx_vs_vwap_pct": candidate.get("ctx_vs_vwap_pct", ""),
             "ctx_at_extreme": candidate.get("ctx_at_extreme", ""), "ctx_fading": candidate.get("ctx_fading", ""),
+            "ctx_vol30_pct": candidate.get("ctx_vol30_pct", ""), "ctx_vol60_pct": candidate.get("ctx_vol60_pct", ""),
+            "ctx_vol_stop30_pct": candidate.get("ctx_vol_stop30_pct", ""), "ctx_vol_stop60_pct": candidate.get("ctx_vol_stop60_pct", ""),
             "rrg_sector": str(candidate.get("rrg_sector") or ""), "rrg_index": str(candidate.get("rrg_index") or ""),
             "rrg_ratio": candidate.get("rrg_ratio", ""), "rrg_momentum": candidate.get("rrg_momentum", ""),
             "rrg_quadrant": str(candidate.get("rrg_quadrant") or ""), "rrg_aligned": candidate.get("rrg_aligned", ""),
@@ -521,7 +526,7 @@ class PaperTradeJournal:
                     protected_stop = max(protected_stop, runner_floor, gain_trail)
                     trade["runner_stop"] = round(protected_stop, 4)
 
-            self._record_stop_shadows(trade, entry, high, price, when)
+            self._record_stop_shadows(trade, entry, high, price, when, protected_stop)
 
             manual_stop = self._number(trade.get("manual_stop"))
             manual_active = manual_stop > 0 and manual_stop > protected_stop            # tighten only: never loosens a stop
@@ -696,11 +701,16 @@ class PaperTradeJournal:
             trade["shadow_half10_exit_at"] = when.isoformat()
             trade["shadow_half10_exit_price"] = round(price, 4)
 
-    def _record_stop_shadows(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
+    def _record_stop_shadows(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime,
+                             protected_stop: float = 0.0) -> None:
         try:
             floors = self._stop_shadow_floors(trade, entry, high)
         except (TypeError, ValueError):
             return
+        for name, field in VOL_STOP_SHADOWS.items():                 # tighter first stop where the stock has been quiet; real locks still apply
+            pct = self._number(trade.get(field))
+            if entry > 0 and 0 < pct < 20.0:
+                floors[name] = max(entry * (1.0 - pct / 100.0), float(protected_stop or 0.0))
         self._record_half10_shadow(trade, entry, high, price, when)
         for name, pct in TARGET_SHADOWS.items():
             if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):

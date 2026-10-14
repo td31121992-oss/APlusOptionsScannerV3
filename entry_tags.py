@@ -73,10 +73,18 @@ def entry_context(candles, direction: str, ltp: Any = None) -> dict[str, Any]:
         vwap = sum((float(c.high) + float(c.low) + float(c.close)) / 3.0 * float(c.volume or 0) for c in cs) / vol if vol > 0 else px
         done = sign * (px / o - 1.0) * 100.0
         last15 = sign * (px / c15 - 1.0) * 100.0
+        ranges = [(float(c.high) - float(c.low)) / float(c.close) * 100.0 for c in cs if float(c.close) > 0]
+        vol30 = sum(ranges[-6:]) / len(ranges[-6:])
+        vol60 = sum(ranges[-12:]) / len(ranges[-12:])
+        # option stop sized to the stock's own recent noise: 2 x the average 5-minute range x 23 (option leverage), kept between 8% and 20%
+        vstop30 = max(8.0, min(20.0, 2.0 * vol30 * 23.0))
+        vstop60 = max(8.0, min(20.0, 2.0 * vol60 * 23.0))
         at_ext = pos >= 0.9 and mins_since <= 10.0
         return {"ctx_done_move_pct": round(done, 2), "ctx_range_pos": round(pos, 2), "ctx_mins_since_ext": round(mins_since),
                 "ctx_last15_pct": round(last15, 2), "ctx_last30_pct": round(sign * (px / c30 - 1.0) * 100.0, 2),
                 "ctx_vs_vwap_pct": round(sign * (px / vwap - 1.0) * 100.0, 2), "ctx_at_extreme": bool(at_ext),
-                "ctx_fading": bool((at_ext or done >= 2.0) and last15 <= 0.0)}
+                "ctx_fading": bool((at_ext or done >= 2.0) and last15 <= 0.0),
+                "ctx_vol30_pct": round(vol30, 3), "ctx_vol60_pct": round(vol60, 3),
+                "ctx_vol_stop30_pct": round(vstop30, 1), "ctx_vol_stop60_pct": round(vstop60, 1)}
     except Exception:                                      # noqa: BLE001 - a shadow tag must never affect trading
         return {}

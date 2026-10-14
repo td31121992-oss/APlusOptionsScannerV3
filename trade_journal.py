@@ -130,7 +130,9 @@ def _context_text(t: dict[str, Any]) -> str:
         flags.append("FADING")
     return (f"stock already {float(t['ctx_done_move_pct']):+.2f}% from the open | {float(t['ctx_range_pos']) * 100:.0f}% of the way to the day's "
             f"extreme, set {t.get('ctx_mins_since_ext')} min ago | last 15m {float(t['ctx_last15_pct']):+.2f}%, last 30m {float(t['ctx_last30_pct']):+.2f}% | "
-            f"{float(t['ctx_vs_vwap_pct']):+.2f}% from VWAP" + (" | " + ", ".join(flags) if flags else ""))
+            f"{float(t['ctx_vs_vwap_pct']):+.2f}% from VWAP" + (" | " + ", ".join(flags) if flags else "")
+            + (f" | volatility-sized stop would be -{t['ctx_vol_stop30_pct']}% (30m) / -{t['ctx_vol_stop60_pct']}% (60m) instead of -20%"
+               if t.get("ctx_vol_stop30_pct", "") != "" else ""))
 
 
 def _rrg_text(t: dict[str, Any]) -> str:
