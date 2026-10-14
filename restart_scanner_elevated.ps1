@@ -3,7 +3,7 @@
 #
 #   powershell -ExecutionPolicy Bypass -File .\restart_scanner_elevated.ps1
 #
-# It stops exactly ONE process whose command line is "<project>\main.py --intraday-movement", waits for it to exit, then starts
+# It stops exactly ONE scanner (a launcher + its child interpreter) whose command line is "<project>\main.py --intraday-movement", waits for it to exit, then starts
 # run_intraday_movement.bat. Open paper trades are kept in data\intraday_movement\paper_trade_journal.json and reload on start.
 # Nothing is killed unless exactly one scanner process is found.
 param([string]$ProjectRoot = "C:\Users\Aplus\Desktop\APlusOptionsScannerV3")
@@ -23,14 +23,19 @@ if (-not (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security
 }
 
 $p = ScannerProcesses
-if ($p.Count -ne 1) {
-    Write-Host "Found $($p.Count) scanner process(es); expected exactly 1. Nothing was stopped." -ForegroundColor Yellow
-    $p | ForEach-Object { Write-Host ("  PID {0}: {1}" -f $_.ProcessId, $_.CommandLine) }
+# A venv python.exe is a launcher that starts the real interpreter, so one scanner shows up as a parent + child pair.
+# Count a scanner only once: the processes whose parent is not itself one of the matches.
+$ids = @($p | ForEach-Object { [int]$_.ProcessId })
+$roots = @($p | Where-Object { $ids -notcontains [int]$_.ParentProcessId })
+if ($roots.Count -ne 1) {
+    Write-Host "Found $($roots.Count) separate scanner(s) ($($p.Count) processes); expected exactly 1. Nothing was stopped." -ForegroundColor Yellow
+    $p | ForEach-Object { Write-Host ("  PID {0} (parent {1}): {2}" -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine) }
     exit 2
 }
-$scannerPid = [int]$p[0].ProcessId
-Write-Host "Stopping scanner PID $scannerPid ..."
-Stop-Process -Id $scannerPid
+Write-Host ("Stopping scanner: launcher PID {0} and {1} child process(es) ..." -f $roots[0].ProcessId, ($p.Count - 1))
+# children first, then the launcher
+foreach ($proc in @($p | Where-Object { [int]$_.ProcessId -ne [int]$roots[0].ProcessId })) { Stop-Process -Id ([int]$proc.ProcessId) -ErrorAction SilentlyContinue }
+Stop-Process -Id ([int]$roots[0].ProcessId) -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 if ((ScannerProcesses).Count -gt 0) { throw "Scanner is still running; launcher NOT started." }
 
