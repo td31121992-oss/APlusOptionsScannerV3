@@ -37,7 +37,15 @@ logger = logging.getLogger(__name__)
 # falls `dd` below its highest price. Names look like peak8_a30 (8% below the peak, active after +30%).
 PEAK_VARIANTS = [(dd, act) for act in (0.20, 0.30) for dd in (0.06, 0.08, 0.10, 0.12)]
 PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd, act in PEAK_VARIANTS)
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES
+# "Cash it and leave" shadows: the whole position is sold the moment the option first reaches +X% (limit fill at exactly +X%).
+# Tests the burst-scalping idea (catch a 10-20% option move, then look for the next trade) on real trades, next to the stop-based exits.
+TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
+# "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
+#   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
+#   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
+STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0)}
+STOCK_BURST_ARM_PCT = 0.5
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS)
 
 
 def _first_lock_pct() -> float:
@@ -585,8 +593,25 @@ class PaperTradeJournal:
                 if hi_at and trade.get("stock_at_high_for") != hi_at:       # the option just made a new peak: note where the stock was
                     trade["stock_at_high"] = round(price, 2)
                     trade["stock_at_high_for"] = hi_at
+                prev_max = self._number(trade.get("stock_move_fav_max_pct"))
+                new_max = max(fav, prev_max)
+                if fav > prev_max or not trade.get("stock_fav_max_at"):
+                    trade["stock_fav_max_at"] = when.isoformat()
                 trade["stock_move_fav_pct"] = round(fav, 3)
-                trade["stock_move_fav_max_pct"] = round(max(fav, self._number(trade.get("stock_move_fav_max_pct"))), 3)
+                trade["stock_move_fav_max_pct"] = round(new_max, 3)
+                if str(trade.get("status") or "").upper() == "OPEN" and new_max >= STOCK_BURST_ARM_PCT:
+                    try:
+                        since = (when - datetime.fromisoformat(str(trade["stock_fav_max_at"]))).total_seconds() / 60.0
+                    except (TypeError, ValueError):
+                        since = 0.0
+                    for sname, (kind, param) in STOCK_BURST_SHADOWS.items():
+                        if trade.get(f"shadow_{sname}_exit_at"):
+                            continue
+                        ended = ((new_max - fav) >= param * new_max) if kind == "giveback" else (since >= param and fav < new_max)
+                        if ended:
+                            trade[f"shadow_{sname}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                            trade[f"shadow_{sname}_exit_price"] = round(opt_now, 4)
+                            trade[f"shadow_{sname}_stock_best_pct"] = round(new_max, 3)
                 trade["stock_opt_gain_pct"] = round(gain, 2)
                 if abs(fav) >= 0.15:
                     trade["stock_opt_per_1pct"] = round(gain / fav, 1)        # option % gain per 1% stock move in our favour
@@ -677,6 +702,11 @@ class PaperTradeJournal:
         except (TypeError, ValueError):
             return
         self._record_half10_shadow(trade, entry, high, price, when)
+        for name, pct in TARGET_SHADOWS.items():
+            if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()
+                trade[f"shadow_{name}_exit_price"] = round(entry * (1.0 + pct), 4)
+                trade[f"shadow_{name}_floor"] = round(entry * (1.0 + pct), 4)
         for name, floor in floors.items():
             if floor > 0 and price <= floor and not trade.get(f"shadow_{name}_exit_at"):
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
