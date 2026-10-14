@@ -34,8 +34,12 @@ if (-not $Force) {
     $n = Get-Date
     if ($n.DayOfWeek -eq [DayOfWeek]::Saturday -or $n.DayOfWeek -eq [DayOfWeek]::Sunday) { exit 0 }
     $hm = [int]$n.ToString("HHmm")
-    if ($hm -lt 1430 -or $hm -gt 1455) {
-        Log "SKIP outside safe mid-session refresh window."
+    # Token refresh now runs in the morning (08:40) so the 24-hour token covers the whole next session; the old 14:30-14:55
+    # window is still allowed for a manual or fallback run.
+    $inMorning = ($hm -ge 830 -and $hm -le 910)
+    $inAfternoon = ($hm -ge 1430 -and $hm -le 1455)
+    if (-not ($inMorning -or $inAfternoon)) {
+        Log "SKIP outside the safe refresh windows (08:30-09:10 or 14:30-14:55)."
         exit 0
     }
 }
