@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 # falls `dd` below its highest price. Names look like peak8_a30 (8% below the peak, active after +30%).
 PEAK_VARIANTS = [(dd, act) for act in (0.20, 0.30) for dd in (0.06, 0.08, 0.10, 0.12)]
 PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd, act in PEAK_VARIANTS)
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES
+# "Cash it and leave" shadows: the whole position is sold the moment the option first reaches +X% (limit fill at exactly +X%).
+# Tests the burst-scalping idea (catch a 10-20% option move, then look for the next trade) on real trades, next to the stop-based exits.
+TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS)
 
 
 def _first_lock_pct() -> float:
@@ -673,6 +676,11 @@ class PaperTradeJournal:
         except (TypeError, ValueError):
             return
         self._record_half10_shadow(trade, entry, high, price, when)
+        for name, pct in TARGET_SHADOWS.items():
+            if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()
+                trade[f"shadow_{name}_exit_price"] = round(entry * (1.0 + pct), 4)
+                trade[f"shadow_{name}_floor"] = round(entry * (1.0 + pct), 4)
         for name, floor in floors.items():
             if floor > 0 and price <= floor and not trade.get(f"shadow_{name}_exit_at"):
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
