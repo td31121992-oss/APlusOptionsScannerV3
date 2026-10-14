@@ -821,6 +821,11 @@ class OpeningMomentumScanner:
                         candidate_record["ob_zone"] = f"{ob['zone_low']}-{ob['zone_high']}" if ob["state"] != "NONE" else ""
                     except Exception:         # noqa: BLE001 - never affects trading
                         candidate_record["ob_shadow"] = ""
+                    try:                      # shadow tag only: how stretched the stock already was at entry (see entry_tags.entry_context)
+                        import entry_tags as _et
+                        candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: market-breadth rule (see breadth_gate.py)
                         import breadth_gate
                         _ind_path = Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json"
