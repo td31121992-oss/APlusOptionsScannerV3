@@ -35,6 +35,8 @@ header h1{font-size:20px;margin:0;font-weight:800}.badge{background:#2a3350;colo
 .ctl input{flex:1;min-width:90px;background:#0e1527;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px;font-size:15px}
 .ctl button{border:0;border-radius:9px;padding:9px 12px;font-weight:800;font-size:14px;cursor:pointer;color:#fff;background:var(--blue)}
 .ctl button.red{background:#c23b3b}.ctl button.grey{background:#2a3350;color:#cdd7ee}.ctl .msg{font-size:12.5px;margin-top:6px;color:var(--muted)}
+.ctl select{background:#0e1527;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 8px;font-size:14px}.ctl .chip{padding:6px 9px;font-size:12.5px}.preview{margin-top:6px}
+.detail div.ctl{display:block}.detail .ctl div{display:block;padding:0}.detail .ctl .line{display:flex;padding:0}.detail .ctl .chips{flex-wrap:wrap}.detail .ctl b{color:var(--text)}
 .pend{color:#ffb454;font-weight:800;font-size:11px;margin-left:6px}
 nav{position:fixed;left:0;right:0;bottom:0;background:#0e1527;border-top:1px solid var(--line);display:flex;justify-content:space-around;padding:8px 0 calc(8px + env(safe-area-inset-bottom))}
 nav a{color:var(--muted);text-decoration:none;font-size:12px;font-weight:700;text-align:center;flex:1}nav a.on{color:var(--blue)}
@@ -56,13 +58,28 @@ function cls(n){return Number(n)>=0?"pos":"neg"}
 function sgn(n){n=Number(n)||0;return(n>0?"+":"")+n.toFixed(2)}
 function expiry(e){if(!e)return"";var m=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"],p=String(e).slice(0,10).split("-");return p.length==3?(p[2]+" "+m[Number(p[1])-1]):""}
 function ctl(x){
- var cur=Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),id=encodeURIComponent(x.id);
- return '<div class="ctl" data-id="'+x.id+'"><div><span>Current stop</span><b>'+(cur?cur.toFixed(2):"-")+'</b></div>'
-  +(x.manual_stop?'<div><span>Your manual stop</span><b>'+Number(x.manual_stop).toFixed(2)+'</b></div>':'')
-  +'<div class="line"><input type="number" inputmode="decimal" step="0.05" min="0" placeholder="New stop (below '+Number(x.last).toFixed(2)+')" class="stopin">'
-  +'<button class="setstop">Set stop</button>'+(x.manual_stop?'<button class="grey clrstop">Clear</button>':'')+'</div>'
+ var cur=Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),entry=Number(x.entry)||0,last=Number(x.last)||0;
+ return '<div class="ctl" data-id="'+x.id+'" data-entry="'+entry+'" data-cur="'+cur+'" data-last="'+last+'">'
+  +'<div class="line" style="justify-content:space-between"><span>Entry <b>'+entry.toFixed(2)+'</b></span><span>Last <b>'+last.toFixed(2)+'</b></span><span>Current stop <b>'+(cur?cur.toFixed(2):"-")+'</b></span></div>'
+  +(x.manual_stop?'<div class="line"><span>Your manual stop <b>'+Number(x.manual_stop).toFixed(2)+'</b> ('+((Number(x.manual_stop)/entry-1)*100).toFixed(1)+'% from entry)</span></div>':'')
+  +'<div class="line"><input type="number" inputmode="decimal" step="0.5" min="0" placeholder="Stop %" class="pctin">'
+  +'<select class="dirsel"><option value="below">% below entry</option><option value="above">% above entry (lock profit)</option></select></div>'
+  +'<div class="line chips"><button class="grey chip" data-d="below" data-p="5">5% below</button><button class="grey chip" data-d="below" data-p="10">10% below</button>'
+  +'<button class="grey chip" data-d="below" data-p="15">15% below</button><button class="grey chip" data-d="above" data-p="0">At entry</button><button class="grey chip" data-d="above" data-p="3">+3%</button></div>'
+  +'<div class="preview small">Type a % to see the stop price for this trade.</div>'
+  +'<div class="line"><button class="setstop">Set stop</button>'+(x.manual_stop?'<button class="grey clrstop">Clear</button>':'')+'</div>'
   +'<div class="line"><button class="red exitnow">Exit now at market</button></div>'
-  +'<div class="msg">A manual stop can only tighten risk. Paper trade; applies at the next position update.</div></div>'}
+  +'<div class="msg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade; applies at the next position update.</div></div>'}
+function stopPrice(box){
+ var p=parseFloat(box.querySelector(".pctin").value),d=box.querySelector(".dirsel").value,e=Number(box.getAttribute("data-entry"));
+ if(!(p>=0)||!(e>0))return null;var v=e*(1+(d==="above"?1:-1)*p/100);return Math.round(v/0.05)*0.05}
+function preview(box){
+ var v=stopPrice(box),pv=box.querySelector(".preview"),cur=Number(box.getAttribute("data-cur")),last=Number(box.getAttribute("data-last")),e=Number(box.getAttribute("data-entry"));
+ if(v==null){pv.textContent="Type a % to see the stop price for this trade.";pv.style.color="";return}
+ var risk=(v/e-1)*100,txt="Stop = "+v.toFixed(2)+" ("+(risk>=0?"+":"")+risk.toFixed(1)+"% from entry "+e.toFixed(2)+")",bad="";
+ if(v<=cur)bad="Not allowed: must be above the current stop "+cur.toFixed(2)+" (a manual stop can only tighten).";
+ else if(last>0&&v>=last)bad="Too high: the last price is "+last.toFixed(2)+". Use Exit now to leave at the market.";
+ pv.textContent=bad?txt+" - "+bad:txt+" - this is "+((1-v/last)*100).toFixed(1)+"% below the last price.";pv.style.color=bad?"#ff6363":"#2ecc71"}
 function act(url,body,box){var m=box.querySelector(".msg");m.textContent="Sending...";
  fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){m.textContent=d.message||"Done";m.style.color=d.ok?"#2ecc71":"#ff6363";if(d.ok)setTimeout(load,1500)}).catch(function(){m.textContent="Could not reach the dashboard.";m.style.color="#ff6363"})}
 function render(){
@@ -97,11 +114,14 @@ function render(){
   +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div>'
   +(isOpen?ctl(x):"")+'</div></div>'}).join("")
 }
+document.getElementById("list").addEventListener("input",function(e){var b=e.target.closest(".ctl");if(b)preview(b)});
+document.getElementById("list").addEventListener("change",function(e){var b=e.target.closest(".ctl");if(b)preview(b)});
 document.getElementById("list").addEventListener("click",function(e){
  var box=e.target.closest(".ctl");
  if(box){var id=box.getAttribute("data-id");
-  if(e.target.classList.contains("setstop")){var v=parseFloat(box.querySelector(".stopin").value);if(!(v>0)){var m=box.querySelector(".msg");m.textContent="Enter a stop price first.";m.style.color="#ff6363";return}
-   if(confirm("Set stop-loss at "+v.toFixed(2)+" for this paper trade?"))act("/api/manual-stop",{id:id,stop:v},box)}
+  if(e.target.classList.contains("chip")){box.querySelector(".pctin").value=e.target.getAttribute("data-p");box.querySelector(".dirsel").value=e.target.getAttribute("data-d");preview(box);return}
+  if(e.target.classList.contains("setstop")){var v=stopPrice(box);if(v==null||!(v>0)){var m=box.querySelector(".msg");m.textContent="Enter the stop % first.";m.style.color="#ff6363";return}
+   if(confirm("Set stop-loss at "+v.toFixed(2)+" ("+box.querySelector(".pctin").value+"% "+box.querySelector(".dirsel").value+" entry) for this paper trade?"))act("/api/manual-stop",{id:id,stop:Math.round(v*100)/100},box)}
   else if(e.target.classList.contains("clrstop")){act("/api/manual-stop",{id:id,stop:0},box)}
   else if(e.target.classList.contains("exitnow")){if(confirm("Exit this paper trade now at the market price?"))act("/api/manual-exit",{id:id},box)}
   return}
@@ -109,7 +129,7 @@ document.getElementById("list").addEventListener("click",function(e){
 document.querySelector(".tabs").addEventListener("click",function(e){var t=e.target.getAttribute("data-t");if(t){tab=t;render()}});
 document.getElementById("flt").addEventListener("click",function(e){var p=e.target.getAttribute("data-p");if(p){pf=p;render()}});
 document.getElementById("share").addEventListener("click",function(){var d=data||{},txt="APlus paper P&L "+inr(d.total_pnl)+" on "+(d.trade_count||0)+" positions ("+(d.trading_date||"")+") - managed by Mr. Darpan Bobhate";if(navigator.share){navigator.share({title:"APlus positions",text:txt}).catch(function(){})}else if(navigator.clipboard){navigator.clipboard.writeText(txt);document.getElementById("share").textContent="Copied"}});
-function load(){fetch("/api/snapshot",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d;var a=document.activeElement;if(!(a&&a.classList&&a.classList.contains("stopin")))render()}).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
+function load(){fetch("/api/snapshot",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d;var a=document.activeElement;if(!(a&&a.classList&&(a.classList.contains("pctin")||a.classList.contains("dirsel"))))render()}).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
 load();setInterval(load,5000);
 </script></body></html>
 """
