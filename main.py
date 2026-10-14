@@ -7,6 +7,7 @@ import time
 from analytics.pipeline import AnalyticsPipeline
 from config import AppConfig
 from core.dhan_client import DhanClient
+from core.market_data import build_client
 from core.instrument_loader import InstrumentLoader
 from core.option_chain import OptionChainService
 from core.scanner import Scanner
@@ -24,7 +25,7 @@ logger = get_logger(__name__)
 
 def build_scanner(config: AppConfig) -> Scanner:
     """Build the validated full-universe option-chain analytics scanner."""
-    client = DhanClient(config.dhan)
+    client = build_client(config)
     return Scanner(
         loader=InstrumentLoader(config),
         option_chain=OptionChainService(client),
@@ -44,7 +45,7 @@ def build_scanner(config: AppConfig) -> Scanner:
 
 def build_intraday_movement_scanner(config: AppConfig) -> OpeningMomentumScanner:
     """Build the continuous 09:15-15:30 stateful F&O movement scanner."""
-    client = DhanClient(config.dhan)
+    client = build_client(config)
     return OpeningMomentumScanner(
         config=config,
         client=client,
