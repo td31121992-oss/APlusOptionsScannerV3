@@ -469,7 +469,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th><th>Manage</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -496,10 +496,59 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right">${x.high?fmt(x.high):"-"} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
+</script>
+<style>
+.mgbtn{background:#1c4e80;color:#fff;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer}
+#mgback{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:10000}
+#mgbox{background:#121a2d;border:1px solid #27334d;border-radius:14px;padding:18px;width:min(440px,94vw);color:#e7eefc;font-family:Segoe UI,Arial,sans-serif}
+#mgbox h3{margin:0 0 4px;font-size:18px}#mgbox .mgrow{display:flex;gap:8px;align-items:center;margin-top:9px;flex-wrap:wrap}
+#mgbox .mgkv{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:#8ea0bd}#mgbox .mgkv b{color:#e7eefc}
+#mgbox input,#mgbox select{background:#0e1527;border:1px solid #27334d;color:#e7eefc;border-radius:9px;padding:9px 10px;font-size:15px}
+#mgbox input{width:110px}#mgbox button{border:0;border-radius:9px;padding:9px 12px;font-weight:800;cursor:pointer;color:#fff;background:#4c8dff}
+#mgbox button.grey{background:#2a3350;color:#cdd7ee}#mgbox button.red{background:#c23b3b}#mgbox .mgmsg{font-size:12.5px;margin-top:9px;color:#8ea0bd}
+#mgprev{font-size:13px;margin-top:9px;color:#8ea0bd}
+</style>
+<div id="mgback"><div id="mgbox">
+ <h3 id="mgtitle">Manage trade</h3><div class="mgkv" id="mginfo"></div>
+ <div class="mgrow"><input id="mgpct" type="number" step="0.5" min="0" placeholder="Stop %"><select id="mgdir"><option value="below">% below entry</option><option value="above">% above entry (lock profit)</option></select></div>
+ <div class="mgrow"><button class="grey mgchip" data-d="below" data-p="5">5% below</button><button class="grey mgchip" data-d="below" data-p="10">10% below</button><button class="grey mgchip" data-d="below" data-p="15">15% below</button><button class="grey mgchip" data-d="above" data-p="0">At entry</button><button class="grey mgchip" data-d="above" data-p="3">+3%</button></div>
+ <div id="mgprev">Type a % to see the stop price for this trade.</div>
+ <div class="mgrow"><button id="mgset">Set stop</button><button class="grey" id="mgclr">Clear my stop</button><button class="red" id="mgexit">Exit now at market</button><button class="grey" id="mgclose">Close</button></div>
+ <div class="mgmsg" id="mgmsg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade.</div>
+</div></div>
+<script>
+var mgRow=null;
+function mgPrice(){var p=parseFloat(document.getElementById("mgpct").value),d=document.getElementById("mgdir").value;
+ if(!mgRow||!(p>=0)||!(Number(mgRow.entry)>0))return null;return Math.round(Number(mgRow.entry)*(1+(d==="above"?1:-1)*p/100)/0.05)*0.05}
+function mgPreview(){var v=mgPrice(),el=document.getElementById("mgprev");
+ if(v==null){el.textContent="Type a % to see the stop price for this trade.";el.style.color="";return}
+ var e=Number(mgRow.entry),cur=Math.max(Number(mgRow.sl)||0,Number(mgRow.ladder_stop)||0),last=Number(mgRow.last)||0;
+ var risk=(v/e-1)*100,t="Stop = "+v.toFixed(2)+" ("+(risk>=0?"+":"")+risk.toFixed(1)+"% from entry "+e.toFixed(2)+")",bad="";
+ if(v<=cur)bad="Not allowed: must be above the current stop "+cur.toFixed(2)+" (a manual stop can only tighten).";
+ else if(last>0&&v>=last)bad="Too high: last price is "+last.toFixed(2)+". Use Exit now to leave at the market.";
+ el.textContent=bad?t+" - "+bad:t+" - "+((1-v/last)*100).toFixed(1)+"% below the last price.";el.style.color=bad?"#ff6363":"#2ecc71"}
+function mgOpen(id){var rows=(lastData&&lastData.rows)||[];mgRow=rows.find(function(r){return String(r.id)===String(id)});if(!mgRow)return;
+ var cur=Math.max(Number(mgRow.sl)||0,Number(mgRow.ladder_stop)||0);
+ document.getElementById("mgtitle").textContent="Manage "+mgRow.symbol+" "+(mgRow.strike||"")+" "+String(mgRow.side||"").split(" ").pop();
+ document.getElementById("mginfo").innerHTML="<span>Entry <b>"+Number(mgRow.entry).toFixed(2)+"</b></span><span>Last <b>"+Number(mgRow.last).toFixed(2)+"</b></span><span>Current stop <b>"+(cur?cur.toFixed(2):"-")+"</b></span>"+(mgRow.manual_stop?"<span>Your stop <b>"+Number(mgRow.manual_stop).toFixed(2)+"</b></span>":"");
+ document.getElementById("mgpct").value="";document.getElementById("mgdir").value="below";
+ var ready=!(lastData&&lastData.manual_ready===false);
+ var m=document.getElementById("mgmsg");m.textContent=ready?"A manual stop can only tighten risk (above the current stop, below the last price). Paper trade; applies at the next position update (about a minute).":"Manual controls are NOT active yet: the running scanner has not loaded them (needs a restart). Commands are refused until then.";m.style.color=ready?"#8ea0bd":"#ffb454";
+ mgPreview();document.getElementById("mgback").style.display="flex"}
+function mgSend(url,body){var m=document.getElementById("mgmsg");m.textContent="Sending...";m.style.color="#8ea0bd";
+ fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){m.textContent=d.message||"Done";m.style.color=d.ok?"#2ecc71":"#ff6363";if(d.ok)setTimeout(load,1500)}).catch(function(){m.textContent="Could not reach the dashboard.";m.style.color="#ff6363"})}
+document.getElementById("mgpct").addEventListener("input",mgPreview);document.getElementById("mgdir").addEventListener("change",mgPreview);
+document.querySelectorAll(".mgchip").forEach(function(b){b.addEventListener("click",function(){document.getElementById("mgpct").value=b.getAttribute("data-p");document.getElementById("mgdir").value=b.getAttribute("data-d");mgPreview()})});
+document.getElementById("mgset").addEventListener("click",function(){var v=mgPrice();if(v==null||!(v>0)){var m=document.getElementById("mgmsg");m.textContent="Enter the stop % first.";m.style.color="#ff6363";return}
+ if(confirm("Set stop-loss at "+v.toFixed(2)+" for "+mgRow.symbol+" (paper trade)?"))mgSend("/api/manual-stop",{id:mgRow.id,stop:Math.round(v*100)/100})});
+document.getElementById("mgclr").addEventListener("click",function(){mgSend("/api/manual-stop",{id:mgRow.id,stop:0})});
+document.getElementById("mgexit").addEventListener("click",function(){if(confirm("Exit "+mgRow.symbol+" now at the market price (paper trade)?"))mgSend("/api/manual-exit",{id:mgRow.id})});
+document.getElementById("mgclose").addEventListener("click",function(){document.getElementById("mgback").style.display="none"});
+document.getElementById("mgback").addEventListener("click",function(e){if(e.target.id==="mgback")e.target.style.display="none"});
 </script><div class="crisp-footer"><div class="cf-quote">❝ &nbsp;<b>Discipline Creates Profits,</b><br>&nbsp;&nbsp;&nbsp;&nbsp;Automation Protects Them.</div><div class="cf-brand"><svg class="cf-logo" viewBox="0 0 64 64"><defs><linearGradient id="cfg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#22c55e"/></linearGradient></defs><path d="M7 55 27 9l17 46h-10l-7-20-8 20z" fill="url(#cfg)"/><path d="m18 47 12-10 8 5 17-21" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 21h9v9" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round"/></svg><div><div class="cf-title">APlus <span class="live">Live</span> Trading Terminal</div><div class="cf-dev">— &nbsp; Developed by Darpan Bobhate &nbsp; —</div></div></div><div><div class="cf-flow">RESEARCH <span class="dot">•</span> ANALYZE <span class="dot">•</span> EXECUTE <span class="dot">•</span> IMPROVE</div><div class="cf-safe">🛡️ &nbsp; Paper Trading &nbsp; | &nbsp; NSE F&amp;O &nbsp; | &nbsp; No Live Orders</div></div><div class="cf-copy">© 2026 &nbsp; <span class="cf-flag">🇮🇳</span><br>All Rights Reserved</div></div></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
