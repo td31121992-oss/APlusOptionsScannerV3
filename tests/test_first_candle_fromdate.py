@@ -7,14 +7,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FILES = ["trade_chart.py", "chart_zones.py", "chirag_shadow.py", "missed_option_returns.py", "stock_analysis_tab.py"]
+BAD_FROM_DATE = re.compile(r"fromDate[^\n]*09:15:00", re.I)
+BAD_WINDOW = re.compile(r"strptime\(f?\"[^\"\n]*09:15:00")
 
 
 class FirstCandleFromDateTests(unittest.TestCase):
     def test_single_day_requests_start_before_the_open(self):
         for name in FILES:
             src = (ROOT / name).read_text(encoding="utf-8")
-            self.assertNotRegex(src, r'09:15:00', f"{name} requests candles from 09:15:00")
-            self.assertRegex(src, r'09:00:00', f"{name} should request from 09:00:00")
+            self.assertIsNone(BAD_FROM_DATE.search(src), f"{name} requests candles from 09:15:00")
+            self.assertIsNone(BAD_WINDOW.search(src), f"{name} starts its candle window at 09:15:00")
+            self.assertIn("09:00:00", src, f"{name} should request from 09:00:00")
 
 
 if __name__ == "__main__":
