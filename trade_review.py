@@ -140,12 +140,12 @@ def summarize(rows: list[dict], key: str) -> list[tuple[str, int, int, int]]:
             for k, v in sorted(groups.items(), key=lambda kv: -sum(x["net"] for x in kv[1]))]
 
 
-def render(day: str, rows: list[dict]) -> str:
+def render(day: str, rows: list[dict], health: str = "") -> str:
     if not rows:
-        return f"# Trade review {day}\n\nNo paper trades.\n"
+        return f"# Trade review {day}\n\n" + (health + "\n\n" if health else "") + "No paper trades.\n"
     net, gross, costs = sum(r["net"] for r in rows), sum(r["gross"] for r in rows), sum(r["costs"] for r in rows)
     wins = sum(1 for r in rows if r["net"] > 0)
-    out = [f"# Trade review {day}", "",
+    out = [f"# Trade review {day}", ""] + ([health, ""] if health else []) + [
            f"{len(rows)} trades ({sum(1 for r in rows if r['status'] == 'OPEN')} still open, valued at last mark) | "
            f"winners {wins} | gross {gross:+,} | costs {costs:,} | **net {net:+,}**", "",
            "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net | Order block | Profit-lock rule would exit | Ladder (T2 locks T1) exit (vs real Rs) | Trail60 exit (vs real Rs) | Half at +10% (rest trail60) |  Breadth gate |",
@@ -187,7 +187,12 @@ def write(day: str, root: Path = ROOT, out_root: Path | None = None) -> Path | N
         return None
     folder = (out_root or root / "data" / "trade_review") / day
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "trade_review.md").write_text(render(day, rows), encoding="utf-8")
+    try:
+        import scanner_health
+        health = scanner_health.line(scanner_health.day_health(day, root))
+    except Exception:                                    # noqa: BLE001 - the review must still be written
+        health = ""
+    (folder / "trade_review.md").write_text(render(day, rows, health), encoding="utf-8")
     with (folder / "trade_review.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
         writer.writeheader()
