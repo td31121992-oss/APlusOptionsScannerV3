@@ -183,11 +183,12 @@ class ProfitLockTests(unittest.TestCase):
 
 
 class UserLadderTests(unittest.TestCase):
-    """Darpan's exit ladder: +5% -> entry, +10% -> +3%, +20% -> +13%, +30% -> +22%, then +2 points per further +5%."""
+    """Darpan's exit ladder: +5% -> stop -15%, +10% -> +3%, +20% -> +13%, +30% -> +22%, then +2 points per further +5%."""
     def test_floor_values(self) -> None:
         from paper_trade_journal import user_ladder_floor as f
         self.assertEqual(f(100.0, 104.9), 0.0)
-        self.assertAlmostEqual(f(100.0, 105.0), 100.0)
+        self.assertAlmostEqual(f(100.0, 105.0), 85.0)
+        self.assertAlmostEqual(f(100.0, 109.9), 85.0)
         self.assertAlmostEqual(f(100.0, 110.0), 103.0)
         self.assertAlmostEqual(f(100.0, 119.9), 103.0)
         self.assertAlmostEqual(f(100.0, 120.0), 113.0)
@@ -206,13 +207,15 @@ class UserLadderTests(unittest.TestCase):
             return dict(journal.trades[0])
 
     def test_shadow_records_but_does_not_close(self) -> None:
-        t = self._run("SHADOW", [10.5, 10.0])                          # +5% reached, then back to entry
+        t = self._run("SHADOW", [10.5, 8.5])                           # +5% reached, then down to the -15% stop
         self.assertEqual(t["status"], "OPEN")
-        self.assertEqual(t["shadow_user_ladder_exit_price"], 10.0)
+        self.assertEqual(t["shadow_user_ladder_exit_price"], 8.5)
 
-    def test_enforce_exits_at_entry_after_five_percent(self) -> None:
-        t = self._run("ENFORCE", [10.5, 10.0])
-        self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "PROFIT_PROTECTION_EXIT", 10.0))
+    def test_enforce_tightens_stop_to_minus_fifteen_after_five_percent(self) -> None:
+        t = self._run("ENFORCE", [10.5, 10.0])                         # +5% reached, back to entry: still inside the -15% stop
+        self.assertEqual(t["status"], "OPEN")
+        t = self._run("ENFORCE", [10.5, 8.5])                          # -15% stop (8.5) is tighter than the original 8.0
+        self.assertEqual((t["status"], t["exit_reason"], t["exit_price"]), ("CLOSED", "PROFIT_PROTECTION_EXIT", 8.5))
 
     def test_enforce_locks_three_percent_after_ten(self) -> None:
         t = self._run("ENFORCE", [11.2, 10.9, 10.25])                  # +12% -> lock +3% = 10.30; 10.25 breaks it

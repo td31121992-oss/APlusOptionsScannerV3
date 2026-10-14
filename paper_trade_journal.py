@@ -40,9 +40,18 @@ PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd
 STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES
 
 
+def _first_lock_pct() -> float:
+    """Stop (as % of entry) once the option has reached +5%. Default -15 (Darpan, 14 Oct 2026); 0 would be the old 'stop at entry'."""
+    try:
+        return max(-20.0, min(0.0, float(os.getenv("APLUS_LADDER_FIRST_LOCK_PCT", "-15"))))
+    except ValueError:
+        return -15.0
+
+
 def user_ladder_floor(entry: float, high: float) -> float:
     """Darpan's exit ladder, driven by the highest price reached (the lock only ever moves up):
-    +5% -> stop at entry | +10% -> lock +3% | +20% -> lock +13% | +30% -> lock +22%, then +2 points of lock for every further +5% of gain.
+    +5% -> stop tightens to -15% (was -20%; APLUS_LADDER_FIRST_LOCK_PCT) | +10% -> lock +3% | +20% -> lock +13% | +30% -> lock +22%,
+    then +2 points of lock for every further +5% of gain.
     Returns the stop price, or 0.0 while the option has not yet reached +5%."""
     if entry <= 0 or high <= 0:
         return 0.0
@@ -54,7 +63,7 @@ def user_ladder_floor(entry: float, high: float) -> float:
     elif gain >= 10.0:
         lock = 3.0
     elif gain >= 5.0:
-        lock = 0.0
+        lock = _first_lock_pct()
     else:
         return 0.0
     return entry * (1.0 + lock / 100.0)
@@ -478,7 +487,7 @@ class PaperTradeJournal:
             original_stop = self._number(trade.get("option_stop"))
             protected_stop = original_stop
             if self._exit_ladder_mode() == "ENFORCE":
-                protected_stop = max(original_stop, user_ladder_floor(entry, high))      # +5% -> entry, +10% -> +3%, +20% -> +13%, +30% -> +22% ...
+                protected_stop = max(original_stop, user_ladder_floor(entry, high))      # +5% -> -15%, +10% -> +3%, +20% -> +13%, +30% -> +22% ...
                 trade["ladder_stop"] = round(protected_stop, 4)
             else:
                 if trade.get("target1_hit_at"):

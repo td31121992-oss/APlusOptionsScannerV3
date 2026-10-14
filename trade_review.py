@@ -162,7 +162,7 @@ def render(day: str, rows: list[dict]) -> str:
         out += [f"| {k} | {n} | {w} | {v:+,} |" for k, n, w, v in summarize(data, key)]
     names = [n for n in _shadow_names()] + ["half10"]
     if any(f"d_{n}" in rows[0] for n in names):
-        labels = {"user_ladder": "YOUR ladder: +5% entry, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60"}
+        labels = {"user_ladder": "YOUR ladder: +5% stop -15%, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60"}
         out += ["", "**Exit-rule comparison (shadow, nothing traded)** - rupees versus the real exits above, summed over today's trades", "",
                 "| Rule | Trades where it acted | Extra Rs vs real |", "|---|---|---|"]
         for n in names:
