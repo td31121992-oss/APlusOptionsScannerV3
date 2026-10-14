@@ -25,6 +25,7 @@ import trade_chart
 import company_profiles
 import market_mood
 import index_strip
+import sector_rrg
 import why_moving
 import stock_chart
 try:  # the control room must never stop the main dashboard from starting
@@ -52,6 +53,27 @@ def _hl_fields(t):
     except Exception:  # noqa: BLE001
         pass
     return {"high": _num(t.get("highest_option_price")), "high_time": "", "low": _num(t.get("lowest_option_price")), "low_time": ""}
+_RRG_STATE = {"thread": None, "tried": 0.0}
+
+
+def _rrg_payload():
+    """Cached sector RRG; if it was not generated today, refresh it once in the background (at most every 10 minutes)."""
+    import threading
+    import time as _t
+    data = sector_rrg.load_cache(ROOT / "data" / "cache" / "sector_rrg.json")
+    today = datetime.now(IST).date().isoformat()
+    fresh = bool(data) and str(data.get("generated_at", ""))[:10] == today
+    th = _RRG_STATE["thread"]
+    if not fresh and (th is None or not th.is_alive()) and _t.time() - _RRG_STATE["tried"] > 600:
+        _RRG_STATE["tried"] = _t.time()
+        _RRG_STATE["thread"] = threading.Thread(target=lambda: sector_rrg.refresh(ROOT), daemon=True)
+        _RRG_STATE["thread"].start()
+    if not data:
+        return {"ok": False, "error": "loading", "rows": []}
+    data["refreshing"] = (not fresh)
+    return data
+
+
 def _since_high(t, hl, now=None):
     """How long ago the option made its high, how far it is below it, and what the STOCK has done since that moment.
     Tells a stalled/melting option (stock flat, premium decaying) from a stock that has turned against us."""
@@ -709,6 +731,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/why-moving":
             body = json.dumps(why_moving.payload(str(parse_query(self.path).get("symbol") or "")), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/sector-rrg":
+            body = json.dumps(_rrg_payload(), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/indices":
             body = json.dumps(index_strip.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return

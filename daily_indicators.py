@@ -175,5 +175,16 @@ def fetch_and_write() -> int:
     return 0
 
 
+def _main() -> int:
+    code = fetch_and_write()
+    try:                                                   # sector rotation cache for tomorrow's trade tags and the dashboard
+        import sector_rrg
+
+        sector_rrg.refresh(ROOT)
+    except Exception:                                      # noqa: BLE001 - never fail the indicators job over this
+        pass
+    return code
+
+
 if __name__ == "__main__":
-    raise SystemExit(fetch_and_write())
+    raise SystemExit(_main())

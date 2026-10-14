@@ -830,6 +830,13 @@ class OpeningMomentumScanner:
                             getattr(self, "_event_ind", {}), current_time))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: sector rotation (see sector_rrg.py); reads a cache file, never the network
+                        import sector_rrg
+                        candidate_record.update(sector_rrg.tags_for(
+                            candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []),
+                            Path(self.config.paths.data_dir) / "cache" / "sector_rrg.json"))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: entry-quality flags (see entry_tags.py)
                         import entry_tags
                         _opt = plan.get("option_contract") or {}

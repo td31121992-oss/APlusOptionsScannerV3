@@ -187,6 +187,11 @@ svg.sp{width:100%;height:36px}
 <div><a class="nav" href="/">Dashboard</a><a class="nav" href="/money-flow">Money flow</a><a class="nav" href="/fno-market-watch">Market watch</a><a class="nav" href="/live-scanner">Live scanner</a></div>
 <div class="k" id="kicker">sectoral analysis</div><h1 id="story">loading...</h1><div class="sub" id="line"></div>
 <div class="cards" id="cards"></div>
+<div class="box" id="rrgbox" style="margin-bottom:12px"><div class="k">Sector rotation (RRG-style, daily, against Nifty 50)</div>
+<div class="sub" style="margin:2px 0 8px" id="rrgsub">loading...</div>
+<div style="display:flex;gap:14px;flex-wrap:wrap"><svg id="rrgsvg" viewBox="0 0 460 400" style="width:min(460px,100%);background:#0b1020;border-radius:8px"></svg>
+<div style="flex:1;min-width:300px"><table id="rrgtab" style="width:100%;border-collapse:collapse;font-size:12.5px"></table></div></div>
+<div class="sub" style="margin-top:6px">Right of 100 = outperforming the market; above 100 = strength is increasing. Leading (green), Weakening (amber), Lagging (red), Improving (blue). Tails show the last 5 sessions. A read of what has happened, not a forecast.</div></div>
 <div class="grid"><div class="box"><div class="k">Sector performance</div><div class="sub" style="margin:2px 0 8px">Average move of each sector's stocks today. Click a sector to open it.</div>
 <div class="tabs" id="tabs"><button data-m="move" class="on">Move</button><button data-m="breadth">Breadth</button><button data-m="turnover">Turnover</button></div><div id="secs" style="margin-top:8px"></div></div>
 <div class="box"><div class="k">The F&amp;O market, like a heatmap</div><div class="sub" style="margin:2px 0 8px">Every F&amp;O stock is a block, grouped by sector. Bigger = more money traded today. Colour = % change from the previous close. Click a block to open the stock.</div>
@@ -246,5 +251,33 @@ function minis(){if(!D||!D.ok||!window.LightweightCharts)return;var box=document
    ch.series.setData(d.candles.map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));ch.chart.timeScale().fitContent()}).catch(function(){})})}
 setInterval(minis,60000);
 window.addEventListener("resize",function(){if(D&&D.ok)drawMap()});load();setInterval(load,30000);
+
+(function(){
+var QC={LEADING:"#2ecc71",WEAKENING:"#f5b942",LAGGING:"#ff6363",IMPROVING:"#4c8dff"};
+function draw(d){
+ var svg=document.getElementById("rrgsvg"),tab=document.getElementById("rrgtab");
+ if(!d||!d.ok||!d.rows.length){document.getElementById("rrgsub").textContent=(d&&d.error==="loading")?"Building the first sector rotation data (about 10 seconds)...":"No sector rotation data yet.";if(!d||d.error==="loading")setTimeout(load,6000);return}
+ document.getElementById("rrgsub").textContent="As of the close of "+d.asof+(d.refreshing?" (refreshing)":"")+" - "+d.rows.length+" sector indices";
+ var xs=[],ys=[];d.rows.forEach(function(r){r.tail.forEach(function(t){xs.push(t.ratio);ys.push(t.momentum)})});
+ var span=Math.max(2.2,Math.max.apply(null,xs.map(function(v){return Math.abs(v-100)})),Math.max.apply(null,ys.map(function(v){return Math.abs(v-100)})))+0.4;
+ var W=460,H=400,P=30;function X(v){return P+(v-100+span)/(2*span)*(W-2*P)}function Y(v){return H-P-(v-100+span)/(2*span)*(H-2*P)}
+ var h='<rect x="'+X(100)+'" y="'+P+'" width="'+(W-P-X(100))+'" height="'+(Y(100)-P)+'" fill="#12351f"/>'
+  +'<rect x="'+X(100)+'" y="'+Y(100)+'" width="'+(W-P-X(100))+'" height="'+(H-P-Y(100))+'" fill="#3a2d10"/>'
+  +'<rect x="'+P+'" y="'+Y(100)+'" width="'+(X(100)-P)+'" height="'+(H-P-Y(100))+'" fill="#3a1717"/>'
+  +'<rect x="'+P+'" y="'+P+'" width="'+(X(100)-P)+'" height="'+(Y(100)-P)+'" fill="#12254a"/>'
+  +'<text x="'+(W-P-4)+'" y="'+(P+14)+'" text-anchor="end" fill="#2ecc71" font-size="11">LEADING</text><text x="'+(W-P-4)+'" y="'+(H-P-6)+'" text-anchor="end" fill="#f5b942" font-size="11">WEAKENING</text>'
+  +'<text x="'+(P+4)+'" y="'+(H-P-6)+'" fill="#ff6363" font-size="11">LAGGING</text><text x="'+(P+4)+'" y="'+(P+14)+'" fill="#4c8dff" font-size="11">IMPROVING</text>'
+  +'<line x1="'+X(100)+'" y1="'+P+'" x2="'+X(100)+'" y2="'+(H-P)+'" stroke="#27334d"/><line x1="'+P+'" y1="'+Y(100)+'" x2="'+(W-P)+'" y2="'+Y(100)+'" stroke="#27334d"/>';
+ d.rows.forEach(function(r){var c=QC[r.quadrant]||"#8ea0bd",pts=r.tail.map(function(t){return X(t.ratio)+","+Y(t.momentum)}).join(" ");
+  h+='<polyline points="'+pts+'" fill="none" stroke="'+c+'" stroke-width="1.5" opacity=".6"/>';
+  h+='<circle cx="'+X(r.ratio)+'" cy="'+Y(r.momentum)+'" r="5" fill="'+c+'"/><text x="'+(X(r.ratio)+7)+'" y="'+(Y(r.momentum)+3)+'" fill="#e7eefc" font-size="10">'+r.sector+'</text>'});
+ svg.innerHTML=h;
+ var t='<tr style="color:#8ea0bd;text-align:left"><th>Sector</th><th>Quadrant</th><th>RS-Ratio</th><th>RS-Mom</th><th>5d vs Nifty</th><th>10d vs Nifty</th></tr>';
+ d.rows.forEach(function(r){var c=QC[r.quadrant];function rel(v){return v==null?"-":'<span style="color:'+(v>=0?"#2ecc71":"#ff6363")+'">'+(v>=0?"+":"")+v.toFixed(2)+'%</span>'}
+  t+='<tr style="border-top:1px solid #27334d"><td><b>'+r.sector+'</b></td><td style="color:'+c+';font-weight:700">'+r.quadrant+'</td><td>'+r.ratio.toFixed(1)+'</td><td>'+r.momentum.toFixed(1)+'</td><td>'+rel(r.rel5)+'</td><td>'+rel(r.rel10)+'</td></tr>'});
+ tab.innerHTML=t}
+function load(){fetch("/api/sector-rrg",{cache:"no-store"}).then(function(r){return r.json()}).then(draw).catch(function(){})}
+load();setInterval(load,300000);
+})();
 </script></body></html>
 """
