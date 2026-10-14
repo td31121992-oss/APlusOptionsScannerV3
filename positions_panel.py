@@ -1,7 +1,8 @@
 """Mobile-first "Positions" panel that looks like a broker app (Zerodha / Dhan / Upstox style) for the paper trades.
 
-Served by the dashboard at /positions and fed by /api/snapshot every few seconds. It is PAPER data and says so on screen;
-it only displays, it has no buttons that act on anything.
+Served by the dashboard at /positions and fed by /api/snapshot every few seconds. It is PAPER data and says so on screen.
+Open positions have two manual controls (expand a card): set a tighter stop-loss, and Exit now. Both only queue a command for the
+scanner's paper journal (manual_orders.py); no broker is involved.
 """
 
 POSITIONS_HTML = r"""<!doctype html>
@@ -30,6 +31,11 @@ header h1{font-size:20px;margin:0;font-weight:800}.badge{background:#2a3350;colo
 .detail div{display:flex;justify-content:space-between;padding:2px 0}.detail b{color:var(--text);font-weight:600}
 .by{font-weight:700;color:#9fb3ff;margin-top:1px}.foot{text-align:center;color:var(--muted);font-size:12px;padding:18px 0 6px}.foot b{color:var(--text)}
 .empty{text-align:center;color:var(--muted);padding:40px 0}
+.ctl{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}.ctl .line{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
+.ctl input{flex:1;min-width:90px;background:#0e1527;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px;font-size:15px}
+.ctl button{border:0;border-radius:9px;padding:9px 12px;font-weight:800;font-size:14px;cursor:pointer;color:#fff;background:var(--blue)}
+.ctl button.red{background:#c23b3b}.ctl button.grey{background:#2a3350;color:#cdd7ee}.ctl .msg{font-size:12.5px;margin-top:6px;color:var(--muted)}
+.pend{color:#ffb454;font-weight:800;font-size:11px;margin-left:6px}
 nav{position:fixed;left:0;right:0;bottom:0;background:#0e1527;border-top:1px solid var(--line);display:flex;justify-content:space-around;padding:8px 0 calc(8px + env(safe-area-inset-bottom))}
 nav a{color:var(--muted);text-decoration:none;font-size:12px;font-weight:700;text-align:center;flex:1}nav a.on{color:var(--blue)}
 </style></head><body><div class="wrap">
@@ -49,6 +55,16 @@ function inr(n,d){n=Number(n)||0;return(n<0?"-":"")+"₹"+Math.abs(n).toLocaleSt
 function cls(n){return Number(n)>=0?"pos":"neg"}
 function sgn(n){n=Number(n)||0;return(n>0?"+":"")+n.toFixed(2)}
 function expiry(e){if(!e)return"";var m=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"],p=String(e).slice(0,10).split("-");return p.length==3?(p[2]+" "+m[Number(p[1])-1]):""}
+function ctl(x){
+ var cur=Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),id=encodeURIComponent(x.id);
+ return '<div class="ctl" data-id="'+x.id+'"><div><span>Current stop</span><b>'+(cur?cur.toFixed(2):"-")+'</b></div>'
+  +(x.manual_stop?'<div><span>Your manual stop</span><b>'+Number(x.manual_stop).toFixed(2)+'</b></div>':'')
+  +'<div class="line"><input type="number" inputmode="decimal" step="0.05" min="0" placeholder="New stop (below '+Number(x.last).toFixed(2)+')" class="stopin">'
+  +'<button class="setstop">Set stop</button>'+(x.manual_stop?'<button class="grey clrstop">Clear</button>':'')+'</div>'
+  +'<div class="line"><button class="red exitnow">Exit now at market</button></div>'
+  +'<div class="msg">A manual stop can only tighten risk. Paper trade; applies at the next position update.</div></div>'}
+function act(url,body,box){var m=box.querySelector(".msg");m.textContent="Sending...";
+ fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){m.textContent=d.message||"Done";m.style.color=d.ok?"#2ecc71":"#ff6363";if(d.ok)setTimeout(load,1500)}).catch(function(){m.textContent="Could not reach the dashboard.";m.style.color="#ff6363"})}
 function render(){
  if(!data)return;var rows=data.rows||[];
  var open=rows.filter(function(x){return x.status==="OPEN"}),closed=rows.filter(function(x){return x.status==="CLOSED"});
@@ -71,20 +87,29 @@ function render(){
   var exp=expiry(x.expiry),qty=Number(x.qty)||0;
   var last=isOpen?x.last:(x.exit_price||x.last);
   return '<div class="card'+(openIds[x.id]?" open":"")+'" data-id="'+x.id+'">'
-  +'<div class="row"><div><span class="name">'+label+'</span><span class="tag buy">BUY</span><span class="tag mis">MIS</span></div><div class="pnl '+cls(pnl)+'">'+inr(pnl)+'</div></div>'
+  +'<div class="row"><div><span class="name">'+label+'</span><span class="tag buy">BUY</span><span class="tag mis">MIS</span>'+(x.manual_exit_pending?'<span class="pend">EXIT PENDING</span>':'')+(isOpen&&x.manual_stop?'<span class="pend">MANUAL SL '+Number(x.manual_stop).toFixed(2)+'</span>':'')+'</div><div class="pnl '+cls(pnl)+'">'+inr(pnl)+'</div></div>'
   +'<div class="small">'+(exp?exp+" expiry - ":"")+(bull?"bullish view":"bearish view")+(isOpen?"":" - "+(x.exit_reason||"closed"))+'</div>'
   +'<div class="row mid"><div class="small">Qty <b style="color:var(--text)">'+qty.toLocaleString("en-IN")+'</b> &nbsp; Avg <b style="color:var(--text)">'+Number(x.entry).toFixed(2)+'</b></div>'
   +'<div class="small">'+(isOpen?"LTP":"Exit")+' <b style="color:var(--text)">'+Number(last).toFixed(2)+'</b> <span class="'+cls(x.return_pct)+'">('+sgn(x.return_pct)+'%)</span></div></div>'
   +'<div class="row small"><div>'+(x.sl?'SL '+Number(x.sl).toFixed(2):'')+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'
   +'<div class="detail"><div><a href="/trade?id='+encodeURIComponent(x.id)+'" style="color:var(--blue);font-weight:800;text-decoration:none">Open stock + option charts &rsaquo;</a></div><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+(x.high_time||"")+'</b></div>'
   +'<div><span>Lowest since entry</span><b>'+(x.low?Number(x.low).toFixed(2):"-")+' '+(x.low_time||"")+'</b></div>'
-  +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div></div></div>'}).join("")
+  +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div>'
+  +(isOpen?ctl(x):"")+'</div></div>'}).join("")
 }
-document.getElementById("list").addEventListener("click",function(e){var c=e.target.closest(".card");if(!c)return;var id=c.getAttribute("data-id");openIds[id]=!openIds[id];c.classList.toggle("open")});
+document.getElementById("list").addEventListener("click",function(e){
+ var box=e.target.closest(".ctl");
+ if(box){var id=box.getAttribute("data-id");
+  if(e.target.classList.contains("setstop")){var v=parseFloat(box.querySelector(".stopin").value);if(!(v>0)){var m=box.querySelector(".msg");m.textContent="Enter a stop price first.";m.style.color="#ff6363";return}
+   if(confirm("Set stop-loss at "+v.toFixed(2)+" for this paper trade?"))act("/api/manual-stop",{id:id,stop:v},box)}
+  else if(e.target.classList.contains("clrstop")){act("/api/manual-stop",{id:id,stop:0},box)}
+  else if(e.target.classList.contains("exitnow")){if(confirm("Exit this paper trade now at the market price?"))act("/api/manual-exit",{id:id},box)}
+  return}
+ var c=e.target.closest(".card");if(!c)return;var id=c.getAttribute("data-id");openIds[id]=!openIds[id];c.classList.toggle("open")});
 document.querySelector(".tabs").addEventListener("click",function(e){var t=e.target.getAttribute("data-t");if(t){tab=t;render()}});
 document.getElementById("flt").addEventListener("click",function(e){var p=e.target.getAttribute("data-p");if(p){pf=p;render()}});
 document.getElementById("share").addEventListener("click",function(){var d=data||{},txt="APlus paper P&L "+inr(d.total_pnl)+" on "+(d.trade_count||0)+" positions ("+(d.trading_date||"")+") - managed by Mr. Darpan Bobhate";if(navigator.share){navigator.share({title:"APlus positions",text:txt}).catch(function(){})}else if(navigator.clipboard){navigator.clipboard.writeText(txt);document.getElementById("share").textContent="Copied"}});
-function load(){fetch("/api/snapshot",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d;render()}).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
+function load(){fetch("/api/snapshot",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){data=d;var a=document.activeElement;if(!(a&&a.classList&&a.classList.contains("stopin")))render()}).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
 load();setInterval(load,5000);
 </script></body></html>
 """

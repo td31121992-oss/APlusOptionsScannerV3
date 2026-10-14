@@ -379,6 +379,9 @@ def snapshot():
             "qty": int(_num(t.get("quantity"))),
             "expiry": str(t.get("expiry") or ""),
             "sl": _num(t.get("option_stop")),
+            "manual_stop": _num(t.get("manual_stop")),
+            "ladder_stop": _num(t.get("ladder_stop")),
+            "manual_exit_pending": bool(t.get("manual_exit_requested_at")) and _status(t) == "OPEN",
             "tp": _num(t.get("option_target1")),
             "exit_price": _num(t.get("exit_price")),
             "trade_date": str(t.get("entry_time") or "")[:10],
@@ -683,6 +686,34 @@ class Handler(BaseHTTPRequestHandler):
                 return reply(200, {"ok": True, "entry": entry})
             except Exception:  # noqa: BLE001
                 return reply(400, {"ok": False, "message": "Could not save the note."})
+        route = self.path.split("?", 1)[0]
+        if route in ("/api/manual-stop", "/api/manual-exit"):
+            try:
+                import manual_orders
+                if not manual_orders.enabled():
+                    return reply(403, {"ok": False, "message": "Manual controls are switched off (APLUS_MANUAL_CONTROLS=OFF)."})
+                length = min(int(self.headers.get("Content-Length") or 0), 2000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                tid = str(req.get("id", "")).strip()
+                trade = next((t for t in _load_trades() if str(t.get("paper_trade_id") or t.get("trade_id") or "") == tid), None)
+                if trade is None or _status(trade) != "OPEN":
+                    return reply(400, {"ok": False, "message": "That trade is not open."})
+                src = "dashboard:" + str(self.client_address[0])
+                if route == "/api/manual-exit":
+                    manual_orders.add(ROOT, tid, "EXIT", None, src)
+                    return reply(200, {"ok": True, "message": "Exit queued. It closes at the next valid option price, usually within a minute."})
+                raw = req.get("stop")
+                if raw in (None, "", 0, "0"):
+                    manual_orders.add(ROOT, tid, "CLEAR", None, src)
+                    return reply(200, {"ok": True, "message": "Manual stop cleared."})
+                stop = float(raw)
+                ok, msg = manual_orders.validate_stop(trade, stop)
+                if not ok:
+                    return reply(400, {"ok": False, "message": msg})
+                manual_orders.add(ROOT, tid, "STOP", stop, src)
+                return reply(200, {"ok": True, "message": f"Manual stop {stop:.2f} queued. It applies at the next position update (about a minute)."})
+            except Exception:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": "Could not queue that command."})
         if self.path.split("?", 1)[0] != "/api/mode":
             return reply(404, {"ok": False, "message": "Not found."})
         try:

@@ -406,6 +406,7 @@ class PaperTradeJournal:
     ) -> list[dict[str, Any]]:
         """Update PAPER positions from real option LTPs; no broker orders."""
         self._ensure_date(when.date())
+        self._apply_manual_commands(when)
         closed_now = []
         for trade in self.trades:
             if str(trade.get("status") or "").upper() != "OPEN":
@@ -505,8 +506,14 @@ class PaperTradeJournal:
 
             self._record_stop_shadows(trade, entry, high, price, when)
 
+            manual_stop = self._number(trade.get("manual_stop"))
+            manual_active = manual_stop > 0 and manual_stop > protected_stop            # tighten only: never loosens a stop
+            if manual_active:
+                protected_stop = manual_stop
             reason = ""
-            if protected_stop > 0 and price <= protected_stop:
+            if protected_stop > 0 and price <= protected_stop and manual_active:
+                reason = "MANUAL_STOP_LOSS"
+            elif protected_stop > 0 and price <= protected_stop:
                 reason = (
                     "RUNNER_TRAIL_EXIT" if bool(trade.get("runner_mode"))
                     else ("PROFIT_PROTECTION_EXIT" if protected_stop > original_stop else "OPTION_STOP_LOSS")
@@ -521,6 +528,8 @@ class PaperTradeJournal:
                         trade["lock_shadow_exit_at"] = when.isoformat()      # what the rule WOULD have done; trade untouched
                         trade["lock_shadow_exit_price"] = round(price, 4)
                         trade["lock_shadow_floor"] = round(lock_floor, 4)
+            if not reason and trade.get("manual_exit_requested_at"):
+                reason = "MANUAL_EXIT"
             if not reason and force_close:
                 # Session end: exit at the last valid mark (this branch is only
                 # reached with a valid positive price), never leave it open.
@@ -579,6 +588,32 @@ class PaperTradeJournal:
             except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
                 continue
         return done
+
+    def _apply_manual_commands(self, when: datetime) -> None:
+        """Read data/manual_orders/<date>.jsonl (written by the dashboard) and put the latest stop / exit wish on each open trade.
+        Idempotent; a missing or unreadable file changes nothing."""
+        try:
+            import manual_orders
+            if not manual_orders.enabled():
+                return
+            root = getattr(self, "manual_root", None) or self.state_dir.parent.parent
+            state = manual_orders.desired_state(manual_orders.read(root, when.date().isoformat()))
+            for trade in self.trades:
+                if str(trade.get("status") or "").upper() != "OPEN":
+                    continue
+                want = state.get(str(trade.get("paper_trade_id") or ""))
+                if not want:
+                    continue
+                if want["stop"]:
+                    trade["manual_stop"] = want["stop"]
+                    trade["manual_stop_set_at"] = want["stop_at"]
+                elif trade.get("manual_stop"):
+                    trade.pop("manual_stop", None)
+                    trade["manual_stop_cleared_at"] = want["stop_at"]
+                if want["exit_at"] and not trade.get("manual_exit_requested_at"):
+                    trade["manual_exit_requested_at"] = want["exit_at"]
+        except Exception:                                    # noqa: BLE001 - manual controls must never break the monitor
+            return
 
     @staticmethod
     def _exit_ladder_mode() -> str:
