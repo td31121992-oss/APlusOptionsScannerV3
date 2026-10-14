@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -48,6 +49,34 @@ def log_new(extra: Iterable[Any], shadow_rank: dict[str, Any], when: datetime, s
     return len(rows)
 
 
+PULLBACK_REASONS = {"CURRENT_5M_REVERSING", "NO_FRESH_CONTINUATION"}
+
+
+def pullback_pass(candidates: Iterable[Any], blocked: Iterable[dict[str, Any]], max_dip_pct: float = 0.5) -> list[Any]:
+    """Pullback scenario (SHADOW): candidates V2 rejected ONLY for the 5-minute-reversal / continuation-vote rules (so they
+    are in the top 5 and pass session move, participation and retention) whose current 5m dip is at most `max_dip_pct`
+    and which still sit on the right side of VWAP. Tests "buy the dip in a leader" against the strict reversal rule."""
+    by_key = {(str(b.get("symbol", "")).upper(), str(b.get("direction", "")).upper()): b for b in blocked}
+    kept = []
+    for c in candidates:
+        key = (str(getattr(c, "symbol", "")).upper(), str(getattr(c, "direction", "")).upper())
+        b = by_key.get(key)
+        if not b:
+            continue
+        cats = {re.sub(r"\(.*", "", str(r)) for r in (b.get("reasons") or [])}
+        if not cats or not cats <= PULLBACK_REASONS:
+            continue
+        try:
+            d5 = float(b.get("directional_5m_pct") or 0.0)
+            vwap = float(getattr(c, "vwap_distance_percent", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        sign = 1.0 if key[1] == "BULLISH" else -1.0
+        if d5 >= -max_dip_pct and vwap * sign > 0:
+            kept.append(c)
+    return kept
+
+
 def _stats(values: list[float], best: list[float]) -> str:
     if not values:
         return "n=0"
@@ -59,7 +88,7 @@ def _stats(values: list[float], best: list[float]) -> str:
 def report(root: Path = ROOT) -> Path | None:
     """Writes data/shadow_v2/summary.md comparing outcomes (ATM option, hindsight, entry at first-ready candle +1%)."""
     groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], []),
-                                                         "est_trend": ([], [])}
+                                                         "est_trend": ([], []), "pullback": ([], [])}
     per_day = []
     for csv_path in sorted((root / "data" / "shadow_v2").glob("20*.csv")):
         day = csv_path.stem
@@ -72,6 +101,7 @@ def report(root: Path = ROOT) -> Path | None:
             extra = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario", "top10") == "top10"}
             norank = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "norank"} - extra
             est = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "est_trend"}
+            pb = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "pullback"}
         except (OSError, ValueError, KeyError):
             continue
         day_extra = ([], [])
@@ -92,6 +122,9 @@ def report(root: Path = ROOT) -> Path | None:
             if key in est and fate.startswith("V2_BLOCKED"):
                 groups["est_trend"][0].append(float(r["close"]))
                 groups["est_trend"][1].append(float(r["best"]))
+            if key in pb and fate.startswith("V2_BLOCKED"):
+                groups["pullback"][0].append(float(r["close"]))
+                groups["pullback"][1].append(float(r["best"]))
             if group == "extra":
                 day_extra[0].append(float(r["close"]))
                 day_extra[1].append(float(r["best"]))
@@ -104,6 +137,7 @@ def report(root: Path = ROOT) -> Path | None:
              f"- **Extra top-10 passes:** {_stats(*groups['extra'])}",
              f"- **Extra with NO rank rule at all (beyond top-10):** {_stats(*groups['norank_only'])}",
              f"- **Established-trend setups V2 blocked (the proposed widening, before the 3-per-side cap):** {_stats(*groups['est_trend'])}",
+             f"- **Pullback leaders (top-5 stocks V2 rejected only for a <=0.5% 5m dip, still on the right side of VWAP):** {_stats(*groups['pullback'])}",
              f"- **Other V2-blocked:** {_stats(*groups['other_v2_blocked'])}",
              f"- **Live trades:** {_stats(*groups['traded'])}", "", "| Day | Extra top-10 passes |", "|---|---|"]
     lines += [f"| {day} | {_stats(*vals)} |" for day, vals in per_day]

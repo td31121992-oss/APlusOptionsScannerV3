@@ -663,6 +663,11 @@ class OpeningMomentumScanner:
             if not hasattr(self, "_v2_est_seen") or getattr(self, "_v2_est_day", None) != current_time.date():
                 self._v2_est_seen, self._v2_est_day = set(), current_time.date()
             v2_shadow.log_new(est_trend, norank_ranking, current_time, self._v2_est_seen, scenario="est_trend")
+            # fourth scenario: leaders in the top 5 that V2 rejected only for a small 5m dip / continuation votes, still above (below for puts) VWAP
+            pullback = v2_shadow.pullback_pass(pre_v2_candidates, v2_blocked)
+            if not hasattr(self, "_v2_pb_seen") or getattr(self, "_v2_pb_day", None) != current_time.date():
+                self._v2_pb_seen, self._v2_pb_day = set(), current_time.date()
+            v2_shadow.log_new(pullback, v2_movers, current_time, self._v2_pb_seen, scenario="pullback")
         except Exception:      # noqa: BLE001 - shadow logging must never affect trading
             pass
         for blocked in v2_blocked:
