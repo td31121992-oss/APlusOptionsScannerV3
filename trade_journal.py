@@ -103,6 +103,22 @@ def lessons(r: dict[str, Any]) -> list[str]:
     return out
 
 
+def _response_text(t: dict[str, Any]) -> str:
+    """Stock move since our entry (in our favour) and what the option paid, with the milestone times."""
+    if t.get("stock_move_fav_pct", "") == "":
+        return ""
+    parts = [f"stock {float(t['stock_move_fav_pct']):+.2f}% now (peak {float(t.get('stock_move_fav_max_pct') or 0):+.2f}%)",
+             f"option {float(t.get('stock_opt_gain_pct') or 0):+.1f}%"]
+    if t.get("stock_opt_per_1pct", "") != "":
+        parts.append(f"= {float(t['stock_opt_per_1pct']):.0f}% option per 1% stock")
+    marks = []
+    for ms in ("025", "050", "075", "100", "150", "200", "250", "300"):
+        at = t.get(f"stock_ms{ms}_at")
+        if at:
+            marks.append(f"+{int(ms) / 100:g}% stock at {str(at)[:5]} (option {float(t.get(f'stock_ms{ms}_opt_pct') or 0):+.0f}%)")
+    return " | ".join(parts) + ((" | " + "; ".join(marks)) if marks else "")
+
+
 def _event_text(t: dict[str, Any]) -> str:
     like = str(t.get("event_like", "")).lower() in ("true", "1")
     if t.get("event_like", "") == "":
@@ -138,6 +154,9 @@ def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]],
         "safety": t.get("safety_decision") or "", "regime": regime, "entry_reason": t.get("entry_reason") or "",
         "targets_hit": ", ".join(hits), "hold_min": hold, "breadth": r["breadth"], "ob": r["ob"],
         "event": _event_text(t),
+        "stock_move": t.get("stock_move_fav_pct", ""), "stock_peak": t.get("stock_move_fav_max_pct", ""),
+        "opt_per1": t.get("stock_opt_per_1pct", ""), "stock_verdict": t.get("stock_response_verdict", ""),
+        "stock_response": _response_text(t),
         **{k: r[k] for k in ("entry_time", "entry_price", "high", "high_time", "low", "low_time", "exit_price", "exit_time", "status", "exit_reason",
                               "stop_pct", "mfe_pct", "mae_pct", "return_pct", "captured_pct", "capital", "spread_pct", "gross", "costs", "net")},
     }
@@ -296,7 +315,7 @@ td.n,th.n{text-align:right}tr.t{cursor:pointer}tr.t:hover{background:#16213b}.de
 <h2>Equity curve (net Rs, closed trades, by day)</h2><div class="box"><div id="curve"></div></div>
 <h2>Where the money is made and lost</h2><div class="grid" id="brk"></div>
 <h2>Trades <span class="sub">(click a row for the full story, lessons and your notes)</span></h2>
-<div class="scroll"><table><thead><tr><th>Date</th><th>Stock</th><th>Side</th><th>Setup</th><th>In</th><th class="n">Entry</th><th>Out</th><th class="n">Exit</th><th class="n">Hold</th><th class="n">Peak%</th><th class="n">Low%</th><th class="n">Ret%</th><th class="n">Net Rs</th><th>Exit reason</th><th>Rating</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="scroll"><table><thead><tr><th>Date</th><th>Stock</th><th>Side</th><th>Setup</th><th>In</th><th class="n">Entry</th><th>Out</th><th class="n">Exit</th><th class="n">Hold</th><th class="n" title="Stock move in our favour since entry (peak)">Stock%</th><th class="n" title="Option % gain per 1% stock move">Opt/1%</th><th class="n">Peak%</th><th class="n">Low%</th><th class="n">Ret%</th><th class="n">Net Rs</th><th>Exit reason</th><th>Rating</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div class="sub" style="margin-top:10px">All figures are paper trades after estimated costs. Lessons are plain observations from the numbers, not predictions. Your notes are saved in data/journal/notes.json.</div>
 </div><script src="/static/lightweight-charts.js"></script><script>
 var D=null,open_id=null,chart=null;
@@ -321,11 +340,11 @@ function render(){if(!D)return;var s=D.stats;
  var blocks=[["By setup",D.by_setup],["By entry hour",D.by_hour],["By side",D.by_side],["By exit reason",D.by_exit]];
  document.getElementById("brk").innerHTML=blocks.map(function(b){return '<div class="box"><b>'+b[0]+'</b><table>'+b[1].map(function(x){return '<tr><td>'+esc(x.group)+'</td><td class="n">'+x.wins+"/"+x.trades+'</td><td class="n '+c(x.net)+'">'+m(x.net)+'</td></tr>'}).join("")+'</table></div>'}).join("");
  var rows=filt();document.getElementById("rows").innerHTML=rows.map(function(t){var det=open_id===t.id?detail(t):"";
-  return '<tr class="t" data-id="'+t.id+'"><td>'+t.day+'</td><td><b>'+t.symbol+'</b></td><td>'+t.side+'</td><td>'+esc((t.setup||"").replace(/_/g," ").toLowerCase())+'</td><td>'+t.entry_time+'</td><td class="n">'+t.entry_price.toFixed(2)+'</td><td>'+(t.status==="UNRESOLVED"?"no exit":(t.exit_time||"open"))+'</td><td class="n">'+t.exit_price.toFixed(2)+'</td><td class="n">'+(t.hold_min==null?"-":t.hold_min+"m")+'</td><td class="n up">'+t.mfe_pct+'</td><td class="n dn">'+t.mae_pct+'</td><td class="n '+c(t.return_pct)+'">'+t.return_pct+'</td><td class="n '+c(t.net)+'">'+m(t.net)+'</td><td>'+esc((t.exit_reason||t.status).replace(/_/g," ").toLowerCase())+'</td><td>'+stars(t.journal.rating)+'</td></tr>'+det}).join("")||'<tr><td colspan="15" class="sub" style="padding:20px;text-align:center">No trades match</td></tr>'}
+  return '<tr class="t" data-id="'+t.id+'"><td>'+t.day+'</td><td><b>'+t.symbol+'</b></td><td>'+t.side+'</td><td>'+esc((t.setup||"").replace(/_/g," ").toLowerCase())+'</td><td>'+t.entry_time+'</td><td class="n">'+t.entry_price.toFixed(2)+'</td><td>'+(t.status==="UNRESOLVED"?"no exit":(t.exit_time||"open"))+'</td><td class="n">'+t.exit_price.toFixed(2)+'</td><td class="n">'+(t.hold_min==null?"-":t.hold_min+"m")+'</td><td class="n">'+(t.stock_move===""?"-":t.stock_move+" ("+t.stock_peak+")")+'</td><td class="n">'+(t.opt_per1===""?"-":t.opt_per1)+'</td><td class="n up">'+t.mfe_pct+'</td><td class="n dn">'+t.mae_pct+'</td><td class="n '+c(t.return_pct)+'">'+t.return_pct+'</td><td class="n '+c(t.net)+'">'+m(t.net)+'</td><td>'+esc((t.exit_reason||t.status).replace(/_/g," ").toLowerCase())+'</td><td>'+stars(t.journal.rating)+'</td></tr>'+det}).join("")||'<tr><td colspan="17" class="sub" style="padding:20px;text-align:center">No trades match</td></tr>'}
 function detail(t){var j=t.journal,sh=Object.keys(t).filter(function(k){return k.indexOf("d_")===0&&t[k]!==0}).map(function(k){return esc(k.slice(2))+": "+m(t[k])}).join(" | ");
  var tags=D.tags.map(function(x){return '<span class="chip'+(j.tags.indexOf(x)>=0?" on":"")+'" data-tag="'+x+'">'+x+'</span>'}).join("");
- return '<tr class="detail"><td colspan="15"><div class="kv"><div><span>Contract</span> '+esc(t.contract)+'</div><div><span>Quantity</span> '+t.lot_qty+'</div><div><span>Stage / tier</span> '+esc(t.stage)+' / '+esc(t.tier)+'</div><div><span>Pivot state</span> '+esc(t.pivot_state)+'</div>'
-  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div>'
+ return '<tr class="detail"><td colspan="17"><div class="kv"><div><span>Contract</span> '+esc(t.contract)+'</div><div><span>Quantity</span> '+t.lot_qty+'</div><div><span>Stage / tier</span> '+esc(t.stage)+' / '+esc(t.tier)+'</div><div><span>Pivot state</span> '+esc(t.pivot_state)+'</div>'
+  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div>'+'<div style="grid-column:1/-1"><span>Stock vs option response</span> '+esc(t.stock_response||"not recorded for this trade")+'</div>'
   +'<div><span>High</span> '+t.high+' @ '+(t.high_time||"-")+'</div><div><span>Low</span> '+t.low+' @ '+(t.low_time||"-")+'</div><div><span>Targets hit</span> '+esc(t.targets_hit||"none")+'</div><div><span>Stop distance</span> '+t.stop_pct+'%</div>'
   +'<div><span>Gross / costs / net</span> '+m(t.gross)+' / '+m(t.costs)+' / '+m(t.net)+'</div><div><span>Kept of peak</span> '+(t.return_pct>0?t.captured_pct+'%':'n/a (not a winner)')+'</div></div>'
   +(t.lessons.length?t.lessons.map(function(x){return '<div class="lesson">&#9679; '+esc(x)+'</div>'}).join(""):'<div class="sub">No automatic lesson for this trade.</div>')

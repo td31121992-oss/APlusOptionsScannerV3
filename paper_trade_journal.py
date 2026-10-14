@@ -23,7 +23,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from telegram_notifier import TelegramPaperTradeNotifier
 from trade_costs import round_trip_costs
@@ -529,6 +529,56 @@ class PaperTradeJournal:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    RESPONSE_MILESTONES = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0)
+
+    def record_stock_response(self, stock_prices: Mapping[str, Any], when: datetime, extra: Iterable[dict[str, Any]] = ()) -> int:
+        """SHADOW: for each open trade (plus `extra`, e.g. trades closed this cycle) store how far the STOCK has moved since our
+        entry in our favour, what the OPTION did, the option's gain per 1% stock move, and when the stock first reached each
+        milestone (+0.25%, +0.5% ... +3%) with the option gain at that moment. Never changes a trade's status or exits."""
+        try:
+            from stock_option_response_shadow import evaluate_response
+        except Exception:                                   # noqa: BLE001 - optional module
+            return 0
+        done = 0
+        seen: set[int] = set()
+        candidates = [x for x in self.trades if str(x.get("status") or "").upper() == "OPEN"] + list(extra or [])
+        for trade in candidates:
+            if id(trade) in seen:
+                continue
+            seen.add(id(trade))
+            try:
+                price = self._number(stock_prices.get(str(trade.get("symbol") or "").upper()))
+                u_entry = self._number(trade.get("underlying_entry"))
+                opt_now = self._number(trade.get("last_option_price")) or self._number(trade.get("exit_price"))
+                if price <= 0 or u_entry <= 0 or opt_now <= 0:
+                    continue
+                res = evaluate_response(
+                    {"paper_trade_id": trade.get("paper_trade_id"), "side": trade.get("option_type"),
+                     "underlying_entry_price": u_entry, "option_entry_price": self._number(trade.get("entry_price")),
+                     "entry_time": trade.get("entry_time")},
+                    price, opt_now, when.isoformat())
+                fav = res.get("favorable_underlying_move_pct")
+                gain = res.get("option_change_from_entry_pct")
+                if fav is None or gain is None:
+                    continue
+                trade["stock_last_price"] = round(price, 2)
+                trade["stock_move_fav_pct"] = round(fav, 3)
+                trade["stock_move_fav_max_pct"] = round(max(fav, self._number(trade.get("stock_move_fav_max_pct"))), 3)
+                trade["stock_opt_gain_pct"] = round(gain, 2)
+                if abs(fav) >= 0.15:
+                    trade["stock_opt_per_1pct"] = round(gain / fav, 1)        # option % gain per 1% stock move in our favour
+                trade["stock_response_verdict"] = str(res.get("verdict") or "")
+                trade["stock_response_at"] = when.isoformat()
+                for m in self.RESPONSE_MILESTONES:
+                    key = f"stock_ms{int(round(m * 100)):03d}"
+                    if fav >= m and not trade.get(key + "_at"):
+                        trade[key + "_at"] = when.strftime("%H:%M:%S")
+                        trade[key + "_opt_pct"] = round(gain, 2)
+                done += 1
+            except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
+                continue
+        return done
 
     @staticmethod
     def _exit_ladder_mode() -> str:

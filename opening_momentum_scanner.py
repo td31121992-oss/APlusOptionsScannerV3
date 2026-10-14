@@ -1218,6 +1218,19 @@ class OpeningMomentumScanner:
                 force_close=force_close,
                 force_close_reason="SESSION_END",
             )
+            try:      # SHADOW: stock move since entry and the option's response (see stock_option_response_shadow.py)
+                eq = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, Mapping) else {}
+                prices = {}
+                for sid, item in (eq.items() if isinstance(eq, Mapping) else ()):
+                    inst = self._by_security_id.get(str(sid)) if getattr(self, "_by_security_id", None) else None
+                    if inst is not None and isinstance(item, Mapping):
+                        lp = item.get("last_price", item.get("ltp"))
+                        if lp:
+                            prices[str(inst.symbol).upper()] = float(lp)
+                if prices:
+                    self.paper_journal.record_stock_response(prices, now, extra=closed)
+            except Exception:             # noqa: BLE001 - never affects trading
+                pass
             return {
                 "closed": closed,
                 "errors": ([f"shared quote missing option ids: {','.join(missing)}"] if missing else []),
