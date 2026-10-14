@@ -51,6 +51,38 @@ def _hl_fields(t):
     except Exception:  # noqa: BLE001
         pass
     return {"high": _num(t.get("highest_option_price")), "high_time": "", "low": _num(t.get("lowest_option_price")), "low_time": ""}
+def _since_high(t, hl, now=None):
+    """How long ago the option made its high, how far it is below it, and what the STOCK has done since that moment.
+    Tells a stalled/melting option (stock flat, premium decaying) from a stock that has turned against us."""
+    out = {"high_age_min": None, "from_high_pct": None, "stock_since_high_pct": None, "high_state": ""}
+    try:
+        high = float(hl.get("high") or 0)
+        closed = str(t.get("status") or "").upper() == "CLOSED"
+        last = float((t.get("exit_price") if closed else t.get("last_option_price")) or t.get("last_option_price") or 0)
+        if high > 0 and last > 0:
+            out["from_high_pct"] = round((last / high - 1) * 100, 1)
+        ht = str(hl.get("high_time") or "")
+        if len(ht) >= 4 and ":" in ht:
+            hh, mm = int(ht.split(":")[0]), int(ht.split(":")[1][:2])
+            day = str(t.get("entry_time") or "")[:10]
+            high_dt = datetime.fromisoformat(day + "T00:00:00").replace(hour=hh, minute=mm, tzinfo=ZoneInfo("Asia/Kolkata"))
+            if closed and t.get("exit_time"):
+                end = datetime.fromisoformat(str(t.get("exit_time")))
+                end = end if end.tzinfo else end.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            else:
+                end = now or datetime.now(ZoneInfo("Asia/Kolkata"))
+            out["high_age_min"] = max(0, int((end - high_dt).total_seconds() // 60))
+        s_hi, s_now = float(t.get("stock_at_high") or 0), float(t.get("stock_last_price") or 0)
+        if s_hi > 0 and s_now > 0:
+            put = str(t.get("option_type") or "").upper().startswith("P") or str(t.get("direction") or "").upper() == "BEARISH"
+            out["stock_since_high_pct"] = round((-1 if put else 1) * (s_now / s_hi - 1) * 100, 2)
+        if not closed and out["from_high_pct"] is not None and out["from_high_pct"] <= -5 and out["stock_since_high_pct"] is not None:
+            out["high_state"] = "MELTING" if out["stock_since_high_pct"] >= -0.15 else "STOCK_REVERSING"
+    except Exception:  # noqa: BLE001 - display only
+        pass
+    return out
+
+
 HOST = "0.0.0.0"
 PORT = 8765
 
@@ -421,7 +453,7 @@ def snapshot():
             "setup": str(t.get("setup_family") or "-"),
             "quality": _num(t.get("momentum_score") or t.get("trade_quality_score")),
             "clean": _num(t.get("clean_trend_score")),
-            **_hl_fields(t),
+            **(lambda hl: {**hl, **_since_high(t, hl)})(_hl_fields(t)),
         })
 
     return {
@@ -499,6 +531,13 @@ const prettyDate=x=>{if(!x)return "-";const p=x.split("-");if(p.length!==3)retur
 let currentFilter="ALL",lastData=null;
 var statusFilter="ALL";
 function vpct(v,e){v=Number(v);e=Number(e);if(!(v>0)||!(e>0))return "";var p=(v/e-1)*100;return '<small style="color:'+(p>=0?"#17c964":"#f31260")+'">('+(p>=0?"+":"")+p.toFixed(1)+'%)</small>';}
+function fmtAge(m){m=Number(m);return m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m"}
+function highAge(x){if(x.high_age_min==null||!x.high)return "";var m=Number(x.high_age_min),c=x.status!=="OPEN"?"#8ea0bd":(m>=30?"#f31260":m>=15?"#ffb454":"#8ea0bd");
+ return '<br><small style="color:'+c+'" title="Time since the option made its high">'+fmtAge(m)+' since high</small>'}
+function fromHigh(x){if(x.from_high_pct==null||x.status!=="OPEN")return "";var p=Number(x.from_high_pct);if(p>-0.05)return '<br><small style="color:#17c964">at the high</small>';
+ var tag=x.high_state==="MELTING"?' &middot; <b style="color:#ffb454">stock flat - option melting</b>':(x.high_state==="STOCK_REVERSING"?' &middot; <b style="color:#f31260">stock moved against</b>':'');
+ var st=x.stock_since_high_pct==null?"":' &middot; stock '+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+'% since high';
+ return '<br><small style="color:'+(p<=-10?"#f31260":"#8ea0bd")+'">'+p.toFixed(1)+'% from high'+st+tag+'</small>'}
 function setStatusFilter(v){statusFilter=v;if(lastData){renderSummary(lastData);renderRows(lastData);}}
 function selectedRows(d){let rr=d.rows||[];if(statusFilter!=="ALL")rr=rr.filter(x=>x.status===statusFilter);return currentFilter==="ALL"?rr:rr.filter(x=>x.result===currentFilter);}
 function setFilter(f,b){currentFilter=f;document.querySelectorAll(".tradefilter").forEach(x=>x.classList.remove("active"));b.classList.add("active");if(lastData){renderSummary(lastData);renderRows(lastData);}}
@@ -518,7 +557,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small></td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b></td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);

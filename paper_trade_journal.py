@@ -572,6 +572,10 @@ class PaperTradeJournal:
                 if fav is None or gain is None:
                     continue
                 trade["stock_last_price"] = round(price, 2)
+                hi_at = trade.get("highest_option_price_at")
+                if hi_at and trade.get("stock_at_high_for") != hi_at:       # the option just made a new peak: note where the stock was
+                    trade["stock_at_high"] = round(price, 2)
+                    trade["stock_at_high_for"] = hi_at
                 trade["stock_move_fav_pct"] = round(fav, 3)
                 trade["stock_move_fav_max_pct"] = round(max(fav, self._number(trade.get("stock_move_fav_max_pct"))), 3)
                 trade["stock_opt_gain_pct"] = round(gain, 2)
