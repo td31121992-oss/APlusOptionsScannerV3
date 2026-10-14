@@ -54,6 +54,8 @@ nav a{color:var(--muted);text-decoration:none;font-size:12px;font-weight:700;tex
 <script>
 var tab="OPEN",pf="ALL",data=null,openIds={};
 function inr(n,d){n=Number(n)||0;return(n<0?"-":"")+"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:d==null?2:d,maximumFractionDigits:d==null?2:d})}
+function pe(v,e){v=Number(v);e=Number(e);if(!(v>0)||!(e>0))return "";var p=(v/e-1)*100;return '<span class="'+(p>=0?"pos":"neg")+'">('+(p>=0?"+":"")+p.toFixed(1)+'%)</span>'}
+function ageTxt(m){m=Number(m);return m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m"}
 function cls(n){return Number(n)>=0?"pos":"neg"}
 function sgn(n){n=Number(n)||0;return(n>0?"+":"")+n.toFixed(2)}
 function expiry(e){if(!e)return"";var m=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"],p=String(e).slice(0,10).split("-");return p.length==3?(p[2]+" "+m[Number(p[1])-1]):""}
@@ -115,12 +117,16 @@ function render(){
   var last=isOpen?x.last:(x.exit_price||x.last);
   return '<div class="card'+(openIds[x.id]?" open":"")+'" data-id="'+x.id+'">'
   +'<div class="row"><div><span class="name">'+label+'</span><span class="tag buy">BUY</span><span class="tag mis">MIS</span>'+(x.manual_exit_pending?'<span class="pend">EXIT PENDING</span>':'')+(isOpen&&x.manual_stop?'<span class="pend">MANUAL SL '+Number(x.manual_stop).toFixed(2)+'</span>':'')+'</div><div class="pnl '+cls(pnl)+'">'+inr(pnl)+'</div></div>'
-  +'<div class="small">'+(exp?exp+" expiry - ":"")+(bull?"bullish view":"bearish view")+(isOpen?"":" - "+(x.exit_reason||"closed"))+'</div>'
+  +'<div class="small">'+(exp?exp+" expiry - ":"")+(bull?"bullish view":"bearish view")+(x.sector&&x.sector!=="-"?" - "+x.sector:"")+(isOpen?"":" - "+(x.exit_reason||"closed"))+'</div>'
   +'<div class="row mid"><div class="small">Qty <b style="color:var(--text)">'+qty.toLocaleString("en-IN")+'</b> &nbsp; Avg <b style="color:var(--text)">'+Number(x.entry).toFixed(2)+'</b></div>'
   +'<div class="small">'+(isOpen?"LTP":"Exit")+' <b style="color:var(--text)">'+Number(last).toFixed(2)+'</b> <span class="'+cls(x.return_pct)+'">('+sgn(x.return_pct)+'%)</span></div></div>'
+  +(x.high?'<div class="row small"><div>High <b style="color:var(--text)">'+Number(x.high).toFixed(2)+'</b> '+pe(x.high,x.entry)+' '+(x.high_time||"")+'</div><div style="text-align:right;color:'+(!isOpen?"var(--muted)":(x.high_age_min>=30?"#ff6363":(x.high_age_min>=15?"#ffb454":"var(--muted)")))+'">'
+      +(x.high_age_min==null?"":ageTxt(x.high_age_min)+" since high")+(isOpen&&x.from_high_pct!=null&&x.from_high_pct<=-0.05?" &middot; "+Number(x.from_high_pct).toFixed(1)+"% from high":"")+'</div></div>':'')
+  +(isOpen&&x.high_state?'<div class="small" style="color:'+(x.high_state==="MELTING"?"#ffb454":"#ff6363")+';margin-top:2px">'+(x.high_state==="MELTING"?"Stock flat - option melting":"Stock moved against")
+      +(x.stock_since_high_pct==null?"":" ("+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since high)")+'</div>':'')
   +'<div class="row small"><div>'+(x.sl?'SL '+Number(x.sl).toFixed(2):'')+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'
-  +'<div class="detail"><div><a href="/trade?id='+encodeURIComponent(x.id)+'" style="color:var(--blue);font-weight:800;text-decoration:none">Open stock + option charts &rsaquo;</a></div><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+(x.high_time||"")+'</b></div>'
-  +'<div><span>Lowest since entry</span><b>'+(x.low?Number(x.low).toFixed(2):"-")+' '+(x.low_time||"")+'</b></div>'
+  +'<div class="detail"><div><a href="/trade?id='+encodeURIComponent(x.id)+'" style="color:var(--blue);font-weight:800;text-decoration:none">Open stock + option charts &rsaquo;</a></div><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+pe(x.high,x.entry)+' '+(x.high_time||"")+'</b></div>'
+  +'<div><span>Lowest since entry</span><b>'+(x.low?Number(x.low).toFixed(2):"-")+' '+pe(x.low,x.entry)+' '+(x.low_time||"")+'</b></div>'
   +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div>'
   +(isOpen?ctl(x):"")+'</div></div>'}).join("")
 }
