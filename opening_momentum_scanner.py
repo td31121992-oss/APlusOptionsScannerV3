@@ -668,6 +668,16 @@ class OpeningMomentumScanner:
             if not hasattr(self, "_v2_pb_seen") or getattr(self, "_v2_pb_day", None) != current_time.date():
                 self._v2_pb_seen, self._v2_pb_day = set(), current_time.date()
             v2_shadow.log_new(pullback, v2_movers, current_time, self._v2_pb_seen, scenario="pullback")
+            # fifth/sixth scenarios: rank by the move over the LAST 15 / 30 minutes instead of the move since the open
+            if getattr(self, "_fresh_tracker", None) is None:
+                self._fresh_tracker = v2_shadow.FreshTracker()
+            if not hasattr(self, "_v2_fresh_seen") or getattr(self, "_v2_fresh_day", None) != current_time.date():
+                self._v2_fresh_seen, self._v2_fresh_day = {"fresh15": set(), "fresh30": set()}, current_time.date()
+            for _name, _win in (("fresh15", 15), ("fresh30", 30)):
+                _rk = v2_shadow.rank_fresh(universe, quote_map, self._fresh_tracker, current_time, _win, 5)
+                _pass, _ = evaluate_entry_ready(candidates=pre_v2_candidates, mover_ranking=_rk, now=current_time, config=v2_config)
+                _extra = [x for x in _pass if (x.symbol, x.direction) not in live_keys]
+                v2_shadow.log_new(_extra, _rk, current_time, self._v2_fresh_seen[_name], scenario=_name)
         except Exception:      # noqa: BLE001 - shadow logging must never affect trading
             pass
         for blocked in v2_blocked:
