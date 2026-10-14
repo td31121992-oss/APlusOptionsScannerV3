@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -77,6 +78,74 @@ def pullback_pass(candidates: Iterable[Any], blocked: Iterable[dict[str, Any]], 
     return kept
 
 
+class FreshTracker:
+    """Rolling last-price snapshots of every F&O stock (one per scan cycle) so the move over the LAST 15 / 30 minutes can be ranked,
+    instead of the move since the open that V2 ranks by (the top 5 since the open are, by construction, the stocks that already moved most)."""
+
+    def __init__(self, keep_minutes: int = 45) -> None:
+        self.keep = keep_minutes * 60
+        self.hist: dict[str, deque[tuple[float, float]]] = {}
+
+    def update(self, quotes: dict[str, float], now: datetime) -> None:
+        ts = now.timestamp()
+        for sym, px in quotes.items():
+            if px and px > 0:
+                d = self.hist.setdefault(sym, deque())
+                if not d or ts - d[-1][0] >= 20:            # at most one snapshot per 20 s
+                    d.append((ts, float(px)))
+                while d and ts - d[0][0] > self.keep:
+                    d.popleft()
+
+    def move_pct(self, sym: str, ltp: float, now: datetime, window_min: int, day_open: float) -> float:
+        """% move over `window_min` minutes. Before that much history exists the move since the open stands in (it is the
+        fresh move at that point of the day)."""
+        d = self.hist.get(sym)
+        target = now.timestamp() - window_min * 60
+        ref = None
+        if d and d[0][0] <= target + 20:
+            for ts, px in d:                                 # newest snapshot that is at least `window` old
+                if ts <= target:
+                    ref = px
+                else:
+                    break
+        if ref is None:
+            ref = day_open
+        return (ltp / ref - 1.0) * 100.0 if ref and ref > 0 else 0.0
+
+
+def rank_fresh(universe: Any, quote_map: dict[str, Any], tracker: FreshTracker, now: datetime, window_min: int = 15,
+               top_n: int = 5) -> dict[str, Any]:
+    """Same output shape as stock_selection_v2.rank_raw_movers, ranked by the move over the last `window_min` minutes."""
+    segment = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, dict) else {}
+    rows, prices = [], {}
+    for item in universe:
+        sid = str(getattr(item, "security_id", "") or "")
+        sym = str(getattr(item, "symbol", "") or "").strip().upper()
+        raw = segment.get(sid) if sid else None
+        if raw is None and sid:
+            try:
+                raw = segment.get(int(sid))
+            except (TypeError, ValueError):
+                raw = None
+        if not isinstance(raw, dict) or not sym:
+            continue
+        ohlc = raw.get("ohlc") if isinstance(raw.get("ohlc"), dict) else {}
+        ltp, day_open = float(raw.get("last_price") or 0), float(ohlc.get("open") or 0)
+        if ltp <= 0 or day_open <= 0:
+            continue
+        prices[sym] = ltp
+        rows.append({"symbol": sym, "ltp": ltp, "from_open_pct": round((ltp / day_open - 1) * 100, 4),
+                     "fresh_pct": round(tracker.move_pct(sym, ltp, now, window_min, day_open), 4)})
+    tracker.update(prices, now)
+    up = sorted((r for r in rows if r["fresh_pct"] > 0), key=lambda r: -r["fresh_pct"])[:max(1, top_n)]
+    down = sorted((r for r in rows if r["fresh_pct"] < 0), key=lambda r: r["fresh_pct"])[:max(1, top_n)]
+    for i, r in enumerate(up, 1):
+        r["v2_rank"] = i
+    for i, r in enumerate(down, 1):
+        r["v2_rank"] = i
+    return {"top_n_per_side": top_n, "top_up": up, "top_down": down, "symbols": [r["symbol"] for r in up + down], "universe_rows_ranked": len(rows)}
+
+
 def _stats(values: list[float], best: list[float]) -> str:
     if not values:
         return "n=0"
@@ -88,7 +157,8 @@ def _stats(values: list[float], best: list[float]) -> str:
 def report(root: Path = ROOT) -> Path | None:
     """Writes data/shadow_v2/summary.md comparing outcomes (ATM option, hindsight, entry at first-ready candle +1%)."""
     groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], []),
-                                                         "est_trend": ([], []), "pullback": ([], [])}
+                                                         "est_trend": ([], []), "pullback": ([], []),
+                                                         "fresh15": ([], []), "fresh30": ([], [])}
     per_day = []
     for csv_path in sorted((root / "data" / "shadow_v2").glob("20*.csv")):
         day = csv_path.stem
@@ -102,6 +172,7 @@ def report(root: Path = ROOT) -> Path | None:
             norank = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "norank"} - extra
             est = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "est_trend"}
             pb = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "pullback"}
+            fr = {n: {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == n} for n in ("fresh15", "fresh30")}
         except (OSError, ValueError, KeyError):
             continue
         day_extra = ([], [])
@@ -122,6 +193,10 @@ def report(root: Path = ROOT) -> Path | None:
             if key in est and fate.startswith("V2_BLOCKED"):
                 groups["est_trend"][0].append(float(r["close"]))
                 groups["est_trend"][1].append(float(r["best"]))
+            for n, members in fr.items():
+                if key in members and fate.startswith("V2_BLOCKED"):
+                    groups[n][0].append(float(r["close"]))
+                    groups[n][1].append(float(r["best"]))
             if key in pb and fate.startswith("V2_BLOCKED"):
                 groups["pullback"][0].append(float(r["close"]))
                 groups["pullback"][1].append(float(r["best"]))
@@ -138,6 +213,8 @@ def report(root: Path = ROOT) -> Path | None:
              f"- **Extra with NO rank rule at all (beyond top-10):** {_stats(*groups['norank_only'])}",
              f"- **Established-trend setups V2 blocked (the proposed widening, before the 3-per-side cap):** {_stats(*groups['est_trend'])}",
              f"- **Pullback leaders (top-5 stocks V2 rejected only for a <=0.5% 5m dip, still on the right side of VWAP):** {_stats(*groups['pullback'])}",
+             f"- **Fresh-movement ranking, last 15 min, top 5 per side (V2-blocked signals it would let in):** {_stats(*groups['fresh15'])}",
+             f"- **Fresh-movement ranking, last 30 min, top 5 per side:** {_stats(*groups['fresh30'])}",
              f"- **Other V2-blocked:** {_stats(*groups['other_v2_blocked'])}",
              f"- **Live trades:** {_stats(*groups['traded'])}", "", "| Day | Extra top-10 passes |", "|---|---|"]
     lines += [f"| {day} | {_stats(*vals)} |" for day, vals in per_day]
