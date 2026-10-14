@@ -57,6 +57,14 @@ function inr(n,d){n=Number(n)||0;return(n<0?"-":"")+"₹"+Math.abs(n).toLocaleSt
 function cls(n){return Number(n)>=0?"pos":"neg"}
 function sgn(n){n=Number(n)||0;return(n>0?"+":"")+n.toFixed(2)}
 function expiry(e){if(!e)return"";var m=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"],p=String(e).slice(0,10).split("-");return p.length==3?(p[2]+" "+m[Number(p[1])-1]):""}
+function holdHint(x){
+ if(!x||x.high_age_min==null||x.from_high_pct==null)return "";
+ var m=Number(x.high_age_min),f=Number(x.from_high_pct),age=m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m";
+ if(f>-0.05)return "At the option's high right now.";
+ var st=x.stock_since_high_pct==null?"":" Stock "+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since the high.";
+ var tail=x.high_state==="MELTING"?" The stock has not moved against you, so the premium is melting - consider tightening the stop or exiting.":(x.high_state==="STOCK_REVERSING"?" The stock has turned against you.":"");
+ return "Peak was "+age+" ago, option is "+Math.abs(f).toFixed(1)+"% below it."+st+tail}
+function holdColor(x){return x&&x.high_state==="STOCK_REVERSING"?"#ff6363":(x&&x.high_state==="MELTING"?"#ffb454":"#8ea0bd")}
 function ctl(x){
  var cur=Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),entry=Number(x.entry)||0,last=Number(x.last)||0;
  return '<div class="ctl" data-id="'+x.id+'" data-entry="'+entry+'" data-cur="'+cur+'" data-last="'+last+'">'
@@ -66,6 +74,7 @@ function ctl(x){
   +'<select class="dirsel"><option value="below">% below entry</option><option value="above">% above entry (lock profit)</option></select></div>'
   +'<div class="line chips"><button class="grey chip" data-d="below" data-p="5">5% below</button><button class="grey chip" data-d="below" data-p="10">10% below</button>'
   +'<button class="grey chip" data-d="below" data-p="15">15% below</button><button class="grey chip" data-d="above" data-p="0">At entry</button><button class="grey chip" data-d="above" data-p="3">+3%</button></div>'
+  +(holdHint(x)?'<div class="small" style="margin-top:6px;color:'+holdColor(x)+'">'+holdHint(x)+'</div>':'')
   +'<div class="preview small">Type a % to see the stop price for this trade.</div>'
   +'<div class="line"><button class="setstop">Set stop</button>'+(x.manual_stop?'<button class="grey clrstop">Clear</button>':'')+'</div>'
   +'<div class="line"><button class="red exitnow">Exit now at market</button></div>'

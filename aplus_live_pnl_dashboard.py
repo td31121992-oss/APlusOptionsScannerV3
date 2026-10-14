@@ -575,6 +575,7 @@ load();setInterval(load,5000);
 </style>
 <div id="mgback"><div id="mgbox">
  <h3 id="mgtitle">Manage trade</h3><div class="mgkv" id="mginfo"></div>
+ <div id="mgwarn" style="margin-top:9px;font-size:13px"></div>
  <div class="mgrow"><input id="mgpct" type="number" step="0.5" min="0" placeholder="Stop %"><select id="mgdir"><option value="below">% below entry</option><option value="above">% above entry (lock profit)</option></select></div>
  <div class="mgrow"><button class="grey mgchip" data-d="below" data-p="5">5% below</button><button class="grey mgchip" data-d="below" data-p="10">10% below</button><button class="grey mgchip" data-d="below" data-p="15">15% below</button><button class="grey mgchip" data-d="above" data-p="0">At entry</button><button class="grey mgchip" data-d="above" data-p="3">+3%</button></div>
  <div id="mgprev">Type a % to see the stop price for this trade.</div>
@@ -583,6 +584,14 @@ load();setInterval(load,5000);
 </div></div>
 <script>
 var mgRow=null;
+function holdHint(x){
+ if(!x||x.high_age_min==null||x.from_high_pct==null)return "";
+ var m=Number(x.high_age_min),f=Number(x.from_high_pct),age=m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m";
+ if(f>-0.05)return "At the option's high right now.";
+ var st=x.stock_since_high_pct==null?"":" Stock "+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since the high.";
+ var tail=x.high_state==="MELTING"?" The stock has not moved against you, so the premium is melting - consider tightening the stop or exiting.":(x.high_state==="STOCK_REVERSING"?" The stock has turned against you.":"");
+ return "Peak was "+age+" ago, option is "+Math.abs(f).toFixed(1)+"% below it."+st+tail}
+function holdColor(x){return x&&x.high_state==="STOCK_REVERSING"?"#ff6363":(x&&x.high_state==="MELTING"?"#ffb454":"#8ea0bd")}
 function mgPrice(){var p=parseFloat(document.getElementById("mgpct").value),d=document.getElementById("mgdir").value;
  if(!mgRow||!(p>=0)||!(Number(mgRow.entry)>0))return null;return Math.round(Number(mgRow.entry)*(1+(d==="above"?1:-1)*p/100)/0.05)*0.05}
 function mgPreview(){var v=mgPrice(),el=document.getElementById("mgprev");
@@ -596,6 +605,7 @@ function mgOpen(id){var rows=(lastData&&lastData.rows)||[];mgRow=rows.find(funct
  var cur=Math.max(Number(mgRow.sl)||0,Number(mgRow.ladder_stop)||0);
  document.getElementById("mgtitle").textContent="Manage "+mgRow.symbol+" "+(mgRow.strike||"")+" "+String(mgRow.side||"").split(" ").pop();
  document.getElementById("mginfo").innerHTML="<span>Entry <b>"+Number(mgRow.entry).toFixed(2)+"</b></span><span>Last <b>"+Number(mgRow.last).toFixed(2)+"</b></span><span>Current stop <b>"+(cur?cur.toFixed(2):"-")+"</b></span>"+(mgRow.manual_stop?"<span>Your stop <b>"+Number(mgRow.manual_stop).toFixed(2)+"</b></span>":"");
+ var w=document.getElementById("mgwarn");w.textContent=holdHint(mgRow);w.style.color=holdColor(mgRow);
  document.getElementById("mgpct").value="";document.getElementById("mgdir").value="below";
  var ready=!(lastData&&lastData.manual_ready===false);
  var m=document.getElementById("mgmsg");m.textContent=ready?"A manual stop can only tighten risk (above the current stop, below the last price). Paper trade; applies at the next position update (about a minute).":"Manual controls are NOT active yet: the running scanner has not loaded them (needs a restart). Commands are refused until then.";m.style.color=ready?"#8ea0bd":"#ffb454";
