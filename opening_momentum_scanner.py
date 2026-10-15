@@ -423,9 +423,10 @@ class OpeningMomentumScanner:
         })
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
         fut_ids: list[str] = []
-        try:                      # SHADOW: sector-index tape for the sector-fade tags - see sector_tape.py
-            import sector_tape
-            self._sector_tape = sector_tape.SectorTape(Path(__file__).resolve().parent)
+        try:                      # SHADOW: sector-index tape for the sector-fade tags - see sector_tape.py (built once, keeps its history)
+            if getattr(self, "_sector_tape", None) is None:
+                import sector_tape
+                self._sector_tape = sector_tape.SectorTape(Path(__file__).resolve().parent)
         except Exception:         # noqa: BLE001 - never affects trading
             self._sector_tape = None
         try:                      # SHADOW: near-month stock futures ride on the same quote call (price, OI) - see futures_flow.py
