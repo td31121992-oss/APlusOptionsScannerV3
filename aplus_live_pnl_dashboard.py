@@ -176,6 +176,15 @@ def _num(v, default=0.0):
     except Exception:
         return default
 
+def _stop_fields(t):
+    """start / current stop-loss and why it moved (see stop_view.py); empty when the trade lacks the fields."""
+    try:
+        import stop_view
+        return stop_view.stop_state(t)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _entries_state():
     import entry_pause
     today = datetime.now().date()
@@ -484,6 +493,7 @@ def snapshot():
             "quality": _num(t.get("momentum_score") or t.get("trade_quality_score")),
             "clean": _num(t.get("clean_trend_score")),
             **(lambda hl: {**hl, **_since_high(t, hl)})(_hl_fields(t)),
+            **_stop_fields(t),
         })
 
     return {
@@ -550,7 +560,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Sector</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status <select id="statusflt" onchange="setStatusFilter(this.value)" style="background:#0e1527;color:#e7eefc;border:1px solid #27334d;border-radius:6px;padding:2px 4px;font-size:12px"><option value="ALL">All</option><option value="OPEN">Open</option><option value="CLOSED">Closed</option></select></th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th><th>Manage</th>
+<th>Symbol</th><th>Sector</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status <select id="statusflt" onchange="setStatusFilter(this.value)" style="background:#0e1527;color:#e7eefc;border:1px solid #27334d;border-radius:6px;padding:2px 4px;font-size:12px"><option value="ALL">All</option><option value="OPEN">Open</option><option value="CLOSED">Closed</option></select></th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right" title="Where the stop started, where it is now and why it moved">Stop-loss (start → now)</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th><th>Manage</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -564,6 +574,12 @@ function vpct(v,e){v=Number(v);e=Number(e);if(!(v>0)||!(e>0))return "";var p=(v/
 function fmtAge(m){m=Number(m);return m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m"}
 function highAge(x){if(x.high_age_min==null||!x.high)return "";var m=Number(x.high_age_min),c=x.status!=="OPEN"?"#8ea0bd":(m>=30?"#f31260":m>=15?"#ffb454":"#8ea0bd");
  return '<br><small style="color:'+c+'" title="Time since the option made its high">'+fmtAge(m)+' since high</small>'}
+function slCell(x){if(!x||!x.cur_sl)return "-";var moved=Number(x.cur_sl)>Number(x.start_sl)+0.004;
+ var col=Number(x.sl_vs_entry_pct)>=0?"#17c964":(moved?"#ffb454":"#8ea0bd");
+ var gap=(x.status==="OPEN"&&Number(x.last)>0)?" &middot; "+(((Number(x.last)-Number(x.cur_sl))/Number(x.last))*100).toFixed(1)+"% below":"";
+ return '<span style="color:#8ea0bd">'+fmt(x.start_sl)+'</span> &rarr; <b style="color:'+col+'">'+fmt(x.cur_sl)+'</b><br><small style="color:'+col+'">'+(x.sl_label||"")
+  +(Number(x.sl_vs_entry_pct)!==0?" ("+(x.sl_vs_entry_pct>0?"+":"")+x.sl_vs_entry_pct+"%)":"")+gap+'</small>'
+  +((x.status==="OPEN"&&x.sl_next)?'<br><small style="color:#8ea0bd">next: '+x.sl_next+'</small>':"")}
 function watchPeak(x){if(!x||x.status!=="OPEN"||!(Number(x.entry)>0)||!(Number(x.high)>0))return 0;var p=(Number(x.high)/Number(x.entry)-1)*100;return p>=10?p:0}
 function watchRow(x){return watchPeak(x)?' style="background:#33290a;box-shadow:inset 3px 0 0 #ffb454"':""}
 function watchBadge(x){var p=watchPeak(x);if(!p)return "";var now=(Number(x.last)/Number(x.entry)-1)*100;return ' <span style="background:#ffb454;color:#1a1200;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:800" title="Option reached +'+p.toFixed(0)+'% - watch for reversal">WATCH +'+p.toFixed(0)+'% \u2192 now '+(now>=0?"+":"")+now.toFixed(0)+'%</span>'}
@@ -590,7 +606,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
