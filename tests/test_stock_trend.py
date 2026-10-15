@@ -61,3 +61,29 @@ class ScanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerStockTests(unittest.TestCase):
+    def test_attach_scans_uses_row_prices_and_daily_levels(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "data" / "reports"
+            d.mkdir(parents=True)
+            (d / "daily_indicators.json").write_text(json.dumps({"symbols": {"AAA": {"ema20": 100.0, "pdh": 101.0, "hi_5d": 103.0}}}))
+            rows = [{"symbol": "AAA", "ltp": 104.0, "open_0915": 99.0, "day_high": 104.5, "day_low": 99.0, "previous_close": 99.5},
+                    {"symbol": "ZZZ", "ltp": 0}]
+            stt.attach_scans(rows, tmp)
+            texts = {s["text"] for s in rows[0]["scans"]}
+            self.assertIn("20 EMA Breakout 1D", texts)
+            self.assertIn("Open = Low", texts)
+            self.assertNotIn("scans", rows[1])
+
+    def test_market_watch_and_analysis_pages_carry_the_new_widgets(self):
+        import aplus_live_pnl_dashboard as dash
+        import stock_analysis_tab as sa
+        self.assertIn("Intraday scans", dash.FNO_MARKET_WATCH_HTML)
+        self.assertIn("scanflt", dash.FNO_MARKET_WATCH_HTML)
+        self.assertIn("/api/stock-trend", sa.STOCK_ANALYSIS_HTML)
+        self.assertEqual(dash.FNO_MARKET_WATCH_HTML.count("`") % 2, 0)       # template literals balanced

@@ -257,3 +257,55 @@ def build(five: dict[str, list[float]], session_start: int, daily: dict[str, lis
         out["scans"] = scans(ltp, o_t, h_t, l_t, prev_close, ind, bull)
     out["price"] = round(ltp, 2)
     return out
+
+
+# ----------------------------------------------------------------------------- per-stock helpers (market watch, stock analysis page)
+_IND_CACHE: dict[str, Any] = {"mtime": 0.0, "data": {}}
+
+
+def load_indicators(root) -> dict[str, Any]:
+    import json
+    from pathlib import Path
+
+    path = Path(root) / "data" / "reports" / "daily_indicators.json"
+    try:
+        m = path.stat().st_mtime
+        if m != _IND_CACHE["mtime"]:
+            _IND_CACHE["data"] = json.loads(path.read_text(encoding="utf-8")).get("symbols", {})
+            _IND_CACHE["mtime"] = m
+    except (OSError, ValueError):
+        pass
+    return _IND_CACHE["data"]
+
+
+def attach_scans(rows: list[dict[str, Any]], root) -> None:
+    """Adds `scans` (list of {text, tone}) to every market-watch row, from the row's own prices and the daily indicators. No network."""
+    ind = load_indicators(root)
+    for r in rows:
+        try:
+            sym = str(r.get("symbol") or "").upper()
+            ltp = float(r.get("ltp") or 0)
+            if ltp <= 0:
+                continue
+            r["scans"] = scans(ltp, float(r.get("open_0915") or 0), float(r.get("day_high") or 0), float(r.get("day_low") or 0),
+                               float(r.get("previous_close") or 0), ind.get(sym))
+        except (TypeError, ValueError):
+            continue
+
+
+def for_symbol(symbol: str, root, day: str) -> dict[str, Any]:
+    """Full gauge + indicators + scans for one stock (network: cached intraday + daily history)."""
+    import trade_chart
+    from order_book_recorder import _universe
+
+    symbol = symbol.strip().upper()
+    if not trade_chart._UNIVERSE:
+        trade_chart._UNIVERSE.update(_universe())
+    sid = trade_chart._UNIVERSE.get(symbol)
+    if not sid:
+        return {"ok": False, "error": "unknown symbol"}
+    five, start = trade_chart._five_history(sid, day)
+    daily = trade_chart._daily_history(sid, day)
+    ind = load_indicators(root).get(symbol)
+    prev_close = daily["c"][-1] if daily.get("c") else float((ind or {}).get("last_close") or 0)
+    return {"ok": True, "symbol": symbol, "trend": build(five, start, daily, ind, prev_close)}

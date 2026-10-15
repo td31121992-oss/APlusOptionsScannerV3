@@ -611,6 +611,11 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
  </div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Stock trend, indicators &amp; intraday scans <span class="sub">5M / 15M / daily - read-only</span></div>
+  <div class="body"><div id="trWrap" style="display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px">
+   <div><div id="trTabs" style="display:flex;gap:6px;margin-bottom:6px"></div><div id="trGauge"></div><div id="trLbl" style="text-align:center;font-weight:900;font-size:17px"></div><div id="trCounts" style="display:flex;gap:6px;margin-top:8px"></div></div>
+   <div><table id="trTbl" style="width:100%;border-collapse:collapse;font-size:13px"></table></div>
+   <div id="trScans"></div></div><div class="sub" id="trNote"></div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">Why this stock is moving • local read-only evidence</div><div class="body"><div id="intelligence"></div><div class="notice">Possible drivers are evidence-based context, not confirmed causality or a trading recommendation.</div></div></div>
@@ -737,7 +742,29 @@ async function load(){
   const day=q("#day").value;
   const r=await fetch("/api/stock-analysis?symbol="+encodeURIComponent(sym)+"&day="+encodeURIComponent(day)+"&ts="+Date.now());
   render(await r.json());
+  loadTrend();
 }
+var TRD=null,TRF="5M";
+function trGauge(score){var a=Math.max(-1,Math.min(1,score))*90,cx=110,cy=100,r=84,segs=24,h="";
+ for(var i=0;i<segs;i++){var t=i/(segs-1),ang=Math.PI*(1-i/segs),a2=Math.PI*(1-(i+0.7)/segs),col="hsl("+Math.round(t*165)+",60%,50%)";
+  var x1=cx+r*Math.cos(ang),y1=cy-r*Math.sin(ang),x2=cx+(r-16)*Math.cos(ang),y2=cy-(r-16)*Math.sin(ang),x3=cx+(r-16)*Math.cos(a2),y3=cy-(r-16)*Math.sin(a2),x4=cx+r*Math.cos(a2),y4=cy-r*Math.sin(a2);
+  h+='<path d="M'+x1+','+y1+' L'+x2+','+y2+' L'+x3+','+y3+' L'+x4+','+y4+'Z" fill="'+col+'"/>'}
+ var rad=(90-a)*Math.PI/180,nx=cx+(r-6)*Math.cos(rad),ny=cy-(r-6)*Math.sin(rad);
+ return '<svg viewBox="0 0 220 112" style="width:100%;max-width:280px;display:block;margin:0 auto">'+h+'<line x1="'+cx+'" y1="'+cy+'" x2="'+nx+'" y2="'+ny+'" stroke="#e7eefc" stroke-width="2.5"/><circle cx="'+cx+'" cy="'+cy+'" r="5" fill="#e7eefc"/></svg>'}
+function trDraw(){var tr=TRD&&TRD.trend;if(!tr||!Object.keys(tr).length){document.getElementById("trNote").textContent=TRD&&TRD.error?("Trend unavailable: "+TRD.error):"Trend unavailable";return}
+ var keys=["5M","15M","DAILY"].filter(function(k){return tr[k]});if(keys.indexOf(TRF)<0)TRF=keys[0];
+ document.getElementById("trTabs").innerHTML=keys.map(function(k){return'<button style="flex:1;padding:6px;border-radius:8px;border:1px solid #27334d;font-weight:800;cursor:pointer;background:'+(k===TRF?"#12351f":"#0f1729")+';color:'+(k===TRF?"#2ecc71":"#8ea0bd")+'" data-k="'+k+'">'+k+'</button>'}).join("");
+ document.querySelectorAll("#trTabs button").forEach(function(b){b.onclick=function(){TRF=b.dataset.k;trDraw()}});
+ var c=tr[TRF],s=c.score;document.getElementById("trGauge").innerHTML=trGauge(s);
+ var lbl=s>=0.6?"STRONG BULLISH":s>=0.2?"BULLISH":s<=-0.6?"STRONG BEARISH":s<=-0.2?"BEARISH":"NEUTRAL";
+ var l=document.getElementById("trLbl");l.textContent=lbl;l.style.color=s>=0.2?"#2ecc71":s<=-0.2?"#ff6363":"#8ea0bd";
+ document.getElementById("trCounts").innerHTML='<span style="flex:1;text-align:center;background:#3a1620;color:#ff9bb0;border-radius:8px;padding:6px;font-weight:700">Bearish '+c.bearish+'</span><span style="flex:1;text-align:center;background:#232b3f;color:#8ea0bd;border-radius:8px;padding:6px;font-weight:700">Neutral '+c.neutral+'</span><span style="flex:1;text-align:center;background:#12351f;color:#2ecc71;border-radius:8px;padding:6px;font-weight:700">Bullish '+c.bullish+'</span>';
+ var col={bull:"#2ecc71",bear:"#ff6363",neutral:"#8ea0bd"};
+ document.getElementById("trTbl").innerHTML='<tr style="color:#8ea0bd"><td>NAME</td><td>VALUE</td><td style="text-align:right">INTERPRETATION</td></tr>'+(c.table||[]).map(function(r){return'<tr style="border-top:1px solid #27334d"><td style="padding:6px 4px">'+r.name+'</td><td>'+r.value+'</td><td style="text-align:right;font-weight:700;color:'+col[r.tone]+'">'+r.text+'</td></tr>'}).join("");
+ document.getElementById("trScans").innerHTML=(tr.scans||[]).length?(tr.scans).map(function(x){return'<div style="border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px;background:'+(x.tone==="bull"?"#12351f":"#3a1620")+';color:'+(x.tone==="bull"?"#b9f5cf":"#ffb9c8")+'">'+x.text+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>';
+ document.getElementById("trNote").textContent=""}
+function loadTrend(){var sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
+ fetch("/api/stock-trend?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){TRD=d;trDraw()}).catch(function(){})}
 async function loadChain(){
   const sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
   const expiry=q("#expiry").value;
