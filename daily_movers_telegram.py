@@ -70,7 +70,7 @@ def rank_option_movers(rows: list[dict[str, Any]], n: int = 5) -> tuple[list[dic
     return [x for x in calls if x["pct"] > 0], [x for x in puts if x["pct"] > 0]
 
 
-def fetch_option_rows(day: str) -> list[dict[str, Any]]:
+def fetch_option_rows(day: str, stock_pct_override: dict[str, float] | None = None) -> list[dict[str, Any]]:
     """Quote every CE/PE within OPTION_STRIKES of the money (nearest expiry) for all F&O stocks. Read-only; about 6 quote calls."""
     import pandas as pd
     import requests
@@ -97,10 +97,12 @@ def fetch_option_rows(day: str) -> list[dict[str, Any]]:
     by_id = {v: k for k, v in universe.items()}
     eq = quote("NSE_EQ", list(universe.values()))
     stock_ltp = {by_id.get(int(k)): _f(v.get("last_price")) for k, v in eq.items()}
-    stock_pct = {}
-    for k, v in eq.items():
-        prev = _f((v.get("ohlc") or {}).get("close"))
-        stock_pct[by_id.get(int(k))] = (_f(v.get("last_price")) / prev - 1.0) * 100.0 if prev > 0 else 0.0
+    stock_pct = dict(stock_pct_override or {})                # from the previous close in the market-watch report (the quote's own
+    for k, v in eq.items():                                   # close is today's close once the session has ended)
+        sym = by_id.get(int(k))
+        if sym not in stock_pct:
+            prev = _f((v.get("ohlc") or {}).get("close"))
+            stock_pct[sym] = (_f(v.get("last_price")) / prev - 1.0) * 100.0 if prev > 0 else 0.0
     m = pd.read_csv(ROOT / "data" / "cache" / "api-scrip-master-detailed.csv", low_memory=False,
                     usecols=["SECURITY_ID", "INSTRUMENT", "UNDERLYING_SYMBOL", "SM_EXPIRY_DATE", "STRIKE_PRICE", "OPTION_TYPE", "LOT_SIZE"])
     m = m[m.INSTRUMENT == "OPTSTK"].copy()
@@ -349,6 +351,7 @@ def main() -> int:
         pass
     now = datetime.now(IST)
     day = now.date().isoformat()
+    report_day = date.fromisoformat(os.getenv("APLUS_MOVERS_DAY") or day)
     sys.path.insert(0, str(ROOT))
     from trading_calendar import is_trading_day
 
@@ -366,16 +369,18 @@ def main() -> int:
     gainers, losers = compute_movers(rows)
     calls = puts = None
     try:                                                   # the option lists are an extra: stocks still go out if they fail
-        calls, puts = rank_option_movers(fetch_option_rows(os.getenv("APLUS_MOVERS_DAY") or day))
+        spct = {str(r["symbol"]): (_f(r.get("ltp")) / _f(r.get("previous_close")) - 1.0) * 100.0 for r in rows
+                if _f(r.get("ltp")) > 0 and _f(r.get("previous_close")) > 0}
+        calls, puts = rank_option_movers(fetch_option_rows(os.getenv("APLUS_MOVERS_DAY") or day, spct))
     except Exception as exc:  # noqa: BLE001
         print(f"option premium section skipped: {type(exc).__name__}: {exc}")
     if args.options_card:
-        print(render_options_card(now.date(), calls or [], puts or [], Path(args.options_card)))
+        print(render_options_card(report_day, calls or [], puts or [], Path(args.options_card)))
         return 0
     if args.card:
-        print(render_card(now.date(), gainers, losers, Path(args.card)))
+        print(render_card(report_day, gainers, losers, Path(args.card)))
         return 0
-    message = format_message(now.date(), gainers, losers, len(rows), calls, puts)
+    message = format_message(report_day, gainers, losers, len(rows), calls, puts)
     if args.dry_run:
         print(message)
         return 0
