@@ -186,6 +186,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         put_late_review.write(root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # put-side continuation shadow list for the day (research only)
+        import put_continuation
+
+        put_continuation.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
