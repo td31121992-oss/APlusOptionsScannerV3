@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -80,6 +80,24 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
             for ts, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or [])]
 
 
+def trade_extreme(candles: list[dict[str, Any]], start: int, end: int, high: bool = True) -> dict[str, Any] | None:
+    """Highest high (or lowest low) of the candles from the entry candle to the exit (or now). {price, time, hm} or None."""
+    best = None
+    for c in candles or []:
+        t = int(c.get("t") or 0)
+        if t < start - 299 or (end and t > end):
+            continue
+        v = float(c.get("h" if high else "l") or 0)
+        if v <= 0:
+            continue
+        if best is None or (v > best[0] if high else v < best[0]):
+            best = (v, t)
+    if best is None:
+        return None
+    hm = datetime.fromtimestamp(best[1], timezone.utc).strftime("%H:%M")        # candle times carry the +05:30 shift already
+    return {"price": round(best[0], 2), "time": best[1], "hm": hm}
+
+
 def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
     cached = _CACHE.get(trade_id)
     if cached and time.time() - cached[0] < 15:
@@ -128,7 +146,13 @@ def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
            "expiry": str(t.get("expiry") or ""), "qty": qty, "entry_epoch": entry_epoch, "exit_epoch": exit_epoch,
            "last": last, "pnl": round((last - entry) * qty, 2) if entry > 0 and last > 0 else 0.0,
            "exit_reason": t.get("exit_reason") or "", "levels": levels(t), "stock": stock, "option": option, "stock_marks": stock_marks,
-           "setup": t.get("setup_family") or ""}
+           "setup": t.get("setup_family") or "", "entry_hm": entry_t[11:16] if len(entry_t) >= 16 else ""}
+    try:
+        bull = str(t.get("direction") or "").upper() == "BULLISH"
+        out["trade_marks"] = {"option": trade_extreme(option, entry_epoch, exit_epoch, True),
+                              "stock": trade_extreme(stock, entry_epoch, exit_epoch, bull), "stock_is_high": bull}
+    except Exception:                                       # noqa: BLE001 - chart extras must never break the page
+        out["trade_marks"] = {}
     _CACHE[trade_id] = (time.time(), out)
     return out
 
@@ -153,23 +177,25 @@ TRADE_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><tit
 <div class="head"><div><h1 id="title">Trade</h1><div class="sub" id="meta">loading...</div></div><div style="text-align:right"><div id="pnl" style="font-size:24px;font-weight:800"></div><div class="sub" id="state"></div></div></div>
 <div class="grid"><div class="card"><h2 id="optTitle">Option (5-minute)</h2><div class="chart" id="optChart"></div><div class="lv" id="optLv"></div></div>
 <div class="card"><h2 id="stkTitle">Stock (5-minute)</h2><div class="chart" id="stkChart"></div><div class="lv" id="stkLv"></div></div></div>
-<div class="note">Lines: yellow = entry, red = stop loss, green = targets 1-3. The marker shows the entry candle. Paper trade; read-only. Charts refresh every 15 seconds.</div>
+<div class="note">Lines: yellow = entry, red = stop loss, green = targets 1-3, gold dotted = the trade's own high (best point since entry) with its time. The marker shows the entry candle and entry time. Paper trade; read-only. Charts refresh every 15 seconds.</div>
 </div><script>
 var id=new URLSearchParams(location.search).get("id")||"",charts={};
 function mk(el){var c=LightweightCharts.createChart(document.getElementById(el),{layout:{background:{color:"#121a2d"},textColor:"#8ea0bd"},grid:{vertLines:{color:"#1d2842"},horzLines:{color:"#1d2842"}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:"#27334d"},rightPriceScale:{borderColor:"#27334d"},autoSize:true});
  var s=c.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"});return{chart:c,series:s,lines:[]}}
-function fill(k,el,candles,lv,entry,xm){if(!charts[k])charts[k]=mk(el);var o=charts[k];
+function fill(k,el,candles,lv,entry,xm,tm,entryHm,isHigh){if(!charts[k])charts[k]=mk(el);var o=charts[k];xm=(xm||[]).slice();
  o.series.setData((candles||[]).map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));
  o.lines.forEach(function(l){o.series.removePriceLine(l)});o.lines=[];var ps=[],mkr=[];
  (lv||[]).forEach(function(l){ps.push(l.price);var col=l.name==="SL"?"#ff6363":l.name==="Entry"?"#f5b942":"#2ecc71";
   o.lines.push(o.series.createPriceLine({price:l.price,color:col,lineWidth:2,lineStyle:l.name==="Entry"?0:2,axisLabelVisible:true,title:l.name+" "+l.price.toFixed(2)}))});
- var XC={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363"};
+ var XC={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363",tradehigh:"#ffd166"};
+ if(tm&&tm.price){var dup=xm.filter(function(m){return(m.key==="dayhigh"||m.key==="daylow")&&Math.abs(m.price-tm.price)<0.006});
+  if(dup.length){dup[0].name="Day & trade "+(isHigh?"high":"low")}else{xm.push({key:"tradehigh",name:"Trade "+(isHigh?"high":"low"),price:tm.price,hm:tm.hm,time:tm.time})}}
  (xm||[]).forEach(function(m){ps.push(m.price);var day=m.key.indexOf("day")===0;
   o.lines.push(o.series.createPriceLine({price:m.price,color:XC[m.key],lineWidth:day?1:1,lineStyle:3,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
-  if(m.time){mkr.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:XC[m.key],shape:m.key==="dayhigh"?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
+  if(m.time){mkr.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:XC[m.key],shape:(m.key==="dayhigh"||(m.key==="tradehigh"&&isHigh))?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
  if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);
   o.series.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r)return{priceRange:{minValue:lo,maxValue:hi}};return{priceRange:{minValue:Math.min(r.priceRange.minValue,lo),maxValue:Math.max(r.priceRange.maxValue,hi)},margins:r.margins}}})}
- if(entry&&(candles||[]).length){var t=0;for(var i=0;i<candles.length;i++){if(candles[i].t<=entry)t=candles[i].t}if(t)mkr.push({time:t,position:"belowBar",color:"#f5b942",shape:"arrowUp",text:"Entry"})}
+ if(entry&&(candles||[]).length){var t=0;for(var i=0;i<candles.length;i++){if(candles[i].t<=entry)t=candles[i].t}if(t)mkr.push({time:t,position:"belowBar",color:"#f5b942",shape:"arrowUp",text:"Entry"+(entryHm?" "+entryHm:"")})}
  mkr.sort(function(a,b){return a.time-b.time});o.series.setMarkers(mkr)}
 function chips(el,lv){document.getElementById(el).innerHTML=(lv||[]).map(function(l){var c=l.name==="SL"?"sl":l.name==="Entry"?"e":"t";return'<span class="'+c+'">'+l.name+' <b>'+l.price.toFixed(2)+'</b></span>'}).join("")}
 function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
@@ -179,7 +205,7 @@ function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-s
  var p=document.getElementById("pnl");p.textContent=(d.pnl<0?"-":"")+"₹"+Math.abs(d.pnl).toLocaleString("en-IN",{maximumFractionDigits:2});p.className=d.pnl>=0?"pos":"neg";
  document.getElementById("state").textContent=(d.status==="OPEN"?"Last ":"Exit ")+d.last.toFixed(2)+(d.error?" - chart data issue: "+d.error:"");
  document.getElementById("optTitle").textContent="Option - "+d.option_label+" (5-minute)";document.getElementById("stkTitle").textContent="Stock - "+d.symbol+" (5-minute)";
- fill("opt","optChart",d.option,d.levels.option,d.entry_epoch);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
+ var tmk=d.trade_marks||{};fill("opt","optChart",d.option,d.levels.option,d.entry_epoch,[],tmk.option,d.entry_hm,true);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks,tmk.stock,d.entry_hm,tmk.stock_is_high!==false);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
  if(!d.option.length&&!d.stock.length)document.getElementById("meta").textContent+=" - no candles yet";
  }).catch(function(){document.getElementById("meta").textContent="connection lost - retrying"})}
 load();setInterval(load,15000);
