@@ -64,8 +64,9 @@ def build(rows: list[dict[str, Any]], ticks: dict[str, list[tuple[int, float]]],
     sec_rows = [{"name": k, "avg": round(st.mean(v), 2), "n": len(v), "up": sum(1 for x in v if x > 0),
                  "bars": sorted(v, reverse=True)} for k, v in sectors.items()]
     sec_rows.sort(key=lambda x: -x["avg"])
+    ranked = [x for x in sec_rows if x["n"] >= 3] or sec_rows            # a one- or two-stock "sector" is not a sector leader
     return {"ok": True, "minutes": minutes, "stocks": stocks, "bullish": bull, "bearish": bear, "flat": len(stocks) - bull - bear,
-            "sectors": sec_rows, "leading": sec_rows[0] if sec_rows else None, "lagging": sec_rows[-1] if sec_rows else None,
+            "sectors": sec_rows, "leading": ranked[0] if ranked else None, "lagging": ranked[-1] if ranked else None,
             "now": f"{upto // 60:02d}:{upto % 60:02d}"}
 
 

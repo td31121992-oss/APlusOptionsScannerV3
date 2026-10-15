@@ -43,3 +43,14 @@ class XrayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaderTests(unittest.TestCase):
+    def test_tiny_sectors_do_not_lead(self):
+        r = [{"symbol": f"A{i}", "sector": "Big", "open_0915": 100.0, "ltp": 100.0 + i * 0.1} for i in range(4)]
+        r += [{"symbol": "ONE", "sector": "Solo", "open_0915": 100.0, "ltp": 110.0},
+              {"symbol": "B1", "sector": "Weak", "open_0915": 100.0, "ltp": 99.0}, {"symbol": "B2", "sector": "Weak", "open_0915": 100.0, "ltp": 98.0},
+              {"symbol": "B3", "sector": "Weak", "open_0915": 100.0, "ltp": 99.5}]
+        d = mx.build(r, {}, 9 * 60 + 30)
+        self.assertEqual(d["leading"]["name"], "Big")             # "Solo" (+10%) has one stock only
+        self.assertEqual(d["lagging"]["name"], "Weak")
