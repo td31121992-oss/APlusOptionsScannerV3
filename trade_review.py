@@ -81,6 +81,8 @@ def review_row(t: dict) -> dict[str, Any]:
         "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
                         if t.get("lock_shadow_exit_at") else ""),
         "half10_shadow": _half10(t, exit_price),
+        "confirm5": str(t.get("confirm5") or ""), "confirm5_pct": t.get("confirm5_pct", ""),
+        "day_entry_rank": int(_f(t.get("day_entry_rank"))),
         **_shadow_deltas(t, exit_price),
         "breadth": (f"{t.get('breadth_tag')} ({t.get('breadth_pct_with')}% with, ev {t.get('breadth_evidence')})" if t.get("breadth_tag") else ""),
         "ladder_shadow": _shadow(t, "ladder", exit_price), "trail60_shadow": _shadow(t, "trail60", exit_price),
@@ -140,6 +142,37 @@ def summarize(rows: list[dict], key: str) -> list[tuple[str, int, int, int]]:
             for k, v in sorted(groups.items(), key=lambda kv: -sum(x["net"] for x in kv[1]))]
 
 
+def quality_split(rows: list[dict], cap: int = 5) -> tuple[list[dict], list[dict], list[dict]]:
+    """(taken, skipped_failed, skipped_over_cap): the quality filter = stock still in our favour 5 min after entry,
+    and only the first `cap` such entries of the day."""
+    taken, failed, over = [], [], []
+    for r in sorted(rows, key=lambda x: x.get("entry_time") or ""):
+        c = r.get("confirm5")
+        if c == "HELD":
+            (taken if len(taken) < cap else over).append(r)
+        elif c == "FAILED":
+            failed.append(r)
+    return taken, failed, over
+
+
+def quality_section(rows: list[dict]) -> list[str]:
+    taken, failed, over = quality_split(rows)
+    if not (taken or failed or over):
+        return []
+    def tot(g, k="net"):
+        return sum(_f(r.get(k)) for r in g)
+    out = ["", "**Quality filter (shadow, nothing traded)**: keep a trade only if the stock is still in our favour 5 minutes after entry, "
+           "and only the first 5 such trades of the day. Optional second line = one lot booked at +10%, one lot runs (the half-at-+10% rule).", "",
+           "| Group | Trades | Real net Rs | With half booked at +10% (net + delta) |", "|---|---|---|---|"]
+    for lab, g in (("Kept (held 5 min, first 5)", taken), ("Skipped: stock failed to follow through", failed), ("Skipped: over the daily cap", over)):
+        if g:
+            out.append(f"| {lab}: " + ", ".join(r["symbol"] for r in g) + f" | {len(g)} | {tot(g):+,.0f} | {tot(g) + tot(g, 'd_half10'):+,.0f} |")
+    unknown = [r for r in rows if not r.get("confirm5")]
+    if unknown:
+        out.append(f"| Not yet 5 minutes old / not recorded | {len(unknown)} | {tot(unknown):+,.0f} | - |")
+    return out
+
+
 def render(day: str, rows: list[dict], health: str = "") -> str:
     if not rows:
         return f"# Trade review {day}\n\n" + (health + "\n\n" if health else "") + "No paper trades.\n"
@@ -174,6 +207,7 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
                 continue
             lab = labels.get(n) or (f"Exit {n.split('_')[0][4:]}% below the peak, after +{n.split('_a')[1]}% reached" if n.startswith("peak") else n)
             out.append(f"| {lab} | {sum(r.get('hit_' + n, 0) for r in rows)} of {len(rows)} | {sum(r.get('d_' + n, 0) for r in rows):+,} |")
+    out += quality_section(rows)
     gave_back = [r for r in rows if r["mfe_pct"] >= 15 and r["return_pct"] <= 5]
     if gave_back:
         out += ["", "**Gave back a gain** (peak at least +15%, ended at +5% or less): "

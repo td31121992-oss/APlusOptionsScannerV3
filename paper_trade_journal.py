@@ -611,6 +611,7 @@ class PaperTradeJournal:
                     trade["stock_fav_max_at"] = when.isoformat()
                 trade["stock_move_fav_pct"] = round(fav, 3)
                 trade["stock_move_fav_max_pct"] = round(new_max, 3)
+                self._record_confirm5(trade, fav, when)
                 if str(trade.get("status") or "").upper() == "OPEN" and new_max >= STOCK_BURST_ARM_PCT:
                     try:
                         since = (when - datetime.fromisoformat(str(trade["stock_fav_max_at"]))).total_seconds() / 60.0
@@ -638,6 +639,27 @@ class PaperTradeJournal:
             except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
                 continue
         return done
+
+    def _record_confirm5(self, trade: dict[str, Any], fav: float, when: datetime) -> None:
+        """SHADOW quality filter: did the stock keep going our way once 5 minutes had passed since entry (HELD) or not (FAILED)?
+        Also stores the day's entry order so the review can show 'first 5 confirmed entries of the day'. Never touches the trade."""
+        try:
+            if not trade.get("day_entry_rank"):
+                day = str(trade.get("entry_time") or "")[:10]
+                earlier = [x for x in self.trades if x is not trade and str(x.get("entry_time") or "")[:10] == day
+                           and str(x.get("entry_time") or "") <= str(trade.get("entry_time") or "")]
+                trade["day_entry_rank"] = len(earlier) + 1
+            if trade.get("confirm5"):
+                return
+            mins = (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds() / 60.0
+            low = min(fav, self._number(trade.get("confirm5_min_pct")) if trade.get("confirm5_min_pct") not in (None, "") else fav)
+            trade["confirm5_min_pct"] = round(low, 3)
+            if mins >= 5.0:
+                trade["confirm5_pct"] = round(fav, 3)
+                trade["confirm5"] = "HELD" if fav > 0 else "FAILED"
+                trade["confirm5_at"] = when.isoformat()
+        except (TypeError, ValueError):
+            pass
 
     def _apply_manual_commands(self, when: datetime) -> None:
         """Read data/manual_orders/<date>.jsonl (written by the dashboard) and put the latest stop / exit wish on each open trade.

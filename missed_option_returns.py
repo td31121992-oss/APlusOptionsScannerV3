@@ -150,6 +150,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
     folder = root / "data" / "missed_opportunities" / day
     (folder / "option_returns.json").write_text(json.dumps(rows), encoding="utf-8")
     (folder / "option_returns.md").write_text(render(day, rows), encoding="utf-8")
+    try:                                                   # cumulative late-rule scorecard (shadow report); must never break this job
+        import rule_scorecard
+
+        rule_scorecard.write(root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
