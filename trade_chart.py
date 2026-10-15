@@ -80,6 +80,78 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
             for ts, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or [])]
 
 
+_HIST: dict[str, tuple[float, Any]] = {}
+
+
+def _headers() -> dict[str, str]:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    from dhan_auth import resolve_access_token
+
+    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+    token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+    return {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
+
+
+def _five_history(security_id: int, day: str) -> tuple[dict[str, list[float]], int]:
+    """About six sessions of 5-minute stock candles up to `day`, and the index where `day` starts. Cached for 45 seconds."""
+    import requests
+    from datetime import date, timedelta
+
+    key = f"5m|{security_id}|{day}"
+    hit = _HIST.get(key)
+    if hit and time.time() - hit[0] < 45:
+        return hit[1]
+    frm = (date.fromisoformat(day) - timedelta(days=9)).isoformat()
+    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=25, json={
+        "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
+        "fromDate": f"{frm} 09:00:00", "toDate": f"{day} 15:30:00"})
+    out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}
+    start = 0
+    if r.status_code == 200:
+        d = r.json() or {}
+        for i, ts in enumerate(d.get("timestamp") or []):
+            when = datetime.fromtimestamp(int(ts), IST)
+            if when.date().isoformat() == day and start == 0 and out["c"]:
+                start = len(out["c"])
+            out["o"].append(float(d["open"][i]))
+            out["h"].append(float(d["high"][i]))
+            out["l"].append(float(d["low"][i]))
+            out["c"].append(float(d["close"][i]))
+            out["v"].append(float((d.get("volume") or [0] * len(d["close"]))[i] or 0))
+    res = (out, start)
+    _HIST[key] = (time.time(), res)
+    return res
+
+
+def _daily_history(security_id: int, day: str) -> dict[str, list[float]]:
+    """About eight months of daily candles up to (and excluding) `day`. Cached for an hour."""
+    import requests
+    from datetime import date, timedelta
+
+    key = f"1d|{security_id}|{day}"
+    hit = _HIST.get(key)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    r = requests.post("https://api.dhan.co/v2/charts/historical", headers=_headers(), timeout=25, json={
+        "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "expiryCode": 0, "oi": False,
+        "fromDate": (date.fromisoformat(day) - timedelta(days=260)).isoformat(), "toDate": day})
+    out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}
+    if r.status_code == 200:
+        d = r.json() or {}
+        for i, ts in enumerate(d.get("timestamp") or []):
+            if datetime.fromtimestamp(int(ts), IST).date().isoformat() >= day:
+                continue
+            out["o"].append(float(d["open"][i]))
+            out["h"].append(float(d["high"][i]))
+            out["l"].append(float(d["low"][i]))
+            out["c"].append(float(d["close"][i]))
+            out["v"].append(float((d.get("volume") or [0] * len(d["close"]))[i] or 0))
+    _HIST[key] = (time.time(), out)
+    return out
+
+
 def trade_extreme(candles: list[dict[str, Any]], start: int, end: int, high: bool = True) -> dict[str, Any] | None:
     """Highest high (or lowest low) of the candles from the entry candle to the exit (or now). {price, time, hm} or None."""
     best = None
@@ -153,6 +225,18 @@ def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
                               "stock": trade_extreme(stock, entry_epoch, exit_epoch, bull), "stock_is_high": bull}
     except Exception:                                       # noqa: BLE001 - chart extras must never break the page
         out["trade_marks"] = {}
+    try:                                                    # stock trend gauge, indicators and scans (see stock_trend.py)
+        import stock_trend
+
+        if symbol in _UNIVERSE:
+            sid = _UNIVERSE[symbol]
+            five, start = _five_history(sid, day)
+            daily = _daily_history(sid, day)
+            ind = json.loads((root / "data" / "reports" / "daily_indicators.json").read_text(encoding="utf-8")).get("symbols", {}).get(symbol)
+            prev_close = daily["c"][-1] if daily.get("c") else _f((ind or {}).get("last_close"))
+            out["trend"] = stock_trend.build(five, start, daily, ind, prev_close, str(t.get("direction") or "").upper() == "BULLISH")
+    except Exception:                                       # noqa: BLE001 - the extras must never break the page
+        out["trend"] = {}
     _CACHE[trade_id] = (time.time(), out)
     return out
 
@@ -172,11 +256,25 @@ TRADE_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><tit
 .chart{height:420px}.lv{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:13px}.lv span b{font-weight:800}
 .lv .sl b{color:var(--red)}.lv .t b{color:var(--green)}.lv .e b{color:var(--amber)}
 .note{color:var(--muted);font-size:12px;margin-top:10px}
+.grid3{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px;margin-top:12px}@media(max-width:1000px){.grid3{grid-template-columns:1fr}}
+.tabs{display:flex;gap:6px;margin-bottom:6px}.tabs button{flex:1;background:#0f1729;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:6px;font-weight:800;cursor:pointer}
+.tabs button.on{background:#12351f;color:var(--green);border-color:var(--green)}
+.glbl{text-align:center;font-weight:900;font-size:18px;margin-top:-6px}.counts{display:flex;gap:6px;margin-top:10px}
+.counts span{flex:1;text-align:center;border-radius:8px;padding:6px 4px;font-weight:700;font-size:12.5px}
+.counts .b{background:#12351f;color:var(--green)}.counts .n{background:#232b3f;color:var(--muted)}.counts .r{background:#3a1620;color:var(--red)}
+table.ind{width:100%;border-collapse:collapse;font-size:13px}table.ind td{padding:7px 4px;border-bottom:1px solid var(--line)}
+table.ind td:last-child{text-align:right;font-weight:700}.bull{color:var(--green)}.bear{color:var(--red)}.neutral{color:var(--muted)}
+.sc{border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px}.sc.bull{background:#12351f;color:#b9f5cf}.sc.bear{background:#3a1620;color:#ffb9c8}
 </style></head><body><div class="wrap">
 <div><a href="/positions">&larr; Positions</a> &nbsp; <a href="/">Dashboard</a></div>
 <div class="head"><div><h1 id="title">Trade</h1><div class="sub" id="meta">loading...</div></div><div style="text-align:right"><div id="pnl" style="font-size:24px;font-weight:800"></div><div class="sub" id="state"></div></div></div>
 <div class="grid"><div class="card"><h2 id="optTitle">Option (5-minute)</h2><div class="chart" id="optChart"></div><div class="lv" id="optLv"></div></div>
 <div class="card"><h2 id="stkTitle">Stock (5-minute)</h2><div class="chart" id="stkChart"></div><div class="lv" id="stkLv"></div></div></div>
+<div class="grid3" id="trendRow" style="display:none">
+<div class="card"><h2>Stock trend</h2><div class="tabs" id="trTabs"></div><div id="gauge"></div><div id="gaugeLbl" class="glbl"></div><div class="counts" id="trCounts"></div></div>
+<div class="card"><h2>Tech indicators <span class="sub" id="trTf"></span></h2><table class="ind" id="indTbl"></table></div>
+<div class="card"><h2>Intraday scans</h2><div id="scans"></div></div>
+</div>
 <div class="note">Lines: yellow = entry, red = stop loss, green = targets 1-3, gold dotted = the trade's own high (best point since entry) with its time. The marker shows the entry candle and entry time. Paper trade; read-only. Charts refresh every 15 seconds.</div>
 </div><script>
 var id=new URLSearchParams(location.search).get("id")||"",charts={};
@@ -198,6 +296,27 @@ function fill(k,el,candles,lv,entry,xm,tm,entryHm,isHigh){if(!charts[k])charts[k
  if(entry&&(candles||[]).length){var t=0;for(var i=0;i<candles.length;i++){if(candles[i].t<=entry)t=candles[i].t}if(t)mkr.push({time:t,position:"belowBar",color:"#f5b942",shape:"arrowUp",text:"Entry"+(entryHm?" "+entryHm:"")})}
  mkr.sort(function(a,b){return a.time-b.time});o.series.setMarkers(mkr)}
 function chips(el,lv){document.getElementById(el).innerHTML=(lv||[]).map(function(l){var c=l.name==="SL"?"sl":l.name==="Entry"?"e":"t";return'<span class="'+c+'">'+l.name+' <b>'+l.price.toFixed(2)+'</b></span>'}).join("")}
+var TREND=null,TF="5M";
+function gaugeSvg(score){var a=Math.max(-1,Math.min(1,score))*90,cx=110,cy=100,r=84,segs=24,h="";
+ for(var i=0;i<segs;i++){var t=i/(segs-1),ang=Math.PI*(1-i/segs),a2=Math.PI*(1-(i+0.7)/segs);
+  var col="hsl("+Math.round(t*165)+",60%,50%)";
+  var x1=cx+r*Math.cos(ang),y1=cy-r*Math.sin(ang),x2=cx+(r-16)*Math.cos(ang),y2=cy-(r-16)*Math.sin(ang),x3=cx+(r-16)*Math.cos(a2),y3=cy-(r-16)*Math.sin(a2),x4=cx+r*Math.cos(a2),y4=cy-r*Math.sin(a2);
+  h+='<path d="M'+x1+','+y1+' L'+x2+','+y2+' L'+x3+','+y3+' L'+x4+','+y4+'Z" fill="'+col+'"/>'}
+ var rad=(90-a)*Math.PI/180,nx=cx+(r-6)*Math.cos(rad),ny=cy-(r-6)*Math.sin(rad);
+ return '<svg viewBox="0 0 220 112" style="width:100%;max-width:300px;display:block;margin:0 auto">'+h+'<line x1="'+cx+'" y1="'+cy+'" x2="'+nx+'" y2="'+ny+'" stroke="#e7eefc" stroke-width="2.5"/><circle cx="'+cx+'" cy="'+cy+'" r="5" fill="#e7eefc"/></svg>'}
+function drawTrend(){var row=document.getElementById("trendRow");if(!TREND||!TREND.trend||!Object.keys(TREND.trend).length){row.style.display="none";return}
+ var tr=TREND.trend;row.style.display="grid";
+ document.getElementById("trTabs").innerHTML=["5M","15M","DAILY"].filter(function(k){return tr[k]}).map(function(k){return'<button class="'+(k===TF?"on":"")+'" data-tf="'+k+'">'+k+'</button>'}).join("");
+ document.querySelectorAll("#trTabs button").forEach(function(b){b.onclick=function(){TF=b.dataset.tf;drawTrend()}});
+ var cur=tr[TF]||tr["5M"]||tr["DAILY"];if(!cur)return;
+ document.getElementById("gauge").innerHTML=gaugeSvg(cur.score);
+ var s=cur.score,lbl=s>=0.6?"STRONG BULLISH":s>=0.2?"BULLISH":s<=-0.6?"STRONG BEARISH":s<=-0.2?"BEARISH":"NEUTRAL";
+ var g=document.getElementById("gaugeLbl");g.textContent=lbl;g.style.color=s>=0.2?"#2ecc71":s<=-0.2?"#ff6363":"#8ea0bd";
+ document.getElementById("trCounts").innerHTML='<span class="r">Bearish '+cur.bearish+'</span><span class="n">Neutral '+cur.neutral+'</span><span class="b">Bullish '+cur.bullish+'</span>';
+ document.getElementById("trTf").textContent=(TF==="5M"?"SHORT TERM (5M TF)":TF==="15M"?"(15M TF)":"(DAILY TF)");
+ document.getElementById("indTbl").innerHTML='<tr><td class="neutral">NAME</td><td class="neutral">VALUE</td><td class="neutral" style="text-align:right">INTERPRETATION</td></tr>'
+  +(cur.table||[]).map(function(r){return'<tr><td>'+r.name+'</td><td>'+r.value+'</td><td class="'+r.tone+'">'+r.text+'</td></tr>'}).join("");
+ document.getElementById("scans").innerHTML=(tr.scans||[]).length?(tr.scans).map(function(x){return'<div class="sc '+x.tone+'">'+x.text+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>'}
 function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
  if(!d.ok){document.getElementById("meta").textContent=d.error||"not found";return}
  document.getElementById("title").innerHTML=d.option_label+' <span class="pill '+(d.status==="OPEN"?"open":"closed")+'">'+d.status+'</span>';
@@ -205,7 +324,7 @@ function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-s
  var p=document.getElementById("pnl");p.textContent=(d.pnl<0?"-":"")+"₹"+Math.abs(d.pnl).toLocaleString("en-IN",{maximumFractionDigits:2});p.className=d.pnl>=0?"pos":"neg";
  document.getElementById("state").textContent=(d.status==="OPEN"?"Last ":"Exit ")+d.last.toFixed(2)+(d.error?" - chart data issue: "+d.error:"");
  document.getElementById("optTitle").textContent="Option - "+d.option_label+" (5-minute)";document.getElementById("stkTitle").textContent="Stock - "+d.symbol+" (5-minute)";
- var tmk=d.trade_marks||{};fill("opt","optChart",d.option,d.levels.option,d.entry_epoch,[],tmk.option,d.entry_hm,true);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks,tmk.stock,d.entry_hm,tmk.stock_is_high!==false);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
+ TREND=d;drawTrend();var tmk=d.trade_marks||{};fill("opt","optChart",d.option,d.levels.option,d.entry_epoch,[],tmk.option,d.entry_hm,true);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks,tmk.stock,d.entry_hm,tmk.stock_is_high!==false);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
  if(!d.option.length&&!d.stock.length)document.getElementById("meta").textContent+=" - no candles yet";
  }).catch(function(){document.getElementById("meta").textContent="connection lost - retrying"})}
 load();setInterval(load,15000);
