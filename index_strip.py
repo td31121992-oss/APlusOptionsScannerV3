@@ -184,6 +184,14 @@ STRIP_HTML = r"""
 #ais-left{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
 #ais-left #aplus-mode-bar,#ais-left #aplus-mood{position:static!important;max-width:none!important;box-shadow:none!important;margin:0!important;z-index:auto!important}
 #ais-tiles,#ais-sectors{display:flex;gap:8px;flex-wrap:wrap}
+#ais-entries{background:#121a2d;border:1px solid #27334d;border-radius:10px;padding:8px 12px;min-width:250px;font-size:12px}
+#ais-entries.paused{border-color:#f31260;background:#2a1019}
+.ae-title{font-size:10px;letter-spacing:.08em;color:#8ea0bd}.ae-state{font-weight:800;font-size:15px;margin:2px 0}
+.ae-state.on{color:#17c964}.ae-state.off{color:#ff6b8f}.ae-pnl{color:#8ea0bd;margin-bottom:6px}
+.ae-row{display:flex;gap:6px;align-items:center;margin-top:5px;color:#8ea0bd}
+#ais-entries button{background:#0f1729;color:#e7eefc;border:1px solid #27334d;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer}
+#ae-toggle{width:100%}#ais-entries.paused #ae-toggle{border-color:#17c964;color:#9ff0bd}
+#ae-target{width:58px;background:#0f1729;color:#e7eefc;border:1px solid #27334d;border-radius:6px;padding:4px}
 #ais-sectors{margin-top:8px}
 .ais-tile{background:#121a2d;border:1px solid #27334d;border-radius:10px;padding:6px 10px;min-width:150px}
 .ais-tile.small{min-width:118px;padding:4px 8px}
@@ -195,7 +203,11 @@ STRIP_HTML = r"""
 @media(max-width:760px){.ais-tile{min-width:46%}.ais-tile.small{min-width:30%}}
 </style>
 <div id="aplus-index-strip">
- <div class="ais-top"><div id="ais-left"></div><div id="ais-tiles"></div></div>
+ <div class="ais-top"><div id="ais-left"></div><div id="ais-entries"><div class="ae-title">NEW ENTRIES</div>
+  <div id="ae-state" class="ae-state">...</div><div id="ae-pnl" class="ae-pnl"></div>
+  <div class="ae-row"><button id="ae-toggle" type="button">Pause new entries</button></div>
+  <div class="ae-row"><span>Auto-pause at +</span><input id="ae-target" type="number" min="0.5" max="100" step="0.5" placeholder="7">
+   <span>% of capital</span><button id="ae-set" type="button">Set</button></div></div><div id="ais-tiles"></div></div>
  <div id="ais-sectors"></div>
  <div class="ais-meta" id="ais-meta">Indices: change from today's open and from yesterday's close</div>
 </div>
@@ -212,6 +224,23 @@ function draw(d){if(!d||!d.ok){document.getElementById("ais-meta").textContent="
 function load(){fetch("/api/indices",{cache:"no-store"}).then(function(r){return r.json()}).then(draw).catch(function(){})}
 function relocate(){var left=document.getElementById("ais-left");if(!left)return;
  ["aplus-mode-bar","aplus-mood"].forEach(function(id){var el=document.getElementById(id);if(el&&el.parentNode!==left)left.appendChild(el)})}
+var aeState=null;
+function aeDraw(s){aeState=s;var box=document.getElementById("ais-entries");if(!box||!s)return;
+ var off=s.blocked;box.className=off?"paused":"";
+ var st=document.getElementById("ae-state");st.className="ae-state "+(off?"off":"on");
+ st.textContent=off?(s.reason==="PAUSED_BY_USER"?"PAUSED - no new trades":"STOPPED - day target reached"):"ON - taking new trades";
+ var pct=s.day_pct==null?"":" ("+(s.day_pct>=0?"+":"")+s.day_pct.toFixed(2)+"% of "+Math.round(s.capital/1000)+"k capital)";
+ var warn=s.scanner_ready===false?" | WARNING: the running scanner has not loaded this switch yet (needs a restart) - pausing will NOT stop it":"";
+ document.getElementById("ae-pnl").textContent="Day P&L "+(s.day_pnl==null?"-":Math.round(s.day_pnl).toLocaleString("en-IN"))+pct+(s.target_pct?" | auto-pause at +"+s.target_pct+"%":"")+warn;
+ var b=document.getElementById("ae-toggle");b.textContent=s.paused?"Resume new entries":"Pause new entries"}
+function aeLoad(){fetch("/api/entries-pause",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){if(d.ok)aeDraw(d.state)}).catch(function(){})}
+function aePost(body){return fetch("/api/entries-pause",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+ .then(function(r){return r.json()}).then(function(d){if(d.ok)aeDraw(d.state);else alert(d.message||"Could not change it")}).catch(function(){alert("Could not reach the dashboard")})}
+document.addEventListener("click",function(e){var id=e.target&&e.target.id;
+ if(id==="ae-toggle"){var pausing=!(aeState&&aeState.paused);
+  if(!pausing||confirm("Stop the scanner from taking NEW paper trades for the rest of today? Open trades keep being managed."))aePost({paused:pausing})}
+ if(id==="ae-set"){var v=document.getElementById("ae-target").value;aePost({target_pct:v===""?0:parseFloat(v)})}});
+aeLoad();setInterval(aeLoad,5000);
 load();setInterval(load,5000);relocate();window.addEventListener("load",relocate);setInterval(relocate,2000);
 })();
 </script>

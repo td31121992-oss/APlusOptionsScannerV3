@@ -176,6 +176,13 @@ def _num(v, default=0.0):
     except Exception:
         return default
 
+def _entries_state():
+    import entry_pause
+    today = datetime.now().date()
+    pnl = entry_pause.day_pnl(_load_trades(), today.isoformat())
+    return entry_pause.status(ROOT, pnl, entry_pause.account_capital(), today)
+
+
 def _load_trades():
     p_json = REPORTS / "paper_trades_latest.json"
     p_csv = REPORTS / "paper_trades.csv"
@@ -737,6 +744,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sector-rrg":
             body = json.dumps(_rrg_payload(), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/entries-pause":
+            try:
+                body = json.dumps({"ok": True, "state": _entries_state()}, ensure_ascii=False, default=str).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                body = json.dumps({"ok": False, "message": str(exc)}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/indices":
             body = json.dumps(index_strip.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -840,6 +853,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 return reply(400, {"ok": False, "message": "Could not save the note."})
         route = self.path.split("?", 1)[0]
+        if route == "/api/entries-pause":
+            try:
+                import entry_pause
+                length = min(int(self.headers.get("Content-Length") or 0), 2000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                src = "dashboard:" + str(self.client_address[0])
+                paused = req.get("paused")
+                target = req.get("target_pct")
+                if target in ("", None, 0, "0"):
+                    clear = "target_pct" in req
+                    target = None
+                else:
+                    clear, target = False, float(target)
+                entry_pause.set_state(ROOT, paused=(None if paused is None else bool(paused)), target_pct=target, clear_target=clear, by=src)
+                return reply(200, {"ok": True, "state": _entries_state()})
+            except Exception as exc:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": str(exc) or "Could not change the entry switch."})
         if route in ("/api/manual-stop", "/api/manual-exit"):
             try:
                 import manual_orders

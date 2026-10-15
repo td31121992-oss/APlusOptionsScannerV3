@@ -423,6 +423,11 @@ class OpeningMomentumScanner:
         })
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
         fut_ids: list[str] = []
+        try:                      # tells the dashboard this scanner honours the pause-new-entries switch (see entry_pause.py)
+            import entry_pause as _ep
+            _ep.heartbeat(Path(__file__).resolve().parent)
+        except Exception:         # noqa: BLE001 - never affects trading
+            pass
         try:                      # SHADOW: sector-index tape for the sector-fade tags - see sector_tape.py (built once, keeps its history)
             if getattr(self, "_sector_tape", None) is None:
                 import sector_tape
@@ -922,6 +927,20 @@ class OpeningMomentumScanner:
                                 candidate.paper_trade_status = "ENTRY_RULE_BLOCKED"
                                 continue
                     except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # dashboard "pause new entries" / day-target switch (see entry_pause.py); fail-open
+                        import entry_pause
+                        _root = Path(__file__).resolve().parent
+                        _day = current_time.date().isoformat()
+                        _pnl = entry_pause.day_pnl(getattr(self.paper_journal, "trades", []), _day)
+                        _blocked, _why = entry_pause.check(_root, _pnl, entry_pause.account_capital(), current_time.date())
+                        if _blocked:
+                            candidate.paper_trade_status = "ENTRIES_PAUSED"
+                            if getattr(self, "_pause_logged", "") != _why:
+                                self._pause_logged = _why
+                                logger.warning("New entries are paused (%s); open trades keep being managed.", _why)
+                            continue
+                    except Exception:         # noqa: BLE001 - a control file must never stop the scanner
                         pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
