@@ -611,6 +611,8 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
  </div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Catalyst <span class="sub">news &rarr; catalyst &rarr; direction &rarr; confidence &rarr; option impact (NSE filings + headlines, last 48 hours)</span></div>
+  <div class="body"><div id="catHead" style="font-weight:800;font-size:15px"></div><div id="catImpact" class="sub" style="margin:4px 0 8px"></div><div id="catItems"></div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">Stock trend, indicators &amp; intraday scans <span class="sub">5M / 15M / daily - read-only</span></div>
   <div class="body"><div id="trWrap" style="display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px">
    <div><div id="trTabs" style="display:flex;gap:6px;margin-bottom:6px"></div><div id="trGauge"></div><div id="trLbl" style="text-align:center;font-weight:900;font-size:17px"></div><div id="trCounts" style="display:flex;gap:6px;margin-top:8px"></div></div>
@@ -743,6 +745,7 @@ async function load(){
   const r=await fetch("/api/stock-analysis?symbol="+encodeURIComponent(sym)+"&day="+encodeURIComponent(day)+"&ts="+Date.now());
   render(await r.json());
   loadTrend();
+  loadCatalyst();
 }
 var TRD=null,TRF="5M";
 function trGauge(score){var a=Math.max(-1,Math.min(1,score))*90,cx=110,cy=100,r=84,segs=24,h="";
@@ -764,6 +767,17 @@ function trDraw(){var tr=TRD&&TRD.trend;if(!tr||!Object.keys(tr).length){documen
  var chb=tr.chop?'<div style="border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px;background:'+(tr.chop.chop_state==="CHOPPY"?"#3a1620":tr.chop.chop_state==="TRENDING"?"#12351f":"#232b3f")+';color:'+(tr.chop.chop_state==="CHOPPY"?"#ffb9c8":tr.chop.chop_state==="TRENDING"?"#b9f5cf":"#c8d3e8")+'">'+tr.chop.text+'</div>':"";
  document.getElementById("trScans").innerHTML=chb+((tr.scans||[]).length?(tr.scans).map(function(x){return'<div style="border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px;background:'+(x.tone==="bull"?"#12351f":"#3a1620")+';color:'+(x.tone==="bull"?"#b9f5cf":"#ffb9c8")+'">'+x.text+(x.time?'<span style="float:right;opacity:.75;font-weight:600;font-size:12px">@ '+x.time+'</span>':'')+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>');
  document.getElementById("trNote").textContent=""}
+function loadCatalyst(){var sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
+ fetch("/api/catalyst?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){
+  var h=document.getElementById("catHead"),i=document.getElementById("catImpact"),L=document.getElementById("catItems");
+  if(!d.ok){h.textContent="Catalyst unavailable";i.textContent="";L.innerHTML="";return}
+  var col=d.direction==="BULLISH"?"#2ecc71":d.direction==="BEARISH"?"#ff6363":d.direction==="MIXED"?"#f5b942":"#8ea0bd";
+  h.innerHTML='<span style="color:'+col+'">'+d.direction+'</span> &middot; '+d.confidence+' confidence'+(d.type?' &middot; '+String(d.type).replace(/_/g," ").toLowerCase():'')
+   +(d.age_h!=null?' &middot; newest '+d.age_h+'h ago':'')+(d.event_risk?' &middot; <span style="color:#f5b942">event risk</span>':'');
+  i.textContent=d.impact||"";
+  L.innerHTML=(d.items||[]).length?d.items.map(function(x){var c=x.dir>0?"#2ecc71":x.dir<0?"#ff6363":"#8ea0bd";
+   return'<div style="border-top:1px solid #27334d;padding:6px 2px;font-size:13px"><span style="color:'+c+';font-weight:800">'+(x.dir>0?"&#9650;":x.dir<0?"&#9660;":"&#9679;")+'</span> '
+    +'<span class="sub">'+x.time+' &middot; '+x.source+' &middot; '+String(x.type).replace(/_/g," ").toLowerCase()+' ('+x.rule+')</span><br>'+(x.url?'<a href="'+x.url+'" target="_blank" rel="noopener" style="color:#e7eefc;text-decoration:none">'+x.title+'</a>':x.title)+'</div>'}).join(""):'<div class="sub">Nothing in the last 48 hours for this stock.</div>'}).catch(function(){})}
 function loadTrend(){var sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
  fetch("/api/stock-trend?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){TRD=d;trDraw()}).catch(function(){})}
 async function loadChain(){

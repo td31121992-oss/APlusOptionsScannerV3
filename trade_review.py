@@ -82,6 +82,7 @@ def review_row(t: dict) -> dict[str, Any]:
                         if t.get("lock_shadow_exit_at") else ""),
         "half10_shadow": _half10(t, exit_price),
         "nt_verdict": str(t.get("nt_verdict") or ""), "tr_all_aligned": str(t.get("tr_all_aligned") or ""), "smc_ob_state": str(t.get("smc_ob_state") or ""), "chop_state": str(t.get("chop_state") or ""),
+        "cat_dir": str(t.get("cat_dir") or ""), "cat_aligned": str(t.get("cat_aligned") or ""), "cat_against": str(t.get("cat_against") or ""),
         "tr_scans_names": str(t.get("tr_scans_names") or ""), "ms_aligned": str(t.get("ms_aligned") or ""),
         "confirm5": str(t.get("confirm5") or ""), "confirm5_pct": t.get("confirm5_pct", ""),
         "day_entry_rank": int(_f(t.get("day_entry_rank"))),
@@ -159,7 +160,7 @@ def quality_split(rows: list[dict], cap: int = 5) -> tuple[list[dict], list[dict
 
 def verdict_section(rows: list[dict]) -> list[str]:
     """Shadow comparison: how trades did under each no-trade-day verdict and whether market structure agreed with the trade."""
-    if not any(r.get("nt_verdict") or r.get("ms_aligned") or r.get("tr_all_aligned") or r.get("smc_ob_state") or r.get("chop_state") for r in rows):
+    if not any(r.get("nt_verdict") or r.get("ms_aligned") or r.get("tr_all_aligned") or r.get("smc_ob_state") or r.get("chop_state") or r.get("cat_dir") for r in rows):
         return []
     out = ["", "**No-trade verdict and market structure (shadow, nothing traded)**", "",
            "| Group | Trades | Winners | Net Rs |", "|---|---|---|---|"]
@@ -171,6 +172,12 @@ def verdict_section(rows: list[dict]) -> list[str]:
             line(f"Verdict {v.replace('_', ' ')}", g)
     for lab, key in (("Trend gauge: 5M and 15M agree with the trade", "True"), ("Trend gauge: 5M/15M do not both agree", "False")):
         g = [r for r in rows if str(r.get("tr_all_aligned")) == key]
+        if g:
+            line(lab, g)
+    for lab, pred in (("News catalyst agreed with the trade", lambda r: str(r.get("cat_aligned")) == "True"),
+                      ("News catalyst was AGAINST the trade", lambda r: str(r.get("cat_against")) == "True"),
+                      ("No fresh news catalyst", lambda r: str(r.get("cat_dir")) == "NONE")):
+        g = [r for r in rows if pred(r)]
         if g:
             line(lab, g)
     for lab, key in (("Entered while the stock was trending", "TRENDING"), ("Entered while mixed", "MIXED"), ("Entered while choppy", "CHOPPY")):

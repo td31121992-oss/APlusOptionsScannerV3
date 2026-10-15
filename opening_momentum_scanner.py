@@ -855,6 +855,12 @@ class OpeningMomentumScanner:
                         candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: news catalyst for this stock (see catalyst.py)
+                        import catalyst
+                        candidate_record.update(catalyst.entry_tags(str(candidate.symbol), candidate.direction,
+                                                                    Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: choppiness - trending or going sideways (see chop.py)
                         import chop
                         candidate_record.update(chop.measures(day_candles))
