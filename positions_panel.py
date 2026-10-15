@@ -66,9 +66,13 @@ function holdHint(x){
  var st=x.stock_since_high_pct==null?"":" Stock "+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since the high.";
  var tail=x.high_state==="MELTING"?" The stock has not moved against you, so the premium is melting - consider tightening the stop or exiting.":(x.high_state==="STOCK_REVERSING"?" The stock has turned against you.":"");
  return "Peak was "+age+" ago, option is "+Math.abs(f).toFixed(1)+"% below it."+st+tail}
+function slText(x){if(!x||!x.cur_sl)return x&&x.sl?'SL '+Number(x.sl).toFixed(2):'';
+ var s=Number(x.start_sl),c=Number(x.cur_sl),p=Number(x.sl_vs_entry_pct),col=p>=0?"#17c964":(c>s+0.004?"#ffb454":"var(--muted)");
+ return 'Stop <span style="color:var(--muted)">'+s.toFixed(2)+'</span> &rarr; <b style="color:'+col+'">'+c.toFixed(2)+'</b> <span style="color:'+col+'">'+(x.sl_label||"")
+  +(p!==0?" ("+(p>0?"+":"")+p+"%)":"")+'</span>'+(x.status==="OPEN"&&x.sl_next?'<br><span style="color:var(--muted)">next: '+x.sl_next+'</span>':"")}
 function holdColor(x){return x&&x.high_state==="STOCK_REVERSING"?"#ff6363":(x&&x.high_state==="MELTING"?"#ffb454":"#8ea0bd")}
 function ctl(x){
- var cur=Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),entry=Number(x.entry)||0,last=Number(x.last)||0;
+ var cur=Number(x.cur_sl)||Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),entry=Number(x.entry)||0,last=Number(x.last)||0;
  return '<div class="ctl" data-id="'+x.id+'" data-entry="'+entry+'" data-cur="'+cur+'" data-last="'+last+'">'
   +'<div class="line" style="justify-content:space-between"><span>Entry <b>'+entry.toFixed(2)+'</b></span><span>Last <b>'+last.toFixed(2)+'</b></span><span>Current stop <b>'+(cur?cur.toFixed(2):"-")+'</b></span></div>'
   +(x.manual_stop?'<div class="line"><span>Your manual stop <b>'+Number(x.manual_stop).toFixed(2)+'</b> ('+((Number(x.manual_stop)/entry-1)*100).toFixed(1)+'% from entry)</span></div>':'')
@@ -124,7 +128,7 @@ function render(){
       +(x.high_age_min==null?"":ageTxt(x.high_age_min)+" since high")+(isOpen&&x.from_high_pct!=null&&x.from_high_pct<=-0.05?" &middot; "+Number(x.from_high_pct).toFixed(1)+"% from high":"")+'</div></div>':'')
   +(isOpen&&x.high_state?'<div class="small" style="color:'+(x.high_state==="MELTING"?"#ffb454":"#ff6363")+';margin-top:2px">'+(x.high_state==="MELTING"?"Stock flat - option melting":"Stock moved against")
       +(x.stock_since_high_pct==null?"":" ("+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since high)")+'</div>':'')
-  +'<div class="row small"><div>'+(x.sl?'SL '+Number(x.sl).toFixed(2):'')+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'
+  +'<div class="row small"><div>'+slText(x)+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'
   +'<div class="detail"><div><a href="/trade?id='+encodeURIComponent(x.id)+'" style="color:var(--blue);font-weight:800;text-decoration:none">Open stock + option charts &rsaquo;</a></div><div><span>Highest since entry</span><b>'+(x.high?Number(x.high).toFixed(2):"-")+' '+pe(x.high,x.entry)+' '+(x.high_time||"")+'</b></div>'
   +'<div><span>Lowest since entry</span><b>'+(x.low?Number(x.low).toFixed(2):"-")+' '+pe(x.low,x.entry)+' '+(x.low_time||"")+'</b></div>'
   +'<div><span>Capital</span><b>'+inr(x.capital,0)+'</b></div><div><span>Setup</span><b>'+(x.setup||"-")+'</b></div>'
