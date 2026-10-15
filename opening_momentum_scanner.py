@@ -868,6 +868,27 @@ class OpeningMomentumScanner:
                             float(_rv) if _rv not in (None, "") else None, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: multi-timeframe context 15m + daily (see mtf.py)
+                        import mtf
+                        try:
+                            _dly = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json")
+                                              .read_text(encoding="utf-8")).get("symbols", {}).get(str(candidate.symbol), {})
+                        except (OSError, ValueError):
+                            _dly = {}
+                        candidate_record.update(mtf.mtf_tags(day_candles, candidate.direction, _dly, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: option greeks at entry (see greeks.py)
+                        import greeks
+                        _oc = plan.get("option_contract") or {}
+                        _un = plan.get("underlying") or {}
+                        _px = _oc.get("limit_price") or _oc.get("ask") or _oc.get("ltp")
+                        candidate_record.update(greeks.greeks_at_entry(
+                            _un.get("entry") or getattr(candidate, "ltp", None), _oc.get("strike"), _oc.get("expiry"),
+                            _oc.get("option_type"), _px, _oc.get("iv"), current_time.date(),
+                            str(candidate.direction).upper() == "BULLISH"))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: market structure BOS / CHOCH / FVG (see market_structure.py)
                         import market_structure
                         candidate_record.update(market_structure.structure_tags(

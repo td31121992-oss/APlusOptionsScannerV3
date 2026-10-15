@@ -43,6 +43,7 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 # "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
 #   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
+SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_")      # copied from the candidate onto the trade record as they are
 STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
                        "moverover": ("over", 0.5)}
 SECTOR_FADE_PCT = 0.4          # 'secfade' shadow: the sector index gave back this much from its best level since our entry ...
@@ -347,6 +348,9 @@ class PaperTradeJournal:
             "net_pnl": 0.0, "return_percent": 0.0, "result": "OPEN",
             "plan": dict(plan),
         }
+        for _key, _val in dict(candidate).items():          # shadow tags added by prefix (sector tape, key level, structure, verdict, ...)
+            if isinstance(_key, str) and _key.startswith(SHADOW_TAG_PREFIXES) and _key not in record:
+                record[_key] = _val
         entry_price = self._number(record.get("entry_price"))
         quantity = self._integer(record.get("quantity"))
         capital = entry_price * quantity
