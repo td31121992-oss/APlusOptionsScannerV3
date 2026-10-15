@@ -156,6 +156,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         rule_scorecard.write(root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # chart-pattern outcome log (research only); must never break this job
+        import pattern_log
+
+        pattern_log.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
