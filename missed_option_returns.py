@@ -18,7 +18,7 @@ import os
 import sys
 import time
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +114,7 @@ def run(day: str, root: Path = ROOT) -> Path | None:
             last[0] = time.time()
             r = session.post("https://api.dhan.co/v2/charts/intraday", headers=headers, timeout=30, json={
                 "securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5",
-                "oi": False, "fromDate": f"{day} 09:00:00", "toDate": f"{day} 15:30:00"})
+                "oi": False, "fromDate": f"{(date.fromisoformat(day) - timedelta(days=1)).isoformat()} 09:00:00", "toDate": f"{day} 15:30:00"})
             if r.status_code == 429:
                 time.sleep(3 * (attempt + 1))
                 continue
@@ -123,7 +123,8 @@ def run(day: str, root: Path = ROOT) -> Path | None:
             d = r.json()
             idx = pd.to_datetime(d.get("timestamp") or [], unit="s", utc=True).tz_convert("Asia/Kolkata")
             return [{"minute": t.hour * 60 + t.minute, "high": float(h), "low": float(lo), "close": float(c)}
-                    for t, h, lo, c in zip(idx, d.get("high", []), d.get("low", []), d.get("close", []))]
+                    for t, h, lo, c in zip(idx, d.get("high", []), d.get("low", []), d.get("close", []))
+                    if t.date().isoformat() == day]
         return []
 
     rows: list[dict] = []
