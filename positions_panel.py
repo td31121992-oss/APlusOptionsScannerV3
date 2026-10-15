@@ -66,6 +66,9 @@ function holdHint(x){
  var st=x.stock_since_high_pct==null?"":" Stock "+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since the high.";
  var tail=x.high_state==="MELTING"?" The stock has not moved against you, so the premium is melting - consider tightening the stop or exiting.":(x.high_state==="STOCK_REVERSING"?" The stock has turned against you.":"");
  return "Peak was "+age+" ago, option is "+Math.abs(f).toFixed(1)+"% below it."+st+tail}
+function gapLine(x){var h=Number(x.high),l=Number(x.last),e=Number(x.entry),q=Number(x.qty)||0;
+ if(x.status!=="OPEN"||!(h>0)||!(l>0)||!(e>0)||l>=h)return "";
+ var g=h-l;return 'Gap to high <b style="color:var(--text)">&#8377;'+g.toFixed(2)+'</b> ('+(g/h*100).toFixed(1)+'% of high) &middot; <b style="color:var(--text)">&#8377;'+Math.round(g*q).toLocaleString("en-IN")+'</b> given back &middot; '+(g/e*100).toFixed(1)+' pts'}
 function slText(x){if(!x||!x.cur_sl)return x&&x.sl?'SL '+Number(x.sl).toFixed(2):'';
  var s=Number(x.start_sl),c=Number(x.cur_sl),p=Number(x.sl_vs_entry_pct),col=p>=0?"#17c964":(c>s+0.004?"#ffb454":"var(--muted)");
  return 'Stop <span style="color:var(--muted)">'+s.toFixed(2)+'</span> &rarr; <b style="color:'+col+'">'+c.toFixed(2)+'</b> <span style="color:'+col+'">'+(x.sl_label||"")
@@ -126,6 +129,7 @@ function render(){
   +'<div class="small">'+(isOpen?"LTP":"Exit")+' <b style="color:var(--text)">'+Number(last).toFixed(2)+'</b> <span class="'+cls(x.return_pct)+'">('+sgn(x.return_pct)+'%)</span></div></div>'
   +(x.high?'<div class="row small"><div>High <b style="color:var(--text)">'+Number(x.high).toFixed(2)+'</b> '+pe(x.high,x.entry)+' '+(x.high_time||"")+'</div><div style="text-align:right;color:'+(!isOpen?"var(--muted)":(x.high_age_min>=30?"#ff6363":(x.high_age_min>=15?"#ffb454":"var(--muted)")))+'">'
       +(x.high_age_min==null?"":ageTxt(x.high_age_min)+" since high")+(isOpen&&x.from_high_pct!=null&&x.from_high_pct<=-0.05?" &middot; "+Number(x.from_high_pct).toFixed(1)+"% from high":"")+'</div></div>':'')
+  +(gapLine(x)?'<div class="small" style="margin-top:2px;color:var(--muted)">'+gapLine(x)+'</div>':'')
   +(isOpen&&x.high_state?'<div class="small" style="color:'+(x.high_state==="MELTING"?"#ffb454":"#ff6363")+';margin-top:2px">'+(x.high_state==="MELTING"?"Stock flat - option melting":"Stock moved against")
       +(x.stock_since_high_pct==null?"":" ("+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since high)")+'</div>':'')
   +'<div class="row small"><div>'+slText(x)+(x.tp?' &nbsp; Target '+Number(x.tp).toFixed(2):'')+'</div><div>'+(x.entry_time||"")+(x.exit_time&&x.exit_time!=="-"?" - "+x.exit_time:"")+' &nbsp; '+(x.duration||"")+'</div></div>'

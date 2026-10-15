@@ -590,10 +590,15 @@ function slCell(x){if(!x||!x.cur_sl)return "-";var moved=Number(x.cur_sl)>Number
 function watchPeak(x){if(!x||x.status!=="OPEN"||!(Number(x.entry)>0)||!(Number(x.high)>0))return 0;var p=(Number(x.high)/Number(x.entry)-1)*100;return p>=10?p:0}
 function watchRow(x){return watchPeak(x)?' style="background:#33290a;box-shadow:inset 3px 0 0 #ffb454"':""}
 function watchBadge(x){var p=watchPeak(x);if(!p)return "";var now=(Number(x.last)/Number(x.entry)-1)*100;return ' <span style="background:#ffb454;color:#1a1200;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:800" title="Option reached +'+p.toFixed(0)+'% - watch for reversal">WATCH +'+p.toFixed(0)+'% \u2192 now '+(now>=0?"+":"")+now.toFixed(0)+'%</span>'}
+function gapInfo(x){var h=Number(x.high),l=Number(x.last),e=Number(x.entry),q=Number(x.qty)||0;
+ if(!(h>0)||!(l>0)||!(e>0)||l>=h)return null;
+ var g=h-l;return{g:g,pct:g/h*100,rs:g*q,pts:g/e*100}}
+function gapText(x){var i=gapInfo(x);if(!i)return "";
+ return 'gap <b>&#8377;'+i.g.toFixed(2)+'</b> ('+i.pct.toFixed(1)+'% of high) &middot; <b>&#8377;'+Math.round(i.rs).toLocaleString("en-IN")+'</b> given back &middot; '+i.pts.toFixed(1)+' pts of return'}
 function fromHigh(x){if(x.from_high_pct==null||x.status!=="OPEN")return "";var p=Number(x.from_high_pct);if(p>-0.05)return '<br><small style="color:#17c964">at the high</small>';
  var tag=x.high_state==="MELTING"?' &middot; <b style="color:#ffb454">stock flat - option melting</b>':(x.high_state==="STOCK_REVERSING"?' &middot; <b style="color:#f31260">stock moved against</b>':'');
  var st=x.stock_since_high_pct==null?"":' &middot; stock '+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+'% since high';
- return '<br><small style="color:'+(p<=-10?"#f31260":"#8ea0bd")+'">'+p.toFixed(1)+'% from high'+st+tag+'</small>'}
+ var gt=gapText(x);return '<br><small style="color:'+(p<=-10?"#f31260":"#8ea0bd")+'">'+(gt?gt:p.toFixed(1)+'% from high')+st+tag+'</small>'}
 function setStatusFilter(v){statusFilter=v;if(lastData){renderSummary(lastData);renderRows(lastData);}}
 function selectedRows(d){let rr=d.rows||[];if(statusFilter!=="ALL")rr=rr.filter(x=>x.status===statusFilter);return currentFilter==="ALL"?rr:rr.filter(x=>x.result===currentFilter);}
 function setFilter(f,b){currentFilter=f;document.querySelectorAll(".tradefilter").forEach(x=>x.classList.remove("active"));b.classList.add("active");if(lastData){renderSummary(lastData);renderRows(lastData);}}
