@@ -114,7 +114,7 @@ def run(day: str, root: Path = ROOT) -> Path | None:
             last[0] = time.time()
             r = session.post("https://api.dhan.co/v2/charts/intraday", headers=headers, timeout=30, json={
                 "securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5",
-                "oi": False, "fromDate": f"{(date.fromisoformat(day) - timedelta(days=1)).isoformat()} 09:00:00", "toDate": f"{day} 15:30:00"})
+                "oi": False, "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
             if r.status_code == 429:
                 time.sleep(3 * (attempt + 1))
                 continue

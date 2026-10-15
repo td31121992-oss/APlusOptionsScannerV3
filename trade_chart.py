@@ -71,10 +71,10 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
     # Start the window at 09:00, before the open: Dhan drops the first minute when it starts exactly at the open, and the first candle then loses the real open and low.
     from datetime import date as _date, timedelta as _td
 
-    prev_day = (_date.fromisoformat(day) - _td(days=1)).isoformat()      # see the note on Dhan's one-day window in this file's history
+    next_day = (_date.fromisoformat(day) + _td(days=1)).isoformat()      # a window ending on the next date also answers for yesterday
     r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=25, json={
         "securityId": str(int(security_id)), "exchangeSegment": segment, "instrument": instrument, "interval": "5", "oi": False,
-        "fromDate": f"{prev_day} 09:00:00", "toDate": f"{day} 15:30:00"},
+        "fromDate": f"{day} 09:00:00", "toDate": f"{next_day} 15:30:00"},
         headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
     if r.status_code != 200:
         return []
@@ -110,7 +110,7 @@ def _five_history(security_id: int, day: str, timeout: float = 25) -> tuple[dict
     frm = (date.fromisoformat(day) - timedelta(days=9)).isoformat()
     r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=timeout, json={
         "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
-        "fromDate": f"{frm} 09:00:00", "toDate": f"{day} 15:30:00"})
+        "fromDate": f"{frm} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
     out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": [], "m": []}
     start = 0
     if r.status_code == 200:

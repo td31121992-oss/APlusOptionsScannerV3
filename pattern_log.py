@@ -229,7 +229,7 @@ def _fetch(sid: int, day: str, headers: dict[str, str], frm: str | None = None) 
 
     r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=headers, timeout=30, json={
         "securityId": str(sid), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
-        "fromDate": f"{frm or day} 09:00:00", "toDate": f"{day} 15:30:00"})
+        "fromDate": f"{frm or day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
     if r.status_code != 200:
         return {}
     return r.json() or {}

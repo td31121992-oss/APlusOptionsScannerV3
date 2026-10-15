@@ -157,7 +157,7 @@ def _fetch_option_bars(security_id: int, day: str) -> list[tuple[int, float, flo
     r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=30,
                       headers={"access-token": tok, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"},
                       json={"securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5", "oi": False,
-                            "fromDate": f"{(date.fromisoformat(day) - timedelta(days=1)).isoformat()} 09:00:00", "toDate": f"{day} 15:30:00"})
+                            "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
     d = r.json() if r.status_code == 200 else {}
     out = []
     for t, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or []):
