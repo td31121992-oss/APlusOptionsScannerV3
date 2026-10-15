@@ -423,6 +423,11 @@ class OpeningMomentumScanner:
         })
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
         fut_ids: list[str] = []
+        try:                      # SHADOW: sector-index tape for the sector-fade tags - see sector_tape.py
+            import sector_tape
+            self._sector_tape = sector_tape.SectorTape(Path(__file__).resolve().parent)
+        except Exception:         # noqa: BLE001 - never affects trading
+            self._sector_tape = None
         try:                      # SHADOW: near-month stock futures ride on the same quote call (price, OI) - see futures_flow.py
             import futures_flow
             if getattr(self, "_fut_flow", None) is None:
@@ -881,6 +886,13 @@ class OpeningMomentumScanner:
                             candidate_record.update(self._fut_flow.tags_for(candidate.symbol, candidate.direction))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: sector index state at entry (see sector_tape.py)
+                        if getattr(self, "_sector_tape", None) is not None:
+                            _row = next((r for r in (fno_market_watch or {}).get("rows", [])
+                                         if str(r.get("symbol") or "").upper() == str(candidate.symbol).upper()), None)
+                            candidate_record.update(self._sector_tape.tags_for(str((_row or {}).get("sector") or ""), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: sector rotation (see sector_rrg.py); reads a cache file, never the network
                         import sector_rrg
                         candidate_record.update(sector_rrg.tags_for(
@@ -1287,6 +1299,9 @@ class OpeningMomentumScanner:
                             prices[str(inst.symbol).upper()] = float(lp)
                 if prices:
                     self.paper_journal.record_stock_response(prices, now, extra=closed)
+                if getattr(self, "_sector_tape", None) is not None:
+                    self._sector_tape.update()
+                    self.paper_journal.record_sector_fade(self._sector_tape.ltps, now)
             except Exception:             # noqa: BLE001 - never affects trading
                 pass
             return {

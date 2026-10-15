@@ -45,6 +45,8 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
 STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
                        "moverover": ("over", 0.5)}
+SECTOR_FADE_PCT = 0.4          # 'secfade' shadow: the sector index gave back this much from its best level since our entry ...
+SECTOR_SHADOWS = ("secfade",)  # ... while the stock is below our entry price (see sector_tape.py)
 MOVER_OVER_ARM_PCT = 8.0       # option must have been up this much ...
 MOVER_OVER_BACK_PCT = 3.0      # ... and be back at/below this (about cost) ...
 MOVER_OVER_STALL_MIN = 10.0    # ... and the stock gave back 50% of its best move, or is below entry, or made no new best for 10 min
@@ -52,7 +54,7 @@ STOCK_BURST_ARM_PCT = 0.5
 # Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
 # instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
 VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS)
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
 
 
 def _first_lock_pct() -> float:
@@ -647,6 +649,36 @@ class PaperTradeJournal:
                         trade[key + "_opt_pct"] = round(gain, 2)
                 done += 1
             except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
+                continue
+        return done
+
+    def record_sector_fade(self, sector_ltps: Mapping[str, Any], when: datetime) -> int:
+        """SHADOW: for each open trade that carries a sector index (sec_idx, sec_entry_ltp), track the sector's best level since
+        entry in our direction and note the first time it gave back SECTOR_FADE_PCT while the stock is below our entry.
+        Never changes a trade."""
+        done = 0
+        for trade in self.trades:
+            try:
+                idx = trade.get("sec_idx")
+                if str(trade.get("status") or "").upper() != "OPEN" or not idx or trade.get("shadow_secfade_exit_at"):
+                    continue
+                now = self._number(sector_ltps.get(idx))
+                start = self._number(trade.get("sec_entry_ltp"))
+                if now <= 0 or start <= 0:
+                    continue
+                bull = str(trade.get("direction") or "").upper() == "BULLISH"
+                best = self._number(trade.get("sec_best_ltp")) or start
+                best = max(best, now) if bull else min(best, now)
+                trade["sec_best_ltp"] = round(best, 2)
+                fade = ((best - now) / best * 100.0) if bull else ((now - best) / best * 100.0)
+                trade["sec_fade_pct"] = round(fade, 3)
+                done += 1
+                opt = self._number(trade.get("last_option_price"))
+                if fade >= SECTOR_FADE_PCT and self._number(trade.get("stock_move_fav_pct")) < 0 and opt > 0:
+                    trade["shadow_secfade_exit_at"] = when.isoformat()
+                    trade["shadow_secfade_exit_price"] = round(opt, 4)
+                    trade["shadow_secfade_sector_fade_pct"] = round(fade, 3)
+            except Exception:                              # noqa: BLE001 - shadow only
                 continue
         return done
 
