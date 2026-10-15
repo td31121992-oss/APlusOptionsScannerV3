@@ -78,3 +78,13 @@ class TapeAndBannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TapeCapTests(unittest.TestCase):
+    def test_blocked_are_capped_but_entries_and_exits_never_are(self):
+        blocked = {(f"S{i}", "BULLISH", "A_PLUS_WAIT_PIVOT_TO_R1"): {"first": f"10:{i % 60:02d}", "last": "10:59", "cycles": 1} for i in range(400)}
+        trades = [{"symbol": "ZZZ", "strike": 100, "option_type": "CE", "entry_time": "2026-10-15T09:20:00+05:30", "entry_price": 5.0,
+                   "status": "CLOSED", "exit_time": "2026-10-15T09:40:00+05:30", "exit_price": 6.0, "exit_reason": "X", "net_pnl": 100}]
+        tape = pv.build_tape(trades, [], blocked, limit=50)
+        kinds = [e["kind"] for e in tape]
+        self.assertEqual((kinds.count("BLOCKED"), kinds.count("ENTRY"), kinds.count("EXIT")), (50, 1, 1))

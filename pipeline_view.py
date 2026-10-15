@@ -216,7 +216,15 @@ def build_tape(trades: Iterable[Mapping[str, Any]], manual: Iterable[Mapping[str
                    "detail": f"first {e.get('first')}, last {e.get('last')}, {e.get('cycles')} cycles", "tone": "warn"})
     ev = [e for e in ev if e["time"]]
     ev.sort(key=lambda e: e["time"], reverse=True)
-    return ev[:limit]
+    # every entry, exit and manual order is always kept; only the (very numerous) held-back signals are capped, newest first
+    keep, blocked_n = [], 0
+    for e in ev:
+        if e["kind"] == "BLOCKED":
+            blocked_n += 1
+            if blocked_n > limit:
+                continue
+        keep.append(e)
+    return keep
 
 
 def read_manual(root: Path, day: str) -> list[dict[str, Any]]:
