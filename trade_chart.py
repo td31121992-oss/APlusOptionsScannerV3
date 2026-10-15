@@ -198,6 +198,12 @@ def payload(trade_id: str, root: Path = ROOT) -> dict[str, Any]:
 
         ind = json.loads((root / "data" / "reports" / "daily_indicators.json").read_text(encoding="utf-8")).get("symbols", {}).get(symbol)
         stock_marks = stock_chart.marks(stock, ind)
+        try:
+            import smc_levels
+
+            stock_marks = stock_marks + smc_levels.marks(stock)
+        except Exception:                                  # noqa: BLE001
+            pass
     except Exception:                                       # noqa: BLE001
         pass
     entry_t = str(t.get("entry_time") or "")
@@ -286,11 +292,12 @@ function fill(k,el,candles,lv,entry,xm,tm,entryHm,isHigh){if(!charts[k])charts[k
  o.lines.forEach(function(l){o.series.removePriceLine(l)});o.lines=[];var ps=[],mkr=[];
  (lv||[]).forEach(function(l){ps.push(l.price);var col=l.name==="SL"?"#ff6363":l.name==="Entry"?"#f5b942":"#2ecc71";
   o.lines.push(o.series.createPriceLine({price:l.price,color:col,lineWidth:2,lineStyle:l.name==="Entry"?0:2,axisLabelVisible:true,title:l.name+" "+l.price.toFixed(2)}))});
- var XC={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363",tradehigh:"#ffd166"};
+ var XC={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363",tradehigh:"#ffd166",ob_top:"#2ecc71",ob_bottom:"#2ecc71",liq:"#f5b942"};
+ var xcol=function(m){return (m.key.indexOf("ob_")===0&&String(m.name).indexOf("Bear")===0)?"#ff6363":XC[m.key]};
  if(tm&&tm.price){var dup=xm.filter(function(m){return(m.key==="dayhigh"||m.key==="daylow")&&Math.abs(m.price-tm.price)<0.006});
   if(dup.length){dup[0].name="Day & trade "+(isHigh?"high":"low")}else{xm.push({key:"tradehigh",name:"Trade "+(isHigh?"high":"low"),price:tm.price,hm:tm.hm,time:tm.time})}}
  (xm||[]).forEach(function(m){ps.push(m.price);var day=m.key.indexOf("day")===0;
-  o.lines.push(o.series.createPriceLine({price:m.price,color:XC[m.key],lineWidth:day?1:1,lineStyle:3,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
+  o.lines.push(o.series.createPriceLine({price:m.price,color:xcol(m),lineWidth:day?1:1,lineStyle:m.key==="liq"?2:3,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
   if(m.time){mkr.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:XC[m.key],shape:(m.key==="dayhigh"||(m.key==="tradehigh"&&isHigh))?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
  if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);
   o.series.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r)return{priceRange:{minValue:lo,maxValue:hi}};return{priceRange:{minValue:Math.min(r.priceRange.minValue,lo),maxValue:Math.max(r.priceRange.maxValue,hi)},margins:r.margins}}})}

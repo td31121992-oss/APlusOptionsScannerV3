@@ -68,8 +68,15 @@ def payload(symbol: str, root: Path = ROOT) -> dict[str, Any]:
         zones = chart_zones.zones_for(symbol, trade_chart._UNIVERSE[symbol], last)
     except Exception:                                      # noqa: BLE001
         pass
+    zlist = list(zones.get("zones", []))
+    try:                                                    # order blocks and liquidity (see smc_levels.py)
+        import smc_levels
+
+        zlist += smc_levels.zones(candles)
+    except Exception:                                      # noqa: BLE001
+        pass
     out = {"ok": True, "symbol": symbol, "candles": candles, "marks": marks(candles, ind), "last": last,
-           "zones": zones.get("zones", []), "vwap": zones.get("vwap", [])}
+           "zones": zlist, "vwap": zones.get("vwap", [])}
     _CACHE[symbol] = (time.time(), out)
     return out
 
@@ -87,7 +94,7 @@ STOCK_CHART_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8
 </style></head><body><div class="wrap">
 <div><a href="/stock-analysis">&larr; Stock analysis</a> &nbsp; <a href="/">Dashboard</a></div>
 <h1 id="title">Stock chart</h1><div class="sub" id="meta">loading...</div>
-<div class="card"><div id="chart"></div><div class="tg" id="tg"><label><input type="checkbox" id="z_sd" checked> Supply / demand zones</label><label><input type="checkbox" id="z_pv" checked> Pivot lines</label><label><input type="checkbox" id="z_or" checked> Opening range</label><label><input type="checkbox" id="z_gp" checked> Gap</label><label><input type="checkbox" id="z_vw" checked> VWAP</label></div><div class="lg" id="lg"></div></div>
+<div class="card"><div id="chart"></div><div class="tg" id="tg"><label><input type="checkbox" id="z_sd" checked> Supply / demand zones</label><label><input type="checkbox" id="z_ob" checked> Order blocks</label><label><input type="checkbox" id="z_lq" checked> Liquidity</label><label><input type="checkbox" id="z_pv" checked> Pivot lines</label><label><input type="checkbox" id="z_or" checked> Opening range</label><label><input type="checkbox" id="z_gp" checked> Gap</label><label><input type="checkbox" id="z_vw" checked> VWAP</label></div><div class="lg" id="lg"></div></div>
 <div class="sub" style="margin-top:8px">Lines: PDH / PDL = previous day's high / low. Day high / low show the time of the candle that set them. Zones: red = supply, green = demand (areas where the stock turned back at least twice in the last 10 sessions; the number is how many turns), dotted = pivot lines, dashed = opening range, purple = gap, yellow line = VWAP. 5-minute candles, today. Read-only.</div>
 </div><script>
 var sym=(new URLSearchParams(location.search).get("symbol")||"").toUpperCase(),chart=null,series=null,lines=[],ZN=[],vwapSeries=null,cv=null;
@@ -100,9 +107,17 @@ function build(){chart=LightweightCharts.createChart(document.getElementById("ch
 function drawZones(){if(!cv||!series)return;var host=document.getElementById("chart"),w=host.clientWidth,h=host.clientHeight,dpr=window.devicePixelRatio||1;
  if(cv.width!==w*dpr||cv.height!==h*dpr){cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+"px";cv.style.height=h+"px"}
  var g=cv.getContext("2d");g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);g.font="11px system-ui,sans-serif";
- var on={sd:document.getElementById("z_sd").checked,pv:document.getElementById("z_pv").checked,or:document.getElementById("z_or").checked,gp:document.getElementById("z_gp").checked};
+ var on={ob:document.getElementById("z_ob").checked,lq:document.getElementById("z_lq").checked,sd:document.getElementById("z_sd").checked,pv:document.getElementById("z_pv").checked,or:document.getElementById("z_or").checked,gp:document.getElementById("z_gp").checked};
  if(vwapSeries)vwapSeries.applyOptions({visible:document.getElementById("z_vw").checked});
- ZN.forEach(function(z){var k=z.kind;if(k==="pd")return;if((k==="supply"||k==="demand")&&!on.sd)return;if(k==="pivot"&&!on.pv)return;if(k==="or"&&!on.or)return;if(k==="gap"&&!on.gp)return;
+ ZN.forEach(function(z){var k=z.kind;if(k==="pd")return;
+  if(k==="orderblock"&&!on.ob)return;if(k==="liquidity"&&!on.lq)return;
+  if(k==="orderblock"){var oy1=series.priceToCoordinate(z.high),oy2=series.priceToCoordinate(z.low);if(oy1==null||oy2==null)return;
+   var ot=Math.min(oy1,oy2),oh=Math.max(Math.abs(oy2-oy1),3),oc=z.side==="bear"?"255,99,99":"46,204,113";
+   g.fillStyle="rgba("+oc+",.22)";g.fillRect(0,ot,w,oh);g.strokeStyle="rgba("+oc+",.9)";g.lineWidth=1.5;g.strokeRect(0.5,ot,w-1,oh);
+   g.fillStyle="rgba("+oc+",1)";g.fillText(z.name+(z.state==="IN_FRESH_OB"?"  (price inside)":""),8,ot+(oh>14?13:-3));return}
+  if(k==="liquidity"){var ly=series.priceToCoordinate(z.high);if(ly==null||ly<0||ly>h)return;
+   g.strokeStyle="rgba(245,185,66,.95)";g.lineWidth=1.5;g.setLineDash([7,4]);g.beginPath();g.moveTo(0,ly);g.lineTo(w,ly);g.stroke();g.setLineDash([]);
+   g.fillStyle="rgba(245,185,66,1)";g.fillText(z.name,8,ly-4);return}if((k==="supply"||k==="demand")&&!on.sd)return;if(k==="pivot"&&!on.pv)return;if(k==="or"&&!on.or)return;if(k==="gap"&&!on.gp)return;
   var y1=series.priceToCoordinate(z.high),y2=series.priceToCoordinate(z.low);if(y1==null||y2==null)return;var top=Math.min(y1,y2),ht=Math.max(Math.abs(y2-y1),1.5);
   if(top>h||top+ht<0)return;
   var col=k==="supply"?"255,99,99":k==="demand"?"46,204,113":k==="gap"?"150,110,255":k==="or"?"245,185,66":"142,160,189";
