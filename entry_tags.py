@@ -88,3 +88,44 @@ def entry_context(candles, direction: str, ltp: Any = None) -> dict[str, Any]:
                 "ctx_vol_stop30_pct": round(vstop30, 1), "ctx_vol_stop60_pct": round(vstop60, 1)}
     except Exception:                                      # noqa: BLE001 - a shadow tag must never affect trading
         return {}
+
+
+def option_run(candles: Any, entry_price: Any, now: datetime) -> dict[str, Any]:
+    """SHADOW: how far the OPTION had already run when we entered, from its own 5-minute candles
+    (a dict of arrays as returned by get_intraday_candles: open/high/low/close/timestamp in epoch seconds).
+
+      opt_run15_pct         entry price vs the option's close 15 minutes earlier
+      opt_run30_pct         the same over 30 minutes
+      opt_run_from_low_pct  entry price vs the option's low of the day so far
+      opt_late_guard30      True when the option had already run +30% or more in the last 15 minutes (the guard under test)
+      opt_late_guard20      the same at +20%
+    """
+    try:
+        px = _f(entry_price)
+        ts = list(candles.get("timestamp") or [])
+        cl = [float(x) for x in (candles.get("close") or [])]
+        lows = [float(x) for x in (candles.get("low") or [])]
+        n = min(len(ts), len(cl), len(lows))
+        if px <= 0 or n < 3:
+            return {}
+        now_ts = now.timestamp()
+
+        def close_before(minutes: int) -> float:
+            # last candle that had completely closed `minutes` before now (candle start + 5 min <= now - minutes)
+            ref = [cl[i] for i in range(n) if float(ts[i]) + 300 <= now_ts - minutes * 60]
+            return ref[-1] if ref else 0.0
+
+        r15, r30 = close_before(15), close_before(30)
+        low = min(lows[:n])
+        out: dict[str, Any] = {}
+        if r15 > 0:
+            out["opt_run15_pct"] = round((px / r15 - 1.0) * 100.0, 1)
+            out["opt_late_guard30"] = bool(out["opt_run15_pct"] >= 30.0)
+            out["opt_late_guard20"] = bool(out["opt_run15_pct"] >= 20.0)
+        if r30 > 0:
+            out["opt_run30_pct"] = round((px / r30 - 1.0) * 100.0, 1)
+        if low > 0:
+            out["opt_run_from_low_pct"] = round((px / low - 1.0) * 100.0, 1)
+        return out
+    except Exception:                                      # noqa: BLE001 - a shadow tag must never affect trading
+        return {}

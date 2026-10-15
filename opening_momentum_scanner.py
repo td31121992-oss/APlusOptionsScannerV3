@@ -863,6 +863,19 @@ class OpeningMomentumScanner:
                             getattr(self, "_event_ind", {}), current_time))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: how far the option had already run before entry (one candle request per entry)
+                        import entry_tags as _et3
+                        _opt = plan.get("option_contract") or {}
+                        _sid = _opt.get("security_id")
+                        _px = _opt.get("limit_price") or _opt.get("ask") or _opt.get("ltp")
+                        if _sid and _px:
+                            _resp = self.client.get_intraday_candles(
+                                security_id=_sid, segment="NSE_FNO", instrument="OPTSTK", interval=5,
+                                from_datetime=datetime.combine(current_time.date(), clock_time(9, 0)),
+                                to_datetime=current_time.replace(tzinfo=None) + timedelta(minutes=1), oi=False)
+                            candidate_record.update(_et3.option_run(_resp, _px, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: futures premium and open-interest flow (see futures_flow.py)
                         if getattr(self, "_fut_flow", None) is not None:
                             candidate_record.update(self._fut_flow.tags_for(candidate.symbol, candidate.direction))
