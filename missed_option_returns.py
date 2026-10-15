@@ -168,6 +168,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         key_level.write(root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # intraday scans true at entry, cumulative (research only)
+        import scan_review
+
+        scan_review.write(root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 

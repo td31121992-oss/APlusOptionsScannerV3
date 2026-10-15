@@ -81,7 +81,8 @@ def review_row(t: dict) -> dict[str, Any]:
         "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
                         if t.get("lock_shadow_exit_at") else ""),
         "half10_shadow": _half10(t, exit_price),
-        "nt_verdict": str(t.get("nt_verdict") or ""), "tr_all_aligned": str(t.get("tr_all_aligned") or ""), "ms_aligned": str(t.get("ms_aligned") or ""),
+        "nt_verdict": str(t.get("nt_verdict") or ""), "tr_all_aligned": str(t.get("tr_all_aligned") or ""),
+        "tr_scans_names": str(t.get("tr_scans_names") or ""), "ms_aligned": str(t.get("ms_aligned") or ""),
         "confirm5": str(t.get("confirm5") or ""), "confirm5_pct": t.get("confirm5_pct", ""),
         "day_entry_rank": int(_f(t.get("day_entry_rank"))),
         **_shadow_deltas(t, exit_price),
@@ -179,6 +180,26 @@ def verdict_section(rows: list[dict]) -> list[str]:
     return out
 
 
+def scans_section(rows: list[dict]) -> list[str]:
+    """Shadow table: for every intraday scan that was true at entry, how many of the day's trades had it, how many won, net rupees."""
+    have = [r for r in rows if r.get("tr_scans_names")]
+    if not have:
+        return []
+    by: dict[str, list[dict]] = {}
+    for r in have:
+        for name in str(r["tr_scans_names"]).split("|"):
+            if name:
+                by.setdefault(name, []).append(r)
+    out = ["", "**Intraday scans true at entry (shadow, nothing traded)**", "",
+           "| Scan at entry | Trades | Winners | Net Rs |", "|---|---|---|---|"]
+    for name, g in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        out.append(f"| {name} | {len(g)} | {sum(1 for r in g if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in g):+,.0f} |")
+    none = [r for r in rows if r.get("tr_scans_names") == "" and r.get("tr_all_aligned") != ""]
+    if none:
+        out.append(f"| (no scan for the trade) | {len(none)} | {sum(1 for r in none if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in none):+,.0f} |")
+    return out
+
+
 def quality_section(rows: list[dict]) -> list[str]:
     taken, failed, over = quality_split(rows)
     if not (taken or failed or over):
@@ -235,6 +256,7 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
             out.append(f"| {lab} | {sum(r.get('hit_' + n, 0) for r in rows)} of {len(rows)} | {sum(r.get('d_' + n, 0) for r in rows):+,} |")
     out += quality_section(rows)
     out += verdict_section(rows)
+    out += scans_section(rows)
     gave_back = [r for r in rows if r["mfe_pct"] >= 15 and r["return_pct"] <= 5]
     if gave_back:
         out += ["", "**Gave back a gain** (peak at least +15%, ended at +5% or less): "

@@ -46,6 +46,13 @@ def tags_from_trend(trend: dict[str, Any], direction: str) -> dict[str, Any]:
     want = "bull" if sign > 0 else "bear"
     out["tr_scans_for"] = sum(1 for s in scans if s.get("tone") == want)
     out["tr_scans_against"] = sum(1 for s in scans if s.get("tone") and s.get("tone") != want)
+    names_for = [s.get("text", "") for s in scans if s.get("tone") == want and s.get("text")]
+    names_against = [s.get("text", "") for s in scans if s.get("tone") and s.get("tone") != want and s.get("text")]
+    out["tr_scans_names"] = "|".join(names_for)
+    out["tr_scans_against_names"] = "|".join(names_against)
+    # the two groups the review tracks on their own: the open at the day's extreme, and a multi-day level already broken
+    out["tr_open_ext"] = any(n.startswith("Open = ") for n in names_for)
+    out["tr_multi_day"] = any(("Days Breakout" in n or "Days Breakdown" in n) for n in names_for)
     return out
 
 

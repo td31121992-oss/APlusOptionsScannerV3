@@ -183,6 +183,10 @@ def _trend_text(t: dict[str, Any]) -> str:
         parts.append(f"ADX {t['tr_adx_5m']}, RSI {t.get('tr_rsi_5m', '-')}")
     parts.append("5M and 15M agree with the trade" if str(t.get("tr_all_aligned")).lower() in ("true", "1") else "5M/15M do not both agree")
     parts.append(f"scans for {t.get('tr_scans_for', 0)} / against {t.get('tr_scans_against', 0)}")
+    if t.get("tr_scans_names"):
+        parts.append("scans at entry: " + str(t["tr_scans_names"]).replace("|", ", "))
+    if t.get("tr_scans_against_names"):
+        parts.append("against: " + str(t["tr_scans_against_names"]).replace("|", ", "))
     return " | ".join(parts)
 
 
@@ -347,6 +351,9 @@ def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]],
         "mtf": _mtf_text(t),
         "trend": _trend_text(t),
         "tr_all_aligned": str(t.get("tr_all_aligned") or ""),
+        "tr_scans_names": str(t.get("tr_scans_names") or ""),
+        "tr_open_ext": str(t.get("tr_open_ext") or ""),
+        "tr_multi_day": str(t.get("tr_multi_day") or ""),
         "greeks": _greeks_text(t),
         "no_trade": _no_trade_text(t),
         "nt_verdict": str(t.get("nt_verdict") or ""),
