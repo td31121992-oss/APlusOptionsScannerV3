@@ -180,6 +180,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         chop_review.write(root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # put side: relax the A+ late rules 10:00-13:00? standing shadow test
+        import put_late_review
+
+        put_late_review.write(root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
