@@ -389,13 +389,13 @@ def main() -> int:
     ok, detail = send_telegram(message)
     print("sent" if ok else f"send failed: {detail}")
     if ok:
-        _mark_sent(day)
+        _mark_sent(report_day.isoformat())                 # the day the message is about (a manual re-send of an earlier day must not block today's)
         if not args.no_image:                              # the picture is a bonus: its failure never affects the text message
             try:
-                card_path = render_card(now.date(), gainers, losers, ROOT / "data" / "daily_movers" / f"{day}.png")
+                card_path = render_card(report_day, gainers, losers, ROOT / "data" / "daily_movers" / f"{report_day.isoformat()}.png")
                 print(send_telegram_photo(card_path, "APlus F&O top movers")[1])
                 if calls is not None:
-                    oc = render_options_card(now.date(), calls, puts or [], ROOT / "data" / "daily_movers" / f"{day}_options.png")
+                    oc = render_options_card(report_day, calls, puts or [], ROOT / "data" / "daily_movers" / f"{report_day.isoformat()}_options.png")
                     print(send_telegram_photo(oc, "APlus option premium gainers")[1])
             except Exception as exc:  # noqa: BLE001
                 print(f"picture skipped: {type(exc).__name__}")
