@@ -381,6 +381,16 @@ def main() -> int:
         print(render_card(report_day, gainers, losers, Path(args.card)))
         return 0
     message = format_message(report_day, gainers, losers, len(rows), calls, puts)
+    try:                                                   # premium tracker line + the day's history file: an extra, never blocks the message
+        import premium_tracker
+
+        pday = report_day.isoformat()
+        prows = premium_tracker.compute(pday, ROOT)
+        if not args.dry_run:
+            premium_tracker.record(pday, prows, ROOT)
+        message += "\n".join(premium_tracker.telegram_lines(premium_tracker.enrich(prows, ROOT, pday)))
+    except Exception as exc:  # noqa: BLE001
+        print(f"premium tracker skipped: {type(exc).__name__}: {exc}")
     if args.dry_run:
         print(message)
         return 0

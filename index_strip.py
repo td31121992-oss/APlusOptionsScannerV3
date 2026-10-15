@@ -245,7 +245,7 @@ document.addEventListener("click",function(e){var id=e.target&&e.target.id;
  if(id==="ae-set"){var v=document.getElementById("ae-target").value;aePost({target_pct:v===""?0:parseFloat(v)})}});
 function vdLoad(){fetch("/api/day-verdict",{cache:"no-store"}).then(function(r){return r.json()}).then(function(b){var el=document.getElementById("ais-verdict");
  if(!el||!b||!b.headline)return;el.style.display="block";el.className=b.ok?"":(b.verdict==="NO_TRADE"||b.entries==="PAUSED"?"bad":"warn");
- el.innerHTML="<b>"+b.headline+"</b> &middot; "+b.detail+" &middot; entries <b>"+b.entries+"</b> &middot; "+b.message+' <a href="/pipeline">Signal pipeline &amp; decision tape &rsaquo;</a><a href="/xray">Market X-Ray &rsaquo;</a>'}).catch(function(){})}
+ el.innerHTML="<b>"+b.headline+"</b> &middot; "+b.detail+" &middot; entries <b>"+b.entries+"</b> &middot; "+b.message+' <a href="/pipeline">Signal pipeline &amp; decision tape &rsaquo;</a><a href="/xray">Market X-Ray &rsaquo;</a><a href="/premium">Premium Tracker &rsaquo;</a>'}).catch(function(){})}
 vdLoad();setInterval(vdLoad,10000);
 aeLoad();setInterval(aeLoad,5000);
 load();setInterval(load,5000);relocate();window.addEventListener("load",relocate);setInterval(relocate,2000);
