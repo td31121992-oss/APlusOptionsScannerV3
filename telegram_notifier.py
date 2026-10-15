@@ -36,6 +36,16 @@ class TelegramPaperTradeNotifier:
 
     def notify_entry(self,t): return self._send(f"{t.get('paper_trade_id')}|ENTRY",self._entry(t))
     def notify_exit(self,t): return self._send(f"{t.get('paper_trade_id')}|EXIT",self._exit(t))
+    def notify_watch(self,t,level,now_price=None):
+        e=self._num(t.get('entry_price')); p=self._num(now_price) or self._num(t.get('last_option_price'))
+        now=((p/e-1)*100) if e>0 else 0.0
+        stock=t.get('stock_move_fav_pct')
+        text="\n".join([f"\U0001F440 APlus WATCH: {t.get('symbol','')} {t.get('option_type','')} is +{level:g}% in your favour","",
+          f"Entry {self._money(e)} | now {self._money(p)} ({now:+.1f}%) | peak {self._money(t.get('highest_option_price'))}",
+          (f"Stock since entry: {self._num(stock):+.2f}%" if stock not in (None,"") else "Stock since entry: n/a"),
+          "Keep an eye on it for a reversal; cut by hand from the dashboard (Manage) if it turns.",
+          f"Trade ID: {t.get('paper_trade_id','-')}"])
+        return self._send(f"{t.get('paper_trade_id')}|WATCH{int(level)}",text)
 
     def _send(self,event,text):
         if event in self.sent: return False

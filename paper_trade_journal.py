@@ -507,6 +507,7 @@ class PaperTradeJournal:
             if old_low > 0 and price < old_low:
                 trade["lowest_option_price_at"] = when.isoformat()
             trade["highest_option_price"] = round(high, 4)
+            self._watch_alert(trade, entry, high, price)
             trade["lowest_option_price"] = round(low, 4)
             trade["mfe_amount"] = round((high - entry) * qty, 2)
             trade["mae_amount"] = round((low - entry) * qty, 2)
@@ -651,6 +652,25 @@ class PaperTradeJournal:
             except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
                 continue
         return done
+
+    WATCH_LEVELS = (10.0, 20.0)
+
+    def _watch_alert(self, trade: dict[str, Any], entry: float, high: float, price: float) -> None:
+        """Telegram heads-up (once per level) when an open option is up 10% / 20% from entry, so it can be watched for a reversal and
+        cut by hand. Alert only - never touches the trade."""
+        try:
+            if entry <= 0:
+                return
+            gain = (high / entry - 1.0) * 100.0
+            for level in self.WATCH_LEVELS:
+                key = f"watch{int(level)}_at"
+                if gain >= level and not trade.get(key):
+                    trade[key] = datetime.now().isoformat()
+                    notify = getattr(self.notifier, "notify_watch", None)
+                    if notify:
+                        notify(trade, level, price)
+        except Exception:                                  # noqa: BLE001 - an alert must never break the journal
+            pass
 
     def record_sector_fade(self, sector_ltps: Mapping[str, Any], when: datetime) -> int:
         """SHADOW: for each open trade that carries a sector index (sec_idx, sec_entry_ltp), track the sector's best level since
