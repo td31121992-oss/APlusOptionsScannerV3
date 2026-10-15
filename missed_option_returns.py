@@ -162,6 +162,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         pattern_log.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # key-level push report over every signal (research only)
+        import key_level
+
+        key_level.write(root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 

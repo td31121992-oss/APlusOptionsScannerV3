@@ -40,6 +40,12 @@ PATTERNS: dict[str, int] = {
     "range_breakdown": -1, "compression": 0, "hh_hl_trend": 1, "lh_ll_trend": -1,
     "prev_day_high_break": 1, "prev_day_low_break": -1, "opening_range_high_break": 1, "opening_range_low_break": -1,
 }
+try:                                                       # the wider set: stars, piercing / dark cloud, soldiers / crows, harami, flags, ...
+    from pattern_defs import EXTRA_SIDES as _EXTRA_SIDES, extra_flags as _extra_flags
+
+    PATTERNS.update(_EXTRA_SIDES)
+except Exception:                                          # noqa: BLE001 - the base set still works without it
+    _extra_flags = None
 HORIZONS = (3, 6, 12)                                      # bars of 5 minutes: 15, 30, 60 minutes
 BUCKETS = ((0, 630, "09:15-10:30"), (630, 780, "10:30-13:00"), (780, 1440, "after 13:00"))
 
@@ -70,6 +76,11 @@ def detect_events(candles: dict[str, list[float]], prev_high: float | None = Non
         "range_breakout": df["range_breakout"], "range_breakdown": df["range_breakdown"], "compression": df["compression"],
         "hh_hl_trend": df["hh_hl"], "lh_ll_trend": df["lh_ll"],
     }
+    if _extra_flags is not None:
+        try:
+            flags.update(_extra_flags(df))
+        except Exception:                                  # noqa: BLE001 - never lose the base patterns because of an extra one
+            pass
     if prev_high:
         flags["prev_day_high_break"] = df["close"] > prev_high
     if prev_low:
@@ -235,6 +246,7 @@ def run(day: str | None = None, root: Path = ROOT, pause: float = 0.35) -> Path 
     headers = _headers(root)
     start = (date.fromisoformat(day) - timedelta(days=6)).isoformat()
     rows: list[dict[str, Any]] = []
+    store: dict[str, Any] = {}
     done = 0
     for symbol, sid in sorted(universe.items()):
         try:
@@ -259,11 +271,23 @@ def run(day: str | None = None, root: Path = ROOT, pause: float = 0.35) -> Path 
             for ev in detect_events(candles, prev_high, prev_low):
                 ev.update({"day": day, "symbol": symbol})
                 rows.append(ev)
+            vols_by_min: dict[int, list[float]] = defaultdict(list)
+            for d in prior[-4:]:
+                for i in by_day[d]:
+                    vols_by_min[_minutes(ts[i])].append(float(data["volume"][i]))
+            store[symbol] = {"minute": [_minutes(t) for t in candles["timestamp"]], "open": candles["open"], "high": candles["high"],
+                             "low": candles["low"], "close": candles["close"], "volume": candles["volume"],
+                             "pdh": prev_high, "pdl": prev_low,
+                             "typical": {m: st.median(v) for m, v in vols_by_min.items() if v}}
             done += 1
         except Exception:                                  # noqa: BLE001 - one bad symbol must not stop the log
             continue
     folder = root / "data" / "pattern_log"
     folder.mkdir(parents=True, exist_ok=True)
+    if store:                                              # the day's candles, for the key-level report (key_level.py)
+        cfolder = folder / "candles"
+        cfolder.mkdir(parents=True, exist_ok=True)
+        (cfolder / f"{day}.json").write_text(json.dumps({"day": day, "symbols": store}), encoding="utf-8")
     cols = ["day", "symbol", "time", "minute", "pattern", "side", "price", "f15", "f30", "f60", "f_close", "mfe60", "mae60"]
     with (folder / f"{day}.csv").open("w", encoding="utf-8", newline="") as handle:
         w = csv.DictWriter(handle, fieldnames=cols, extrasaction="ignore")

@@ -855,6 +855,19 @@ class OpeningMomentumScanner:
                         candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: key-level push shape (see key_level.py)
+                        import key_level
+                        try:
+                            _kli = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json")
+                                              .read_text(encoding="utf-8")).get("symbols", {}).get(str(candidate.symbol), {})
+                        except (OSError, ValueError):
+                            _kli = {}
+                        _rv = getattr(candidate, "recent_relative_volume_15m", None)
+                        candidate_record.update(key_level.push_tags(
+                            day_candles, candidate.direction, _kli.get("pdh"), _kli.get("pdl"),
+                            float(_rv) if _rv not in (None, "") else None, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: market-breadth rule (see breadth_gate.py)
                         import breadth_gate
                         _ind_path = Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json"
