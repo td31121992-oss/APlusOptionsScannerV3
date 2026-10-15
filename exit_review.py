@@ -11,8 +11,7 @@ Shadows compared (all from the trade journal's d_<name> fields, rupees versus th
     sbg40         stock gave back 40% of its best move
     sstall10      stock made no new best for 10 minutes
     half10        half booked at +10%, rest on the normal exits
-Verdict rule: a rule "supports enforcing" when its cumulative rupee change is positive AND it helped on at least 60% of the days that
-had 3 or more trades AND no single day lost more than the best day gained. Otherwise "not yet".
+Verdict rule: a rule "supports enforcing" when it has at least 4 busy days (3+ trades) AND its cumulative rupee change is positive AND it helped on at least 60% of those days AND no single day lost more than the best day gained. Otherwise "not yet".
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ FIRST_DAY = "2026-10-15"
 RULES = (("user_ladder", "Your ladder"), ("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
          ("sstall10", "Stock stalled 10 min"), ("half10", "Half booked at +10%"))
 MIN_TRADES_DAY = 3
+MIN_BUSY_DAYS = 4          # never call a rule "supported" on fewer busy days than this
 
 
 def _f(v: Any) -> float:
@@ -67,7 +67,7 @@ def summarize(trades: Iterable[dict[str, Any]]) -> dict[str, Any]:
         helped_days = sum(1 for p in big_days if p["delta"] > 0)
         best = max((p["delta"] for p in per_day), default=0)
         worst = min((p["delta"] for p in per_day), default=0)
-        ok = bool(big_days) and total > 0 and helped_days / len(big_days) >= 0.6 and abs(worst) <= max(best, 0)
+        ok = len(big_days) >= MIN_BUSY_DAYS and total > 0 and helped_days / len(big_days) >= 0.6 and abs(worst) <= max(best, 0)
         out["rules"][name] = {"label": label, "per_day": per_day, "total": total, "days_helped": helped_days, "days_counted": len(big_days),
                               "best_day": best, "worst_day": worst, "supports": ok,
                               "acted": sum(p["acted"] for p in per_day), "trades_hurt": sum(p["hurt"] for p in per_day),
@@ -87,7 +87,7 @@ def render(s: dict[str, Any]) -> str:
     for name, r in s["rules"].items():
         out.append(f"| {r['label']} | {r['total']:+,} | {s['real'] + r['total']:+,} | {r['days_helped']} of {r['days_counted']} | "
                    f"{r['best_day']:+,} | {r['worst_day']:+,} | {r['trades_helped']} / {r['trades_hurt']} | "
-                   f"{'**supports enforcing**' if r['supports'] else 'not yet'} |")
+                   f"{'**supports enforcing**' if r['supports'] else ('needs more days (%d of %d)' % (r['days_counted'], MIN_BUSY_DAYS) if r['days_counted'] < MIN_BUSY_DAYS else 'not yet')} |")
     for name in ("user_ladder", "sbg60"):
         r = s["rules"].get(name)
         if not r:
