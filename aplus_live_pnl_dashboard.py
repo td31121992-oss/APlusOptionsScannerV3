@@ -726,6 +726,18 @@ class Handler(BaseHTTPRequestHandler):
             _analysis["profile"] = company_profiles.get(symbol)
             body=json.dumps(_analysis).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/pipeline":
+            import pipeline_view
+            body = pipeline_view.PIPELINE_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/api/pipeline", "/api/day-verdict"):
+            try:
+                import pipeline_view
+                _pv = pipeline_view.payload(ROOT) if path == "/api/pipeline" else pipeline_view.verdict_payload(ROOT)
+            except Exception as exc:
+                _pv = {"ok": False, "error": type(exc).__name__}
+            body = json.dumps(_pv, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/stock-trend":
             q=parse_query(self.path); symbol=q.get("symbol") or ""
             try:

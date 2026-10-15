@@ -184,6 +184,8 @@ STRIP_HTML = r"""
 #ais-left{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
 #ais-left #aplus-mode-bar,#ais-left #aplus-mood{position:static!important;max-width:none!important;box-shadow:none!important;margin:0!important;z-index:auto!important}
 #ais-tiles,#ais-sectors{display:flex;gap:8px;flex-wrap:wrap}
+#ais-verdict{margin:8px 0 2px;border:1px solid #27334d;border-left:4px solid #17c964;background:#121a2d;border-radius:8px;padding:7px 12px;font-size:13px}
+#ais-verdict.warn{border-left-color:#f5b942}#ais-verdict.bad{border-left-color:#f31260}#ais-verdict a{color:#7dd3fc;font-weight:800;margin-left:10px;text-decoration:none}
 #ais-entries{background:#121a2d;border:1px solid #27334d;border-radius:10px;padding:8px 12px;min-width:250px;font-size:12px}
 #ais-entries.paused{border-color:#f31260;background:#2a1019}
 .ae-title{font-size:10px;letter-spacing:.08em;color:#8ea0bd}.ae-state{font-weight:800;font-size:15px;margin:2px 0}
@@ -208,6 +210,7 @@ STRIP_HTML = r"""
   <div class="ae-row"><button id="ae-toggle" type="button">Pause new entries</button></div>
   <div class="ae-row"><span>Auto-pause at +</span><input id="ae-target" type="number" min="0.5" max="100" step="0.5" placeholder="7">
    <span>% of capital</span><button id="ae-set" type="button">Set</button></div></div><div id="ais-tiles"></div></div>
+ <div id="ais-verdict" style="display:none"></div>
  <div id="ais-sectors"></div>
  <div class="ais-meta" id="ais-meta">Indices: change from today's open and from yesterday's close</div>
 </div>
@@ -240,6 +243,10 @@ document.addEventListener("click",function(e){var id=e.target&&e.target.id;
  if(id==="ae-toggle"){var pausing=!(aeState&&aeState.paused);
   if(!pausing||confirm("Stop the scanner from taking NEW paper trades for the rest of today? Open trades keep being managed."))aePost({paused:pausing})}
  if(id==="ae-set"){var v=document.getElementById("ae-target").value;aePost({target_pct:v===""?0:parseFloat(v)})}});
+function vdLoad(){fetch("/api/day-verdict",{cache:"no-store"}).then(function(r){return r.json()}).then(function(b){var el=document.getElementById("ais-verdict");
+ if(!el||!b||!b.headline)return;el.style.display="block";el.className=b.ok?"":(b.verdict==="NO_TRADE"||b.entries==="PAUSED"?"bad":"warn");
+ el.innerHTML="<b>"+b.headline+"</b> &middot; "+b.detail+" &middot; entries <b>"+b.entries+"</b> &middot; "+b.message+' <a href="/pipeline">Signal pipeline &amp; decision tape &rsaquo;</a>'}).catch(function(){})}
+vdLoad();setInterval(vdLoad,10000);
 aeLoad();setInterval(aeLoad,5000);
 load();setInterval(load,5000);relocate();window.addEventListener("load",relocate);setInterval(relocate,2000);
 })();
