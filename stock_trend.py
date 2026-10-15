@@ -182,8 +182,19 @@ def resample(o, h, l, c, v, k: int = 3):
     return oo, hh, ll, cc, vv
 
 
+def _first_time(bars, pred) -> str:
+    """HH:MM of the first of today's 5-minute bars (minute, o, h, l, c) for which pred(o, h, l, c) is true; "" when unknown."""
+    for m, o, h, l, c in bars or []:
+        try:
+            if pred(o, h, l, c):
+                return f"{int(m) // 60:02d}:{int(m) % 60:02d}"
+        except (TypeError, ValueError):
+            continue
+    return ""
+
+
 def scans(ltp: float, open_today: float, high_today: float, low_today: float, prev_close: float, ind: dict[str, Any] | None,
-          bull: bool = True) -> list[dict[str, str]]:
+          bull: bool = True, bars=None) -> list[dict[str, str]]:
     """Plain-language intraday scans from daily levels (same wording style as the screener you showed)."""
     out: list[dict[str, str]] = []
     ind = ind or {}
@@ -195,45 +206,50 @@ def scans(ltp: float, open_today: float, high_today: float, low_today: float, pr
         except (TypeError, ValueError):
             return 0.0
 
-    def add(text: str, good: bool) -> None:
-        out.append({"text": text, "tone": "bull" if good else "bear"})
+    def add(text: str, good: bool, when: str = "") -> None:
+        row = {"text": text, "tone": "bull" if good else "bear"}
+        if when:
+            row["time"] = when
+        out.append(row)
+
+    first_bar = _first_time(bars, lambda o, h, l, c: True)
 
     for key, name in (("ema20", "20 EMA"), ("dma50", "50 DMA"), ("dma100", "100 DMA"), ("dma200", "200 DMA")):
         lvl = f(key)
         if lvl and prev_close:
             if prev_close < lvl <= ltp:
-                add(f"{name} Breakout 1D", True)
+                add(f"{name} Breakout 1D", True, _first_time(bars, lambda o, h, l, c, lv=lvl: h > lv))
             elif prev_close > lvl >= ltp:
-                add(f"{name} Breakdown 1D", False)
+                add(f"{name} Breakdown 1D", False, _first_time(bars, lambda o, h, l, c, lv=lvl: l < lv))
     pdh, pdl = f("pdh"), f("pdl")
     if pdh and ltp > pdh:
-        add("Above yesterday's high", True)
+        add("Above yesterday's high", True, _first_time(bars, lambda o, h, l, c: h > pdh))
     if pdl and ltp < pdl:
-        add("Below yesterday's low", False)
+        add("Below yesterday's low", False, _first_time(bars, lambda o, h, l, c: l < pdl))
     for key_hi, key_lo, label in (("hi_5d", "lo_5d", "5 Days"), ("hi_10d", "lo_10d", "10 Days"), ("hi_30d", "lo_30d", "30 Days"),
                                   ("hi_90d", "lo_90d", "90 Days")):
         hi, lo = f(key_hi), f(key_lo)
         if hi and ltp > hi:
-            add(f"{label} Breakout", True)
+            add(f"{label} Breakout", True, _first_time(bars, lambda o, h, l, c, v=hi: h > v))
         if lo and ltp < lo:
-            add(f"{label} Breakdown", False)
+            add(f"{label} Breakdown", False, _first_time(bars, lambda o, h, l, c, v=lo: l < v))
     h52 = f("hi_52w")
     if h52 and ltp >= h52 * 0.995:
-        add("Near 52-week high", True)
+        add("Near 52-week high", True, _first_time(bars, lambda o, h, l, c: c >= h52 * 0.995))
     l52 = f("lo_52w")
     if l52 and ltp <= l52 * 1.005:
-        add("Near 52-week low", False)
+        add("Near 52-week low", False, _first_time(bars, lambda o, h, l, c: c <= l52 * 1.005))
     tol = max(0.05, open_today * 0.0005) if open_today else 0
     if open_today and abs(open_today - low_today) <= tol:
-        add("Open = Low", True)
+        add("Open = Low", True, first_bar)
     if open_today and abs(high_today - open_today) <= tol:
-        add("Open = High", False)
+        add("Open = High", False, first_bar)
     if prev_close and open_today:
         gap = (open_today / prev_close - 1.0) * 100.0
         if gap >= 1.0:
-            add(f"Gap up {gap:.1f}%", True)
+            add(f"Gap up {gap:.1f}%", True, first_bar)
         elif gap <= -1.0:
-            add(f"Gap down {abs(gap):.1f}%", False)
+            add(f"Gap down {abs(gap):.1f}%", False, first_bar)
     return out
 
 
@@ -254,7 +270,11 @@ def build(five: dict[str, list[float]], session_start: int, daily: dict[str, lis
         o_t = five["o"][session_start]
         h_t = max(five["h"][session_start:])
         l_t = min(five["l"][session_start:])
-        out["scans"] = scans(ltp, o_t, h_t, l_t, prev_close, ind, bull)
+        mins = five.get("m") or []
+        bars = None
+        if len(mins) == len(five["c"]):
+            bars = [(mins[i], five["o"][i], five["h"][i], five["l"][i], five["c"][i]) for i in range(session_start, len(five["c"]))]
+        out["scans"] = scans(ltp, o_t, h_t, l_t, prev_close, ind, bull, bars)
     out["price"] = round(ltp, 2)
     return out
 

@@ -87,3 +87,25 @@ class PerStockTests(unittest.TestCase):
         self.assertIn("scanflt", dash.FNO_MARKET_WATCH_HTML)
         self.assertIn("/api/stock-trend", sa.STOCK_ANALYSIS_HTML)
         self.assertEqual(dash.FNO_MARKET_WATCH_HTML.count("`") % 2, 0)       # template literals balanced
+
+
+class ScanTimeTests(unittest.TestCase):
+    def test_each_scan_gets_the_time_it_first_happened(self):
+        # 5-minute bars from 09:15: (minute, o, h, l, c)
+        bars = [(555, 99.0, 99.6, 99.0, 99.4), (560, 99.4, 100.4, 99.3, 100.2), (565, 100.2, 101.6, 100.1, 101.5),
+                (570, 101.5, 103.4, 101.4, 103.2), (575, 103.2, 104.5, 103.0, 104.0)]
+        ind = {"ema20": 100.0, "pdh": 101.0, "hi_5d": 103.0, "hi_10d": 109.0}
+        got = {s["text"]: s.get("time") for s in stt.scans(104.0, 99.0, 104.5, 99.0, 99.5, ind, True, bars)}
+        self.assertEqual(got["20 EMA Breakout 1D"], "09:20")          # first bar whose high went above 100
+        self.assertEqual(got["Above yesterday's high"], "09:25")      # high 101.6 > 101.0
+        self.assertEqual(got["5 Days Breakout"], "09:30")             # high 103.4 > 103.0
+        self.assertEqual(got["Open = Low"], "09:15")
+        self.assertNotIn("10 Days Breakout", got)
+
+    def test_build_passes_minutes_through(self):
+        n = 40
+        five = {"o": [100 + 0.1 * i for i in range(n)], "h": [100.3 + 0.1 * i for i in range(n)], "l": [99.8 + 0.1 * i for i in range(n)],
+                "c": [100.2 + 0.1 * i for i in range(n)], "v": [1000.0] * n, "m": [555 + 5 * i for i in range(n)]}
+        out = stt.build(five, 0, None, {"pdh": 101.0}, 99.9)
+        hit = [s for s in out.get("scans", []) if s["text"] == "Above yesterday's high"]
+        self.assertTrue(hit and hit[0].get("time", "").count(":") == 1)

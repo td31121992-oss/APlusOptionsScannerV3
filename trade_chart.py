@@ -107,7 +107,7 @@ def _five_history(security_id: int, day: str, timeout: float = 25) -> tuple[dict
     r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=timeout, json={
         "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
         "fromDate": f"{frm} 09:00:00", "toDate": f"{day} 15:30:00"})
-    out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}
+    out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": [], "m": []}
     start = 0
     if r.status_code == 200:
         d = r.json() or {}
@@ -120,6 +120,7 @@ def _five_history(security_id: int, day: str, timeout: float = 25) -> tuple[dict
             out["l"].append(float(d["low"][i]))
             out["c"].append(float(d["close"][i]))
             out["v"].append(float((d.get("volume") or [0] * len(d["close"]))[i] or 0))
+            out["m"].append(when.hour * 60 + when.minute)
     res = (out, start)
     _HIST[key] = (time.time(), res)
     return res
@@ -264,7 +265,7 @@ TRADE_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><tit
 .counts .b{background:#12351f;color:var(--green)}.counts .n{background:#232b3f;color:var(--muted)}.counts .r{background:#3a1620;color:var(--red)}
 table.ind{width:100%;border-collapse:collapse;font-size:13px}table.ind td{padding:7px 4px;border-bottom:1px solid var(--line)}
 table.ind td:last-child{text-align:right;font-weight:700}.bull{color:var(--green)}.bear{color:var(--red)}.neutral{color:var(--muted)}
-.sc{border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px}.sc.bull{background:#12351f;color:#b9f5cf}.sc.bear{background:#3a1620;color:#ffb9c8}
+.sc{border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px}.sc .t{float:right;opacity:.75;font-weight:600;font-size:12px}.sc.bull{background:#12351f;color:#b9f5cf}.sc.bear{background:#3a1620;color:#ffb9c8}
 </style></head><body><div class="wrap">
 <div><a href="/positions">&larr; Positions</a> &nbsp; <a href="/">Dashboard</a></div>
 <div class="head"><div><h1 id="title">Trade</h1><div class="sub" id="meta">loading...</div></div><div style="text-align:right"><div id="pnl" style="font-size:24px;font-weight:800"></div><div class="sub" id="state"></div></div></div>
@@ -316,7 +317,7 @@ function drawTrend(){var row=document.getElementById("trendRow");if(!TREND||!TRE
  document.getElementById("trTf").textContent=(TF==="5M"?"SHORT TERM (5M TF)":TF==="15M"?"(15M TF)":"(DAILY TF)");
  document.getElementById("indTbl").innerHTML='<tr><td class="neutral">NAME</td><td class="neutral">VALUE</td><td class="neutral" style="text-align:right">INTERPRETATION</td></tr>'
   +(cur.table||[]).map(function(r){return'<tr><td>'+r.name+'</td><td>'+r.value+'</td><td class="'+r.tone+'">'+r.text+'</td></tr>'}).join("");
- document.getElementById("scans").innerHTML=(tr.scans||[]).length?(tr.scans).map(function(x){return'<div class="sc '+x.tone+'">'+x.text+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>'}
+ document.getElementById("scans").innerHTML=(tr.scans||[]).length?(tr.scans).map(function(x){return'<div class="sc '+x.tone+'">'+x.text+(x.time?'<span class="t">@ '+x.time+'</span>':'')+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>'}
 function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
  if(!d.ok){document.getElementById("meta").textContent=d.error||"not found";return}
  document.getElementById("title").innerHTML=d.option_label+' <span class="pill '+(d.status==="OPEN"?"open":"closed")+'">'+d.status+'</span>';
