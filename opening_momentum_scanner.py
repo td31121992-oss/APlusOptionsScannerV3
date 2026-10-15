@@ -868,6 +868,12 @@ class OpeningMomentumScanner:
                             float(_rv) if _rv not in (None, "") else None, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: market structure BOS / CHOCH / FVG (see market_structure.py)
+                        import market_structure
+                        candidate_record.update(market_structure.structure_tags(
+                            day_candles, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: market-breadth rule (see breadth_gate.py)
                         import breadth_gate
                         _ind_path = Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json"
@@ -940,6 +946,18 @@ class OpeningMomentumScanner:
                                 candidate.paper_trade_status = "ENTRY_RULE_BLOCKED"
                                 continue
                     except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # shadow tag only: no-trade-day verdict (see no_trade_day.py)
+                        import entry_pause as _epn
+                        import no_trade_day
+                        _dayn = current_time.date().isoformat()
+                        _today = [x for x in getattr(self.paper_journal, "trades", [])
+                                  if str(x.get("entry_time") or x.get("generated_at") or "")[:10] == _dayn]
+                        _ctxn = getattr(self, "_market_context", None) or {}
+                        candidate_record.update(no_trade_day.evaluate(
+                            _today, candidate.direction, current_time.hour * 60 + current_time.minute,
+                            _ctxn.get("nifty_pct_open"), candidate_record.get("breadth_pct_with"), _epn.account_capital()))
+                    except Exception:         # noqa: BLE001 - never affects trading
                         pass
                     try:                      # dashboard "pause new entries" / day-target switch (see entry_pause.py); fail-open
                         import entry_pause

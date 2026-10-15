@@ -170,6 +170,31 @@ def _sector_tape_text(t: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def _structure_text(t: dict[str, Any]) -> str:
+    """Market structure at entry (SHADOW): trend, BOS/CHOCH/MSS, fair-value gap."""
+    if not t.get("ms_trend"):
+        return ""
+    parts = [f"trend {t['ms_trend']}"]
+    if t.get("ms_bos"):
+        parts.append(f"BOS {t['ms_bos']} ({t.get('ms_event_bars_ago', '?')} bars ago)")
+    if t.get("ms_choch"):
+        parts.append(f"CHOCH {t['ms_choch']}" + (" + displacement (MSS)" if str(t.get("ms_mss")).lower() in ("true", "1") else "")
+                     + f" ({t.get('ms_event_bars_ago', '?')} bars ago)")
+    if t.get("ms_fvg"):
+        d = t.get("ms_fvg_dist_pct", "")
+        parts.append(f"open {t['ms_fvg']} gap" + (f" ({float(d):+.2f}% from it)" if d != "" else ""))
+    parts.append("structure agrees with the trade" if str(t.get("ms_aligned")).lower() in ("true", "1") else "structure does not agree")
+    return " | ".join(parts)
+
+
+def _no_trade_text(t: dict[str, Any]) -> str:
+    if not t.get("nt_verdict"):
+        return ""
+    why = str(t.get("nt_reasons") or "").replace("|", ", ").replace("_", " ").lower()
+    return (f"{t['nt_verdict'].replace('_', ' ')}" + (f" - {why}" if why else "")
+            + f" | today so far: {t.get('nt_wins', 0)} won, {t.get('nt_losses', 0)} lost, day {float(t.get('nt_day_pct') or 0):+.2f}% of capital")
+
+
 def _key_level_text(t: dict[str, Any]) -> str:
     """Key-level push shape at entry (SHADOW)."""
     if t.get("kl_push", "") == "" and not t.get("kl_level"):
@@ -279,6 +304,9 @@ def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]],
         "futures_flow": _futures_text(t),
         "quality": _quality_text(t),
         "key_level": _key_level_text(t),
+        "structure": _structure_text(t),
+        "no_trade": _no_trade_text(t),
+        "nt_verdict": str(t.get("nt_verdict") or ""),
         "sector_tape": _sector_tape_text(t),
         "sec_state": str(t.get("sec_state") or ""),
         "confirm5": str(t.get("confirm5") or ""),
@@ -473,7 +501,7 @@ function render(){if(!D)return;var s=D.stats;
 function detail(t){var j=t.journal,sh=Object.keys(t).filter(function(k){return k.indexOf("d_")===0&&t[k]!==0}).map(function(k){return esc(k.slice(2))+": "+m(t[k])}).join(" | ");
  var tags=D.tags.map(function(x){return '<span class="chip'+(j.tags.indexOf(x)>=0?" on":"")+'" data-tag="'+x+'">'+x+'</span>'}).join("");
  return '<tr class="detail"><td colspan="17"><div class="kv"><div><span>Contract</span> '+esc(t.contract)+'</div><div><span>Quantity</span> '+t.lot_qty+'</div><div><span>Stage / tier</span> '+esc(t.stage)+' / '+esc(t.tier)+'</div><div><span>Pivot state</span> '+esc(t.pivot_state)+'</div>'
-  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div><div style="grid-column:1/-1"><span>Option already ran (shadow)</span> '+esc(t.option_run||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Futures flow (shadow)</span> '+esc(t.futures_flow||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector tape (shadow)</span> '+esc(t.sector_tape||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Key-level push (shadow)</span> '+esc(t.key_level||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Quality filter (shadow)</span> '+esc(t.quality||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry context (shadow)</span> '+esc(t.entry_context||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector rotation (shadow)</span> '+esc(t.sector_rrg||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry rules (shadow)</span> '+esc(t.entry_rules||"not recorded for this trade")+'</div>'+'<div style="grid-column:1/-1"><span>Stock vs option response</span> '+esc(t.stock_response||"not recorded for this trade")+'</div>'
+  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div><div style="grid-column:1/-1"><span>Option already ran (shadow)</span> '+esc(t.option_run||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Futures flow (shadow)</span> '+esc(t.futures_flow||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector tape (shadow)</span> '+esc(t.sector_tape||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Market structure (shadow)</span> '+esc(t.structure||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>No-trade day verdict (shadow)</span> '+esc(t.no_trade||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Key-level push (shadow)</span> '+esc(t.key_level||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Quality filter (shadow)</span> '+esc(t.quality||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry context (shadow)</span> '+esc(t.entry_context||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector rotation (shadow)</span> '+esc(t.sector_rrg||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry rules (shadow)</span> '+esc(t.entry_rules||"not recorded for this trade")+'</div>'+'<div style="grid-column:1/-1"><span>Stock vs option response</span> '+esc(t.stock_response||"not recorded for this trade")+'</div>'
   +'<div><span>High</span> '+t.high+' @ '+(t.high_time||"-")+'</div><div><span>Low</span> '+t.low+' @ '+(t.low_time||"-")+'</div><div><span>Targets hit</span> '+esc(t.targets_hit||"none")+'</div><div><span>Stop distance</span> '+t.stop_pct+'%</div>'
   +'<div><span>Gross / costs / net</span> '+m(t.gross)+' / '+m(t.costs)+' / '+m(t.net)+'</div><div><span>Kept of peak</span> '+(t.return_pct>0?t.captured_pct+'%':'n/a (not a winner)')+'</div></div>'
   +(t.lessons.length?t.lessons.map(function(x){return '<div class="lesson">&#9679; '+esc(x)+'</div>'}).join(""):'<div class="sub">No automatic lesson for this trade.</div>')

@@ -81,6 +81,7 @@ def review_row(t: dict) -> dict[str, Any]:
         "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
                         if t.get("lock_shadow_exit_at") else ""),
         "half10_shadow": _half10(t, exit_price),
+        "nt_verdict": str(t.get("nt_verdict") or ""), "ms_aligned": str(t.get("ms_aligned") or ""),
         "confirm5": str(t.get("confirm5") or ""), "confirm5_pct": t.get("confirm5_pct", ""),
         "day_entry_rank": int(_f(t.get("day_entry_rank"))),
         **_shadow_deltas(t, exit_price),
@@ -155,6 +156,25 @@ def quality_split(rows: list[dict], cap: int = 5) -> tuple[list[dict], list[dict
     return taken, failed, over
 
 
+def verdict_section(rows: list[dict]) -> list[str]:
+    """Shadow comparison: how trades did under each no-trade-day verdict and whether market structure agreed with the trade."""
+    if not any(r.get("nt_verdict") or r.get("ms_aligned") for r in rows):
+        return []
+    out = ["", "**No-trade verdict and market structure (shadow, nothing traded)**", "",
+           "| Group | Trades | Winners | Net Rs |", "|---|---|---|---|"]
+    def line(label, g):
+        out.append(f"| {label} | {len(g)} | {sum(1 for r in g if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in g):+,.0f} |")
+    for v in ("TRADE", "CAUTION", "NO_TRADE"):
+        g = [r for r in rows if r.get("nt_verdict") == v]
+        if g:
+            line(f"Verdict {v.replace('_', ' ')}", g)
+    for lab, key in (("Structure agrees with the trade", "True"), ("Structure does not agree", "False")):
+        g = [r for r in rows if str(r.get("ms_aligned")) == key]
+        if g:
+            line(lab, g)
+    return out
+
+
 def quality_section(rows: list[dict]) -> list[str]:
     taken, failed, over = quality_split(rows)
     if not (taken or failed or over):
@@ -210,6 +230,7 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
             lab = labels.get(n) or (f"Exit {n.split('_')[0][4:]}% below the peak, after +{n.split('_a')[1]}% reached" if n.startswith("peak") else n)
             out.append(f"| {lab} | {sum(r.get('hit_' + n, 0) for r in rows)} of {len(rows)} | {sum(r.get('d_' + n, 0) for r in rows):+,} |")
     out += quality_section(rows)
+    out += verdict_section(rows)
     gave_back = [r for r in rows if r["mfe_pct"] >= 15 and r["return_pct"] <= 5]
     if gave_back:
         out += ["", "**Gave back a gain** (peak at least +15%, ended at +5% or less): "
