@@ -298,17 +298,72 @@ def load_indicators(root) -> dict[str, Any]:
     return _IND_CACHE["data"]
 
 
+_TICKS: dict[str, Any] = {"mtime": 0.0, "at": 0.0, "day": "", "data": {}}
+
+
+def ticks_today(root) -> dict[str, list[tuple[int, float]]]:
+    """{symbol: [(minute_of_day, price), ...]} for today from the order-book recorder's per-minute file (no network). Re-read at most
+    every 30 seconds; empty when the recorder has not written today's file."""
+    import csv
+    import time as _time
+    from datetime import date, datetime as _dt
+    from pathlib import Path
+
+    today = date.today().isoformat()
+    path = Path(root) / "data" / "order_book" / f"{today}.csv"
+    now = _time.time()
+    if _TICKS["day"] == today and now - _TICKS["at"] < 30:
+        return _TICKS["data"]
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _TICKS["day"] == today and mtime == _TICKS["mtime"]:
+        _TICKS["at"] = now
+        return _TICKS["data"]
+    out: dict[str, list[tuple[int, float]]] = {}
+    last_min: dict[str, int] = {}
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    t = _dt.fromisoformat(row["time"])
+                    m = t.hour * 60 + t.minute
+                    px = float(row["ltp"])
+                except (KeyError, ValueError):
+                    continue
+                if px <= 0 or m < 555:
+                    continue
+                s = row.get("symbol") or ""
+                if last_min.get(s) == m:                        # one point per minute is enough (the latest of that minute)
+                    out[s][-1] = (m, px)
+                else:
+                    out.setdefault(s, []).append((m, px))
+                    last_min[s] = m
+    except OSError:
+        return _TICKS["data"] if _TICKS["day"] == today else {}
+    _TICKS.update({"mtime": mtime, "at": now, "day": today, "data": out})
+    return out
+
+
 def attach_scans(rows: list[dict[str, Any]], root) -> None:
-    """Adds `scans` (list of {text, tone}) to every market-watch row, from the row's own prices and the daily indicators. No network."""
+    """Adds `scans` (list of {text, tone, time}) to every market-watch row, from the row's own prices, the daily indicators and
+    the order-book recorder's per-minute prices (for the time each scan first triggered). No network."""
     ind = load_indicators(root)
+    try:
+        ticks = ticks_today(root)
+    except Exception:                                      # noqa: BLE001 - times are an extra
+        ticks = {}
     for r in rows:
         try:
             sym = str(r.get("symbol") or "").upper()
             ltp = float(r.get("ltp") or 0)
             if ltp <= 0:
                 continue
+            pts = ticks.get(sym) or []
+            bars = [(m, p, p, p, p) for m, p in pts] or None
             r["scans"] = scans(ltp, float(r.get("open_0915") or 0), float(r.get("day_high") or 0), float(r.get("day_low") or 0),
-                               float(r.get("previous_close") or 0), ind.get(sym))
+                               float(r.get("previous_close") or 0), ind.get(sym), True, bars)
         except (TypeError, ValueError):
             continue
 

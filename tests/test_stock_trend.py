@@ -109,3 +109,28 @@ class ScanTimeTests(unittest.TestCase):
         out = stt.build(five, 0, None, {"pdh": 101.0}, 99.9)
         hit = [s for s in out.get("scans", []) if s["text"] == "Above yesterday's high"]
         self.assertTrue(hit and hit[0].get("time", "").count(":") == 1)
+
+
+class TickTimeTests(unittest.TestCase):
+    def test_market_watch_scans_get_times_from_the_order_book_file(self):
+        import json
+        import tempfile
+        from datetime import date
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data" / "reports").mkdir(parents=True)
+            (root / "data" / "order_book").mkdir(parents=True)
+            (root / "data" / "reports" / "daily_indicators.json").write_text(json.dumps({"symbols": {"AAA": {"pdh": 101.0, "hi_5d": 103.0}}}))
+            today = date.today().isoformat()
+            lines = ["time,symbol,ltp,volume"]
+            for m, px in ((555, 99.2), (560, 100.5), (565, 101.4), (570, 103.5), (575, 104.0)):
+                lines.append(f"{today}T{m // 60:02d}:{m % 60:02d}:20+05:30,AAA,{px},1000")
+            (root / "data" / "order_book" / f"{today}.csv").write_text("\n".join(lines))
+            stt._TICKS.update({"mtime": 0.0, "at": 0.0, "day": "", "data": {}})
+            rows = [{"symbol": "AAA", "ltp": 104.0, "open_0915": 99.0, "day_high": 104.0, "day_low": 99.0, "previous_close": 99.5}]
+            stt.attach_scans(rows, root)
+            got = {s["text"]: s.get("time") for s in rows[0]["scans"]}
+            self.assertEqual(got["Above yesterday's high"], "09:25")
+            self.assertEqual(got["5 Days Breakout"], "09:30")
+            self.assertEqual(got["Open = Low"], "09:15")
