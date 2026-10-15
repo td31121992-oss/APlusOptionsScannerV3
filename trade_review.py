@@ -198,6 +198,7 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
         labels = {"user_ladder": "YOUR ladder: +5% stop -15%, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60",
                   "sbg40": "Stock burst over: stock gave back 40% of its best move (after +0.5%)", "sbg60": "Stock burst over: stock gave back 60% of its best move (after +0.5%)",
                   "sstall10": "Stock burst over: no new best for 10 min (after +0.5%)",
+                  "moverover": "Movement over: option was up 8%+, is back near cost (<= +3%) and the stock gave back half its move / fell below entry / stalled 10 min",
                   "volstop30": "Volatility-sized first stop (2 x last-30-min stock range x 23, 8-20%)", "volstop60": "Volatility-sized first stop (2 x last-60-min stock range x 23, 8-20%)",
                   "cash10": "Cash everything at +10% and leave", "cash15": "Cash everything at +15% and leave", "cash20": "Cash everything at +20% and leave"}
         out += ["", "**Exit-rule comparison (shadow, nothing traded)** - rupees versus the real exits above, summed over today's trades", "",

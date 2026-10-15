@@ -65,3 +65,32 @@ class StockBurstShadowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MoverOverTests(StockBurstShadowTests):
+    def test_needs_a_gain_then_cost_and_a_failing_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            j = self.journal(tmp)
+            t = j.trades[0]
+            entry = float(t["entry_price"])
+            self.step(j, 3, 101.0, entry * 1.12)
+            t["highest_option_price"] = entry * 1.12
+            self.step(j, 7, 100.4, entry * 1.08)            # stock gave back 60% but the option is still +8%: not yet
+            self.assertNotIn("shadow_moverover_exit_at", t)
+            self.step(j, 9, 100.4, entry * 1.02)            # back near cost with the stock failing: fires
+            self.assertAlmostEqual(t["shadow_moverover_exit_price"], entry * 1.02, places=3)
+            self.assertEqual(t["status"], "OPEN")
+
+    def test_never_armed_without_the_gain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            j = self.journal(tmp)
+            t = j.trades[0]
+            entry = float(t["entry_price"])
+            self.step(j, 3, 101.0, entry * 1.04)
+            t["highest_option_price"] = entry * 1.04
+            self.step(j, 9, 99.5, entry * 0.97)
+            self.assertNotIn("shadow_moverover_exit_at", t)
+
+
+if __name__ == "__main__":
+    pass

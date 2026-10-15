@@ -43,7 +43,11 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 # "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
 #   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
-STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0)}
+STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
+                       "moverover": ("over", 0.5)}
+MOVER_OVER_ARM_PCT = 8.0       # option must have been up this much ...
+MOVER_OVER_BACK_PCT = 3.0      # ... and be back at/below this (about cost) ...
+MOVER_OVER_STALL_MIN = 10.0    # ... and the stock gave back 50% of its best move, or is below entry, or made no new best for 10 min
 STOCK_BURST_ARM_PCT = 0.5
 # Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
 # instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
@@ -620,7 +624,13 @@ class PaperTradeJournal:
                     for sname, (kind, param) in STOCK_BURST_SHADOWS.items():
                         if trade.get(f"shadow_{sname}_exit_at"):
                             continue
-                        ended = ((new_max - fav) >= param * new_max) if kind == "giveback" else (since >= param and fav < new_max)
+                        if kind == "over":
+                            e_px, h_px = self._number(trade.get("entry_price")), self._number(trade.get("highest_option_price"))
+                            if e_px <= 0 or h_px < e_px * (1 + MOVER_OVER_ARM_PCT / 100) or opt_now > e_px * (1 + MOVER_OVER_BACK_PCT / 100):
+                                continue
+                            ended = fav < 0 or (new_max - fav) >= param * new_max or (since >= MOVER_OVER_STALL_MIN and fav < new_max)
+                        else:
+                            ended = ((new_max - fav) >= param * new_max) if kind == "giveback" else (since >= param and fav < new_max)
                         if ended:
                             trade[f"shadow_{sname}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
                             trade[f"shadow_{sname}_exit_price"] = round(opt_now, 4)
