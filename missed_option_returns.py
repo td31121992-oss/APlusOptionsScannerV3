@@ -174,6 +174,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         scan_review.write(root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # choppiness shadow replay over every past signal (research only)
+        import chop_review
+
+        chop_review.write(root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 

@@ -275,6 +275,17 @@ def build(five: dict[str, list[float]], session_start: int, daily: dict[str, lis
         if len(mins) == len(five["c"]):
             bars = [(mins[i], five["o"][i], five["h"][i], five["l"][i], five["c"][i]) for i in range(session_start, len(five["c"]))]
         out["scans"] = scans(ltp, o_t, h_t, l_t, prev_close, ind, bull, bars)
+    try:
+        import chop
+
+        if five and five.get("c") and session_start < len(five["c"]):
+            cs = [{"o": five["o"][i], "h": five["h"][i], "l": five["l"][i], "c": five["c"][i], "v": five["v"][i]}
+                  for i in range(session_start, len(five["c"]))]
+            m = chop.measures(cs)
+            if m:
+                out["chop"] = {**m, "text": chop.badge_text(m)}
+    except Exception:                                      # noqa: BLE001 - the badge is an extra
+        pass
     out["price"] = round(ltp, 2)
     return out
 

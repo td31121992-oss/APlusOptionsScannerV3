@@ -324,7 +324,8 @@ function drawTrend(){var row=document.getElementById("trendRow");if(!TREND||!TRE
  document.getElementById("trTf").textContent=(TF==="5M"?"SHORT TERM (5M TF)":TF==="15M"?"(15M TF)":"(DAILY TF)");
  document.getElementById("indTbl").innerHTML='<tr><td class="neutral">NAME</td><td class="neutral">VALUE</td><td class="neutral" style="text-align:right">INTERPRETATION</td></tr>'
   +(cur.table||[]).map(function(r){return'<tr><td>'+r.name+'</td><td>'+r.value+'</td><td class="'+r.tone+'">'+r.text+'</td></tr>'}).join("");
- document.getElementById("scans").innerHTML=(tr.scans||[]).length?(tr.scans).map(function(x){return'<div class="sc '+x.tone+'">'+x.text+(x.time?'<span class="t">@ '+x.time+'</span>':'')+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>'}
+ var chb=tr.chop?'<div class="sc '+(tr.chop.chop_state==="CHOPPY"?"bear":tr.chop.chop_state==="TRENDING"?"bull":"")+'" style="background:'+(tr.chop.chop_state==="CHOPPY"?"#3a1620":tr.chop.chop_state==="TRENDING"?"#12351f":"#232b3f")+'">'+tr.chop.text+'</div>':"";
+ document.getElementById("scans").innerHTML=chb+((tr.scans||[]).length?(tr.scans).map(function(x){return'<div class="sc '+x.tone+'">'+x.text+(x.time?'<span class="t">@ '+x.time+'</span>':'')+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>')}
 function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
  if(!d.ok){document.getElementById("meta").textContent=d.error||"not found";return}
  document.getElementById("title").innerHTML=d.option_label+' <span class="pill '+(d.status==="OPEN"?"open":"closed")+'">'+d.status+'</span>';
