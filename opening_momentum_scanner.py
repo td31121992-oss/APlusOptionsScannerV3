@@ -422,8 +422,16 @@ class OpeningMomentumScanner:
             if str(item.get("option_security_id") or "")
         })
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
-        if open_option_ids:
-            quote_request["NSE_FNO"] = open_option_ids
+        fut_ids: list[str] = []
+        try:                      # SHADOW: near-month stock futures ride on the same quote call (price, OI) - see futures_flow.py
+            import futures_flow
+            if getattr(self, "_fut_flow", None) is None:
+                self._fut_flow = futures_flow.FuturesFlow(Path(self.config.paths.data_dir))
+            fut_ids = self._fut_flow.request_ids(current_time.date(), [item.symbol for item in universe])
+        except Exception:         # noqa: BLE001 - never affects trading
+            fut_ids = []
+        if open_option_ids or fut_ids:
+            quote_request["NSE_FNO"] = sorted(set(open_option_ids) | set(fut_ids))
         market_context.add_to_request(quote_request)  # NIFTY/BANKNIFTY/VIX ride on this same call
         try:
             quote_map = self.client.get_market_quotes(quote_request, mode="quote")
@@ -459,6 +467,16 @@ class OpeningMomentumScanner:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Market context skipped: %s: %s", type(exc).__name__, exc)
 
+        try:                      # SHADOW: keep the futures snapshots (price, open interest) for the entry tags
+            if getattr(self, "_fut_flow", None) is not None and fut_ids:
+                _cash = {}
+                for _sid, _raw in (quote_map.get("NSE_EQ", {}) or {}).items():
+                    _inst = self._by_security_id.get(str(_sid)) if getattr(self, "_by_security_id", None) else None
+                    if _inst is not None and isinstance(_raw, Mapping):
+                        _cash[str(_inst.symbol).upper()] = float(_raw.get("last_price") or 0)
+                self._fut_flow.update(quote_map, _cash, current_time)
+        except Exception:         # noqa: BLE001 - never affects trading
+            pass
         stage_marks["quotes"] = time.monotonic()
 
         # Stock Selection V2: rank the full F&O universe by actual movement
@@ -843,6 +861,11 @@ class OpeningMomentumScanner:
                         candidate_record.update(event_tags.trade_tags(
                             candidate.symbol, (fno_market_watch or {}).get("rows", []), getattr(self, "_event_volumes", {}),
                             getattr(self, "_event_ind", {}), current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: futures premium and open-interest flow (see futures_flow.py)
+                        if getattr(self, "_fut_flow", None) is not None:
+                            candidate_record.update(self._fut_flow.tags_for(candidate.symbol, candidate.direction))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
                     try:                      # shadow tag only: sector rotation (see sector_rrg.py); reads a cache file, never the network
