@@ -94,7 +94,7 @@ def _headers() -> dict[str, str]:
     return {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
 
 
-def _five_history(security_id: int, day: str) -> tuple[dict[str, list[float]], int]:
+def _five_history(security_id: int, day: str, timeout: float = 25) -> tuple[dict[str, list[float]], int]:
     """About six sessions of 5-minute stock candles up to `day`, and the index where `day` starts. Cached for 45 seconds."""
     import requests
     from datetime import date, timedelta
@@ -104,7 +104,7 @@ def _five_history(security_id: int, day: str) -> tuple[dict[str, list[float]], i
     if hit and time.time() - hit[0] < 45:
         return hit[1]
     frm = (date.fromisoformat(day) - timedelta(days=9)).isoformat()
-    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=25, json={
+    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=timeout, json={
         "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
         "fromDate": f"{frm} 09:00:00", "toDate": f"{day} 15:30:00"})
     out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}
@@ -125,7 +125,7 @@ def _five_history(security_id: int, day: str) -> tuple[dict[str, list[float]], i
     return res
 
 
-def _daily_history(security_id: int, day: str) -> dict[str, list[float]]:
+def _daily_history(security_id: int, day: str, timeout: float = 25) -> dict[str, list[float]]:
     """About eight months of daily candles up to (and excluding) `day`. Cached for an hour."""
     import requests
     from datetime import date, timedelta
@@ -134,7 +134,7 @@ def _daily_history(security_id: int, day: str) -> dict[str, list[float]]:
     hit = _HIST.get(key)
     if hit and time.time() - hit[0] < 3600:
         return hit[1]
-    r = requests.post("https://api.dhan.co/v2/charts/historical", headers=_headers(), timeout=25, json={
+    r = requests.post("https://api.dhan.co/v2/charts/historical", headers=_headers(), timeout=timeout, json={
         "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "expiryCode": 0, "oi": False,
         "fromDate": (date.fromisoformat(day) - timedelta(days=260)).isoformat(), "toDate": day})
     out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}

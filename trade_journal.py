@@ -170,6 +170,22 @@ def _sector_tape_text(t: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def _trend_text(t: dict[str, Any]) -> str:
+    if t.get("tr_5m_score", "") == "" and t.get("tr_daily_score", "") == "":
+        return ""
+    def one(short: str, name: str) -> str:
+        if t.get(f"tr_{short}_score", "") == "":
+            return ""
+        return (f"{name} {t.get(f'tr_{short}_bull', 0)} bullish / {t.get(f'tr_{short}_neu', 0)} neutral / {t.get(f'tr_{short}_bear', 0)} bearish "
+                f"({float(t[f'tr_{short}_score']):+.2f})")
+    parts = [p for p in (one("5m", "5M"), one("15m", "15M"), one("daily", "Daily")) if p]
+    if t.get("tr_adx_5m", "") != "":
+        parts.append(f"ADX {t['tr_adx_5m']}, RSI {t.get('tr_rsi_5m', '-')}")
+    parts.append("5M and 15M agree with the trade" if str(t.get("tr_all_aligned")).lower() in ("true", "1") else "5M/15M do not both agree")
+    parts.append(f"scans for {t.get('tr_scans_for', 0)} / against {t.get('tr_scans_against', 0)}")
+    return " | ".join(parts)
+
+
 def _mtf_text(t: dict[str, Any]) -> str:
     if not t.get("mtf_15m") and not t.get("mtf_daily"):
         return ""
@@ -329,6 +345,8 @@ def entry_row(t: dict[str, Any], regimes: dict[str, list[tuple[str, str, str]]],
         "key_level": _key_level_text(t),
         "structure": _structure_text(t),
         "mtf": _mtf_text(t),
+        "trend": _trend_text(t),
+        "tr_all_aligned": str(t.get("tr_all_aligned") or ""),
         "greeks": _greeks_text(t),
         "no_trade": _no_trade_text(t),
         "nt_verdict": str(t.get("nt_verdict") or ""),
@@ -526,7 +544,7 @@ function render(){if(!D)return;var s=D.stats;
 function detail(t){var j=t.journal,sh=Object.keys(t).filter(function(k){return k.indexOf("d_")===0&&t[k]!==0}).map(function(k){return esc(k.slice(2))+": "+m(t[k])}).join(" | ");
  var tags=D.tags.map(function(x){return '<span class="chip'+(j.tags.indexOf(x)>=0?" on":"")+'" data-tag="'+x+'">'+x+'</span>'}).join("");
  return '<tr class="detail"><td colspan="17"><div class="kv"><div><span>Contract</span> '+esc(t.contract)+'</div><div><span>Quantity</span> '+t.lot_qty+'</div><div><span>Stage / tier</span> '+esc(t.stage)+' / '+esc(t.tier)+'</div><div><span>Pivot state</span> '+esc(t.pivot_state)+'</div>'
-  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div><div style="grid-column:1/-1"><span>Option already ran (shadow)</span> '+esc(t.option_run||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Futures flow (shadow)</span> '+esc(t.futures_flow||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector tape (shadow)</span> '+esc(t.sector_tape||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Multi-timeframe (shadow)</span> '+esc(t.mtf||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Greeks at entry (shadow)</span> '+esc(t.greeks||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Market structure (shadow)</span> '+esc(t.structure||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>No-trade day verdict (shadow)</span> '+esc(t.no_trade||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Key-level push (shadow)</span> '+esc(t.key_level||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Quality filter (shadow)</span> '+esc(t.quality||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry context (shadow)</span> '+esc(t.entry_context||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector rotation (shadow)</span> '+esc(t.sector_rrg||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry rules (shadow)</span> '+esc(t.entry_rules||"not recorded for this trade")+'</div>'+'<div style="grid-column:1/-1"><span>Stock vs option response</span> '+esc(t.stock_response||"not recorded for this trade")+'</div>'
+  +'<div><span>Momentum / trend / clean / chase</span> '+t.momentum+' / '+t.trend_alignment+' / '+t.clean_trend+' / '+t.chase_risk+'</div><div><span>Safety</span> '+esc(t.safety)+'</div><div><span>Market regime at entry</span> '+esc(t.regime||"-")+'</div><div><span>Breadth tag</span> '+esc(t.breadth||"-")+'</div><div><span>Event day</span> '+esc(t.event||"-")+'</div><div style="grid-column:1/-1"><span>Option already ran (shadow)</span> '+esc(t.option_run||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Futures flow (shadow)</span> '+esc(t.futures_flow||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector tape (shadow)</span> '+esc(t.sector_tape||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Stock trend gauge (shadow)</span> '+esc(t.trend||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Multi-timeframe (shadow)</span> '+esc(t.mtf||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Greeks at entry (shadow)</span> '+esc(t.greeks||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Market structure (shadow)</span> '+esc(t.structure||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>No-trade day verdict (shadow)</span> '+esc(t.no_trade||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Key-level push (shadow)</span> '+esc(t.key_level||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Quality filter (shadow)</span> '+esc(t.quality||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry context (shadow)</span> '+esc(t.entry_context||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Sector rotation (shadow)</span> '+esc(t.sector_rrg||"not recorded for this trade")+'</div><div style="grid-column:1/-1"><span>Entry rules (shadow)</span> '+esc(t.entry_rules||"not recorded for this trade")+'</div>'+'<div style="grid-column:1/-1"><span>Stock vs option response</span> '+esc(t.stock_response||"not recorded for this trade")+'</div>'
   +'<div><span>High</span> '+t.high+' @ '+(t.high_time||"-")+'</div><div><span>Low</span> '+t.low+' @ '+(t.low_time||"-")+'</div><div><span>Targets hit</span> '+esc(t.targets_hit||"none")+'</div><div><span>Stop distance</span> '+t.stop_pct+'%</div>'
   +'<div><span>Gross / costs / net</span> '+m(t.gross)+' / '+m(t.costs)+' / '+m(t.net)+'</div><div><span>Kept of peak</span> '+(t.return_pct>0?t.captured_pct+'%':'n/a (not a winner)')+'</div></div>'
   +(t.lessons.length?t.lessons.map(function(x){return '<div class="lesson">&#9679; '+esc(x)+'</div>'}).join(""):'<div class="sub">No automatic lesson for this trade.</div>')

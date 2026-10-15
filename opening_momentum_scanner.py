@@ -855,6 +855,13 @@ class OpeningMomentumScanner:
                         candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: stock trend gauge 5M / 15M / daily + scans (see trend_tags.py)
+                        import trend_tags
+                        candidate_record.update(trend_tags.entry_trend(
+                            str(candidate.symbol), candidate.direction, current_time.date().isoformat(),
+                            Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: key-level push shape (see key_level.py)
                         import key_level
                         try:
