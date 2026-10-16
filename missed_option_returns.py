@@ -205,6 +205,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         sector_leader_puts.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # big movers we did not trade (research only)
+        import big_movers_review
+
+        big_movers_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
