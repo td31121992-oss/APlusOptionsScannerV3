@@ -496,7 +496,7 @@ class OpeningMomentumScanner:
         v2_movers = rank_raw_movers(
             universe=universe,
             quote_map=quote_map,
-            top_n=5,
+            top_n=int(os.getenv("APLUS_V2_TOP_N", "5") or 5),      # Stock Selection V2 rank limit per side (15 from 16 Oct 2026, set in .env)
         )
         v2_mover_symbols = set(v2_movers.get("symbols", []) or [])
 
@@ -660,7 +660,7 @@ class OpeningMomentumScanner:
 
         # Quality-first: trade count is an outcome, never a quota.
         actionable = selective_entry_ready
-        v2_config = V2GateConfig()
+        v2_config = V2GateConfig(top_n_per_side=int(os.getenv("APLUS_V2_TOP_N", "5") or 5))
         pre_v2_candidates = list(actionable)
         actionable, v2_blocked = evaluate_entry_ready(
             candidates=actionable,
@@ -955,6 +955,11 @@ class OpeningMomentumScanner:
                         _snap = getattr(self, "_oc_last", {}).get(str(candidate.symbol))
                         if _snap is not None:
                             candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: volume-burst ratio of the stock's 5-minute bars (see burst_tags.py)
+                        import burst_tags
+                        candidate_record.update(burst_tags.burst_tags(day_candles, candidate.direction))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
                     try:                      # shadow tag only: futures premium and open-interest flow (see futures_flow.py)
