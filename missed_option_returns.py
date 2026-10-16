@@ -242,6 +242,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         event_reaction_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # how the pre-market news focus list did today (research only)
+        import premarket_focus
+
+        premarket_focus.review(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 

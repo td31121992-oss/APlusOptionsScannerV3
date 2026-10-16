@@ -27,6 +27,23 @@ def ev(sym, title, hours_ago, source="Upstox"):
     return {"category": "STOCK_" + sym, "title": title, "source": source, "published_at_raw": t.strftime("%a, %d %b %Y %H:%M:%S +0530"), "url": "http://n"}
 
 
+class NoLookAheadTests(unittest.TestCase):
+    def test_replay_ignores_news_published_after_the_moment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, ann=[ann("AAA", "Financial Results", "Net profit jumps 40%", hours_ago=-6)])            # published 6 hours AFTER the replayed moment
+            self.assertEqual(cat.bulk(root, NOW), {})
+            later = NOW + timedelta(hours=7)
+            self.assertEqual(cat.bulk(root, later).get("AAA", {}).get("direction"), "BULLISH")
+
+    def test_replay_does_not_reuse_a_cached_read_of_another_moment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write(root, ann=[ann("AAA", "Financial Results", "Net profit jumps 40%", hours_ago=-6)])
+            self.assertEqual(cat.bulk(root, NOW + timedelta(hours=7)).get("AAA", {}).get("direction"), "BULLISH")
+            self.assertEqual(cat.bulk(root, NOW), {})                                                          # an earlier moment must not see it
+
+
 class ClassifyTests(unittest.TestCase):
     def test_key_phrases(self):
         self.assertEqual(cat.classify_text("Q2 results: Net profit jumps 45% YoY")[:2], ("RESULTS", 1))

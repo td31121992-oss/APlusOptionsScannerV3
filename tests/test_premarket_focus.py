@@ -72,6 +72,23 @@ class FocusTests(unittest.TestCase):
             self.assertEqual(pf.entry_tags("QQQ", "BULLISH", root), {"nf_rank": 0})
             self.assertEqual(pf.entry_tags("AAA", "BULLISH", Path(tmp) / "nothing"), {})
 
+    def test_review_scores_the_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            setup(root)
+            p = pf.build("2026-10-19", root, bulk_fn=bulk, items_fn=items)
+            pf.save(p, root)
+            cd = root / "data" / "pattern_log" / "candles"
+            cd.mkdir(parents=True)
+            bars = lambda o, c: {"minute": [555 + 5 * i for i in range(48)], "open": [o] + [c] * 47, "close": [c] * 48}
+            (cd / "2026-10-16.json").write_text(json.dumps({"symbols": {"AAA": bars(100, 100), "BBB": bars(100, 100)}}), encoding="utf-8")
+            (cd / "2026-10-19.json").write_text(json.dumps({"symbols": {"AAA": bars(102, 104), "BBB": bars(99, 98)}}), encoding="utf-8")
+            path = pf.review("2026-10-19", root)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("| 2026-10-19 | 2 |", text)
+            self.assertIn("2 of 2", text)                      # AAA gapped up with its bullish news, BBB gapped down with its bearish news
+            self.assertIsNone(pf.review("2026-10-20", root))
+
     def test_empty_day(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

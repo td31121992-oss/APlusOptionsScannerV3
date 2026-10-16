@@ -138,15 +138,17 @@ def _items(root: Path, now: datetime) -> dict[str, list[dict[str, Any]]]:
         key = (nd / "announcements.jsonl").stat().st_mtime, (nd / "events.jsonl").stat().st_mtime
     except OSError:
         pass
-    if _CACHE["key"] == key and key is not None and time.time() - _CACHE["at"] < 60:
+    live = abs((datetime.now(timezone.utc) - now.astimezone(timezone.utc)).total_seconds()) < 600     # a replay of an earlier moment must not use the live cache
+    if live and _CACHE["key"] == key and key is not None and time.time() - _CACHE["at"] < 60:
         return _CACHE["by"]
     cutoff = now - timedelta(hours=WINDOW_HOURS)
+    latest = now + timedelta(minutes=5)                       # nothing published after `now` can be known at `now`
     by: dict[str, list[dict[str, Any]]] = {}
     ann = _load_jsonl(nd / "announcements.jsonl")
     for a in ann:
         when = _parse_time(a.get("published_at"))
         sym = str(a.get("symbol") or "").upper()
-        if not sym or when is None or when < cutoff:
+        if not sym or when is None or when < cutoff or when > latest:
             continue
         desc, text = str(a.get("desc") or ""), str(a.get("text") or "")
         base = {"time": when, "source": "NSE filing", "kind": "FILING", "title": text or desc, "desc": desc, "url": str(a.get("url") or "")}
@@ -176,7 +178,7 @@ def _items(root: Path, now: datetime) -> dict[str, list[dict[str, Any]]]:
             continue
         sym = cat[6:].upper()
         when = _parse_time(e.get("published_at_raw"))
-        if when is None or when < cutoff:
+        if when is None or when < cutoff or when > latest:
             continue
         title = re.sub(r"<[^>]+>", " ", str(e.get("title") or ""))
         names = alias.get(sym, {sym.lower()})
@@ -190,7 +192,8 @@ def _items(root: Path, now: datetime) -> dict[str, list[dict[str, Any]]]:
             by.setdefault(sym, []).append({**base, "type": ctype, "dir": d, "weight": w, "rule": label, "event": ctype == "RESULTS"})
     for sym in by:
         by[sym].sort(key=lambda x: x["time"], reverse=True)
-    _CACHE.update({"key": key, "at": time.time(), "by": by})
+    if live:
+        _CACHE.update({"key": key, "at": time.time(), "by": by})
     return by
 
 

@@ -8,9 +8,10 @@ Built at 08:50 on trading days from what the system already collects:
     data/news_focus/<day>.json   latest.json          the list, for the dashboard page /focus and the entry tags (nf_rank, nf_dir)
     Telegram                                          one message at 08:50 (the same text as the page)
 
-Why not just trade it: a replay of 8 mornings (158 stock-days, catalyst read at 08:45) shows the headline alone is weak - HIGH-confidence news moved the stock +0.39% from the
-open to the close, MEDIUM +0.04%, and a "good results" read can still gap down (Angel One, 16 Oct: profit +45%, stock -4%). When the opening GAP AGREED with the news (+0.3%
-or more, 54 cases) the stock closed +0.72% from the open (+0.28% from 09:25). So the list says where to look; the open decides whether the news is being accepted.
+Why it is a "where to look" list and not a trade rule: a first replay of the mornings gave encouraging numbers, but it let later news leak into earlier mornings (fixed in
+catalyst.py on 17 Oct 2026), so those numbers were thrown away. Without the leak only 15 stock-days of clean history exist, which is too few to say anything. Friday 16 Oct
+as it would have looked at 08:50: BHEL, ANGELONE, IRFC and TECHM flagged UP; TECHM rose 8.5% but ANGELONE (profit +45%) fell 4%, and WIPRO's results were not classified at all.
+So the list says where to look; the open (gap and volume) decides whether the market is accepting the news. nightly reports will measure the hit rate from now on.
 
     python premarket_focus.py [--dry-run] [--force] [--day YYYY-MM-DD]
 """
@@ -163,6 +164,49 @@ def entry_tags(symbol: str, direction: str, root: Path = ROOT) -> dict[str, Any]
         return {"nf_rank": 0}
     except Exception:                                      # noqa: BLE001 - a shadow tag must never break an entry
         return {}
+
+
+def review(day: str, root: Path = ROOT) -> Path | None:
+    """Nightly: how did the stocks on this morning's list do? gap in the news direction, open->close and 09:25->close (stock moves, no options), appended to
+    data/shadow_rules/news_focus_review.md. The hit rate is what decides whether the list is ever more than 'where to look'."""
+    import glob
+    import statistics as st
+
+    try:
+        p = json.loads((root / "data" / "news_focus" / f"{day}.json").read_text(encoding="utf-8"))
+        cur = json.loads((root / "data" / "pattern_log" / "candles" / f"{day}.json").read_text(encoding="utf-8")).get("symbols", {})
+    except (OSError, ValueError):
+        return None
+    prev_days = sorted(Path(x).stem for x in glob.glob(str(root / "data" / "pattern_log" / "candles" / "20*.json")) if Path(x).stem < day)
+    prev: dict[str, Any] = {}
+    if prev_days:
+        try:
+            prev = json.loads((root / "data" / "pattern_log" / "candles" / f"{prev_days[-1]}.json").read_text(encoding="utf-8")).get("symbols", {})
+        except (OSError, ValueError):
+            prev = {}
+    rows = []
+    for f in p.get("focus", []):
+        d, pv = cur.get(f["symbol"]), prev.get(f["symbol"])
+        if not d or not d.get("close") or not pv or not pv.get("close"):
+            continue
+        sg = 1 if f["direction"] == "BULLISH" else -1
+        o, c, pc_ = float(d["open"][0]), float(d["close"][-1]), float(pv["close"][-1])
+        idx = [i for i, m in enumerate(d["minute"]) if m <= 9 * 60 + 25]
+        p0 = float(d["close"][idx[-1]]) if idx else o
+        rows.append({"symbol": f["symbol"], "dir": f["direction"], "conf": f["confidence"], "type": f["type"], "gap": sg * (o / pc_ - 1) * 100,
+                     "oc": sg * (c / o - 1) * 100, "from925": sg * (c / p0 - 1) * 100})
+    if not rows:
+        return None
+    path = root / "data" / "shadow_rules" / "news_focus_review.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    head = ("# Pre-market focus: how the listed stocks did (stock moves in the news direction; research only)\n\n"
+            "| Day | Listed | Gap agreed (>0.3%) | Mean open to close | Closed in the news direction | Mean 09:25 to close |\n|---|---|---|---|---|---|\n")
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = [ln for ln in old.splitlines() if ln.startswith("| 20") and not ln.startswith(f"| {day} ")]
+    n = len(rows)
+    lines.append(f"| {day} | {n} | {sum(r['gap'] > 0.3 for r in rows)} of {n} | {st.mean(r['oc'] for r in rows):+.2f}% | {sum(r['oc'] > 0 for r in rows)} of {n} | {st.mean(r['from925'] for r in rows):+.2f}% |")
+    path.write_text(head + "\n".join(sorted(lines)) + "\n\n_Hindsight; a stock-move check only, not an option result._\n", encoding="utf-8")
+    return path
 
 
 FOCUS_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>APlus Pre-market Focus</title>
