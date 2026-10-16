@@ -7,6 +7,7 @@ changed in rupees versus the real exit, per day and cumulatively, and prints a p
 
 Shadows compared (all from the trade journal's d_<name> fields, rupees versus the real exit):
     user_ladder   +5% -> stop -15%, +10% lock +3%, +20% lock +13%, +30% lock +22%, +2 per +5%
+    two_step      +5% -> stop -15%, +10% -> stop at cost, nothing else (added 16 Oct 2026; data from the next trading day)
     sbg60         stock gave back 60% of its best move (after +0.5%)  <- "burst over"
     sbg40         stock gave back 40% of its best move
     sstall10      stock made no new best for 10 minutes
@@ -24,7 +25,7 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parent
 FIRST_DAY = "2026-10-15"
-RULES = (("user_ladder", "Your ladder"), ("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
+RULES = (("user_ladder", "Your ladder"), ("two_step", "Two-step (+5% stop -15%, +10% cost)"),("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
          ("sstall10", "Stock stalled 10 min"), ("half10", "Half booked at +10%"))
 MIN_TRADES_DAY = 3
 MIN_BUSY_DAYS = 4          # never call a rule "supported" on fewer busy days than this
@@ -88,7 +89,7 @@ def render(s: dict[str, Any]) -> str:
         out.append(f"| {r['label']} | {r['total']:+,} | {s['real'] + r['total']:+,} | {r['days_helped']} of {r['days_counted']} | "
                    f"{r['best_day']:+,} | {r['worst_day']:+,} | {r['trades_helped']} / {r['trades_hurt']} | "
                    f"{'**supports enforcing**' if r['supports'] else ('needs more days (%d of %d)' % (r['days_counted'], MIN_BUSY_DAYS) if r['days_counted'] < MIN_BUSY_DAYS else 'not yet')} |")
-    for name in ("user_ladder", "sbg60"):
+    for name in ("user_ladder", "two_step", "sbg60"):
         r = s["rules"].get(name)
         if not r:
             continue

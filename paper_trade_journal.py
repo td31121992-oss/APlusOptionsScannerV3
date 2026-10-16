@@ -55,7 +55,7 @@ STOCK_BURST_ARM_PCT = 0.5
 # Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
 # instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
 VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
 
 
 def _first_lock_pct() -> float:
@@ -85,6 +85,19 @@ def user_ladder_floor(entry: float, high: float) -> float:
     else:
         return 0.0
     return entry * (1.0 + lock / 100.0)
+
+def two_step_floor(entry: float, high: float) -> float:
+    """Two-step shadow (Darpan, 16 Oct 2026): +5% -> stop tightens to -15% (was -20%) | +10% -> stop at cost. Nothing else locks (rest is manual).
+    Returns the stop price, or 0.0 while the option has not yet reached +5%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)
+    if gain >= 10.0:
+        return entry
+    if gain >= 5.0:
+        return entry * 0.85
+    return 0.0
+
 
 class PaperTradeJournal:
     """Persist generated paper option trades and de-duplicate repeated signals."""
@@ -766,7 +779,7 @@ class PaperTradeJournal:
         ladder:  T1 -> entry, T2 -> target 1 price, T3 -> target 2 price (each step locks the previous target).
         trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
         t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
-        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high)}
+        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high), "two_step": two_step_floor(entry, high)}
         for (dd, act), name in zip(PEAK_VARIANTS, PEAK_NAMES):
             out[name] = high * (1.0 - dd) if high >= entry * (1.0 + act) else 0.0
         if t1:
