@@ -229,6 +229,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         early_entry_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # which wait (A+ / V2 / pending) costs the most, from the per-signal snapshots (research only)
+        import wait_cost_review
+
+        wait_cost_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
