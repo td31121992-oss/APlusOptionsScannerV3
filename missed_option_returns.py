@@ -254,6 +254,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         external_picks.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # order-flow candles from the recorded ticks (research only)
+        import footprint_lite
+
+        footprint_lite.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
