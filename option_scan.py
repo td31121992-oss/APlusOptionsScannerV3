@@ -35,6 +35,9 @@ FIELDS = ["day", "symbol", "sector", "dir", "stock_move_pct", "stock_close_pct",
           "a_entry", "a_best_pct", "a_worst_pct", "a_close_pct", "a_stop_first", "b_entry", "b_best_pct", "b_close_pct", "b_stop_first", "contract"]
 
 
+_TOKEN: dict[str, Any] = {"value": "", "at": 0.0}
+
+
 def _legs(master: Any, symbol: str, day: str, side: str) -> Any:
     m = master[(master.UNDERLYING_SYMBOL == symbol) & (master.INSTRUMENT == "OPTSTK") & (master.OPTION_TYPE == side)].copy()
     m["exp"] = m.SM_EXPIRY_DATE.astype(str).str[:10]
@@ -53,7 +56,9 @@ def fetch_bars(security_id: int, day: str, tries: int = 4) -> list[tuple[int, fl
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
-    tok = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+    if time.time() - _TOKEN["at"] > 1500 or not _TOKEN["value"]:          # resolve once per 25 minutes: parallel runs must not fight over the token file
+        _TOKEN["value"], _TOKEN["at"] = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip()), time.time()
+    tok = _TOKEN["value"]
     for attempt in range(tries):
         time.sleep(0.4 * (attempt + 1))
         try:
