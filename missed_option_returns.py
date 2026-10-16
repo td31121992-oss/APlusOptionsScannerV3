@@ -199,6 +199,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         pivot_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # falling-sector put leaders shadow list (research only)
+        import sector_leader_puts
+
+        sector_leader_puts.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 

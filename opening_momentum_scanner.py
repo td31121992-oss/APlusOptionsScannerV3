@@ -950,6 +950,13 @@ class OpeningMomentumScanner:
                             candidate_record.update(_et3.option_run(_resp, _px, current_time))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: option-chain walls / put-call ratio / IV / OI flow (see options_tags.py)
+                        import options_tags
+                        _snap = getattr(self, "_oc_last", {}).get(str(candidate.symbol))
+                        if _snap is not None:
+                            candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: futures premium and open-interest flow (see futures_flow.py)
                         if getattr(self, "_fut_flow", None) is not None:
                             candidate_record.update(self._fut_flow.tags_for(candidate.symbol, candidate.direction))
@@ -2874,6 +2881,7 @@ class OpeningMomentumScanner:
                         if expiry is not None
                         else self.option_chain.fetch(underlying)
                     )
+                    self._oc_last = {**getattr(self, "_oc_last", {}), str(candidate.symbol): snapshot}      # for the oc_ shadow tags at entry
                     selected = self.option_selector.select(
                         snapshot=snapshot,
                         underlying=underlying,
