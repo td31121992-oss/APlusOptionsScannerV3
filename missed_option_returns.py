@@ -193,6 +193,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         put_continuation.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # pivot-zone / level-break review (research only)
+        import pivot_review
+
+        pivot_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
