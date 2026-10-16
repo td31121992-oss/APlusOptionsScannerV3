@@ -979,6 +979,13 @@ class OpeningMomentumScanner:
                         candidate_record.update(stock_stops.entry_levels(day_candles, candidate.direction))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: when the stock broke R1 (calls) / S1 (puts) today (see break_tags.py)
+                        import break_tags
+                        candidate_record.update(break_tags.break_tags(
+                            day_candles, candidate.direction, getattr(candidate, "r1", 0), getattr(candidate, "s1", 0), getattr(candidate, "ltp", None),
+                            current_time.hour * 60 + current_time.minute))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: volume-burst ratio of the stock's 5-minute bars (see burst_tags.py)
                         import burst_tags
                         candidate_record.update(burst_tags.burst_tags(day_candles, candidate.direction))
