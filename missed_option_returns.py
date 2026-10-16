@@ -223,6 +223,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         gate_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # earlier-entry shadow: first flag vs real entry (research only)
+        import early_entry_review
+
+        early_entry_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
