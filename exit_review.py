@@ -26,7 +26,8 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parent
 FIRST_DAY = "2026-10-15"
 RULES = (("user_ladder", "Your ladder"), ("two_step", "Two-step (+5% stop -15%, +10% cost)"),("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
-         ("sstall10", "Stock stalled 10 min"), ("half10", "Half booked at +10%"))
+         ("sstall10", "Stock stalled 10 min"), ("half10", "Half booked at +10%"),
+         ("skorb", "Stock breaks opening range (exit only then)"), ("sksw", "Stock breaks 30-min swing (exit only then)"))
 MIN_TRADES_DAY = 3
 MIN_BUSY_DAYS = 4          # never call a rule "supported" on fewer busy days than this
 

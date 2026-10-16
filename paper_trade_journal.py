@@ -43,10 +43,11 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 # "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
 #   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
-SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_", "tr_", "smc_", "chop_", "cat_", "oc_", "bu_")      # copied from the candidate onto the trade record as they are
+SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_", "tr_", "smc_", "chop_", "cat_", "oc_", "bu_", "sk_")      # copied from the candidate onto the trade record as they are
 STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
                        "moverover": ("over", 0.5)}
-SECTOR_FADE_PCT = 0.4          # 'secfade' shadow: the sector index gave back this much from its best level since our entry ...
+STOCK_STRUCTURE_SHADOWS = {"skorb": "sk_orb_level", "sksw": "sk_sw_level"}      # stock trades beyond its opening-range / 30-min swing level (see stock_stops.py)
+SECTOR_FADE_PCT = 0.4         # 'secfade' shadow: the sector index gave back this much from its best level since our entry ...
 SECTOR_SHADOWS = ("secfade",)  # ... while the stock is below our entry price (see sector_tape.py)
 MOVER_OVER_ARM_PCT = 8.0       # option must have been up this much ...
 MOVER_OVER_BACK_PCT = 3.0      # ... and be back at/below this (about cost) ...
@@ -55,7 +56,7 @@ STOCK_BURST_ARM_PCT = 0.5
 # Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
 # instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
 VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step") + PEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
 
 
 def _first_lock_pct() -> float:
@@ -633,6 +634,8 @@ class PaperTradeJournal:
                 new_max = max(fav, prev_max)
                 if fav > prev_max or not trade.get("stock_fav_max_at"):
                     trade["stock_fav_max_at"] = when.isoformat()
+                if str(trade.get("status") or "").upper() == "OPEN":
+                    self._record_structure_shadows(trade, price, opt_now, when)
                 trade["stock_move_fav_pct"] = round(fav, 3)
                 trade["stock_move_fav_max_pct"] = round(new_max, 3)
                 self._record_confirm5(trade, fav, when)
@@ -669,6 +672,32 @@ class PaperTradeJournal:
             except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
                 continue
         return done
+
+    @staticmethod
+    def _record_structure_shadows(trade: dict[str, Any], price: float, opt_now: float, when: datetime) -> None:
+        """Shadow exits when the stock trades beyond its opening-range / 30-minute swing level against us on two readings in a row."""
+        try:
+            from stock_stops import breached
+        except Exception:                                   # noqa: BLE001 - optional module
+            return
+        for name, field in STOCK_STRUCTURE_SHADOWS.items():
+            if trade.get(f"shadow_{name}_exit_at"):
+                continue
+            try:
+                level = float(trade.get(field) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if level <= 0:
+                continue
+            key = f"shadow_{name}_breaches"
+            if breached(price, level, str(trade.get("option_type") or "")):
+                trade[key] = int(trade.get(key) or 0) + 1
+                if trade[key] >= 2:
+                    trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                    trade[f"shadow_{name}_exit_price"] = round(opt_now, 4)
+                    trade[f"shadow_{name}_floor"] = round(level, 4)
+            else:
+                trade[key] = 0
 
     WATCH_LEVELS = (10.0, 20.0)
 

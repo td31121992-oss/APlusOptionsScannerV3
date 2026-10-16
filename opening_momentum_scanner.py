@@ -957,6 +957,11 @@ class OpeningMomentumScanner:
                             candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: stock-structure stop levels for the skorb / sksw shadow exits (see stock_stops.py)
+                        import stock_stops
+                        candidate_record.update(stock_stops.entry_levels(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: volume-burst ratio of the stock's 5-minute bars (see burst_tags.py)
                         import burst_tags
                         candidate_record.update(burst_tags.burst_tags(day_candles, candidate.direction))

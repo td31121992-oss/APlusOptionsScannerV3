@@ -256,7 +256,8 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
         out += [f"| {k} | {n} | {w} | {v:+,} |" for k, n, w, v in summarize(data, key)]
     names = [n for n in _shadow_names()] + ["half10"]
     if any(f"d_{n}" in rows[0] for n in names):
-        labels = {"two_step": "Two-step: +5% stop -15%, +10% stop at cost, nothing else", "user_ladder": "YOUR ladder:+5% stop -15%, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60",
+        labels = {"skorb": "Stock-structure exit: stock trades beyond the opening-range level against us (2 readings)",
+                  "sksw": "Stock-structure exit: stock trades beyond its 30-minute swing level against us (2 readings)", "two_step":"Two-step: +5% stop -15%, +10% stop at cost, nothing else", "user_ladder": "YOUR ladder:+5% stop -15%, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60",
                   "sbg40": "Stock burst over: stock gave back 40% of its best move (after +0.5%)", "sbg60": "Stock burst over: stock gave back 60% of its best move (after +0.5%)",
                   "sstall10": "Stock burst over: no new best for 10 min (after +0.5%)",
                   "secfade": "Sector fade: sector index gave back 0.4% from its best since entry while the stock is below entry",
