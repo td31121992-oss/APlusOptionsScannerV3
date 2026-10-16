@@ -23,6 +23,13 @@ class GateTests(unittest.TestCase):
         self.assertEqual((t["gs_premium80"], t["gs_ce_early"], t["gs_chasing"], t["gs_est_trend"], t["gs_count"]), (True, True, False, True, 3))
         self.assertEqual(gsh.tags("BULLISH", "bad", None, None, None).get("gs_count"), 0)
 
+    def test_daily_weak_tag(self):
+        t = gsh.tags("BULLISH", 40, 11 * 60, 0.0, "HEALTHY_PULLBACK", 0.8)
+        self.assertEqual((t["gs_daily_signed"], t["gs_daily_weak"]), (0.8, False))
+        self.assertTrue(gsh.tags("BEARISH", 40, 11 * 60, 0.0, "HEALTHY_PULLBACK", 0.8)["gs_daily_weak"])        # daily up is against a put
+        self.assertFalse(gsh.tags("BEARISH", 40, 11 * 60, 0.0, "HEALTHY_PULLBACK", -0.7)["gs_daily_weak"])
+        self.assertNotIn("gs_daily_weak", gsh.tags("BULLISH", 40, 11 * 60, 0.0, "HEALTHY_PULLBACK"))             # no daily score recorded
+
     def test_evaluate_and_run(self):
         rows = []
         for i in range(40):

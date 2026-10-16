@@ -971,7 +971,7 @@ class OpeningMomentumScanner:
                         candidate_record.update(gate_shadow.tags(
                             candidate.direction, _gc.get("limit_price") or _gc.get("ask") or _gc.get("ltp"),
                             current_time.hour * 60 + current_time.minute, getattr(candidate, "recent_move_15m_percent", None),
-                            getattr(candidate, "setup_family", None)))
+                            getattr(candidate, "setup_family", None), candidate_record.get("tr_daily_score")))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
                     try:                      # shadow tag only: stock-structure stop levels for the skorb / sksw shadow exits (see stock_stops.py)
