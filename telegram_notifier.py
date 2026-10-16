@@ -46,6 +46,16 @@ class TelegramPaperTradeNotifier:
           "Keep an eye on it for a reversal; cut by hand from the dashboard (Manage) if it turns.",
           f"Trade ID: {t.get('paper_trade_id','-')}"])
         return self._send(f"{t.get('paper_trade_id')}|WATCH{int(level)}",text)
+    def notify_hold_check(self,t,mins,stock_since,now_price=None):
+        e=self._num(t.get('entry_price')); p=self._num(now_price) or self._num(t.get('last_option_price')); h=self._num(t.get('highest_option_price'))
+        now=((p/e-1)*100) if e>0 else 0.0; peak=((h/e-1)*100) if e>0 else 0.0
+        text="\n".join([f"⏳ APlus HOLD CHECK: {t.get('symbol','')} {t.get('option_type','')} - is more waiting worth it?","",
+          f"Peak {self._money(h)} ({peak:+.1f}%) was {int(mins)} min ago | now {self._money(p)} ({now:+.1f}%) | entry {self._money(e)}",
+          f"Stock since the option's peak: {stock_since:+.2f}% (against you)",
+          "In past trades only about a third made a new high once the stock was 0.3%+ against it; with the stock back at its level it was about three quarters.",
+          "A heads-up, not a signal: decide by hand (Manage on the dashboard) if you want out.",
+          f"Trade ID: {t.get('paper_trade_id','-')}"])
+        return self._send(f"{t.get('paper_trade_id')}|HOLD|{t.get('highest_option_price_at','')}",text)
 
     def _send(self,event,text):
         if event in self.sent: return False

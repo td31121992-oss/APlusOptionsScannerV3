@@ -636,6 +636,7 @@ class PaperTradeJournal:
                     trade["stock_fav_max_at"] = when.isoformat()
                 if str(trade.get("status") or "").upper() == "OPEN":
                     self._record_structure_shadows(trade, price, opt_now, when)
+                    self._hold_check_alert(trade, price, opt_now, when)
                 trade["stock_move_fav_pct"] = round(fav, 3)
                 trade["stock_move_fav_max_pct"] = round(new_max, 3)
                 self._record_confirm5(trade, fav, when)
@@ -698,6 +699,33 @@ class PaperTradeJournal:
                     trade[f"shadow_{name}_floor"] = round(level, 4)
             else:
                 trade[key] = 0
+
+    HOLD_CHECK_PEAK_PCT, HOLD_CHECK_MINUTES, HOLD_CHECK_STOCK_PCT = 15.0, 30.0, -0.5
+
+    def _hold_check_alert(self, trade: dict[str, Any], stock_price: float, opt_now: float, when: datetime) -> None:
+        """Telegram heads-up (once per option peak) when an option that peaked at +15% or more made that peak 30+ minutes ago, is below it, and the
+        stock has gone 0.5%+ against us since the peak. Past trades: about a third made a new high from there. Alert only - never touches the trade."""
+        try:
+            entry, high = self._number(trade.get("entry_price")), self._number(trade.get("highest_option_price"))
+            peak_at = str(trade.get("highest_option_price_at") or "")
+            s_hi = self._number(trade.get("stock_at_high"))
+            if entry <= 0 or high < entry * (1 + self.HOLD_CHECK_PEAK_PCT / 100) or not peak_at or s_hi <= 0 or stock_price <= 0 or opt_now >= high:
+                return
+            if trade.get("stock_at_high_for") != peak_at or trade.get("hold_check_for") == peak_at:
+                return
+            mins = (when - datetime.fromisoformat(peak_at)).total_seconds() / 60.0
+            put = str(trade.get("option_type") or "").upper().startswith("P")
+            stock_since = (-1 if put else 1) * (stock_price / s_hi - 1) * 100
+            if mins < self.HOLD_CHECK_MINUTES or stock_since > self.HOLD_CHECK_STOCK_PCT:
+                return
+            trade["hold_check_for"] = peak_at
+            trade["hold_check_at"] = when.isoformat()
+            trade["hold_check_stock_since_pct"] = round(stock_since, 2)
+            notify = getattr(self.notifier, "notify_hold_check", None)
+            if notify:
+                notify(trade, mins, stock_since, opt_now)
+        except Exception:                                  # noqa: BLE001 - an alert must never break the journal
+            pass
 
     WATCH_LEVELS = (10.0, 20.0)
 
