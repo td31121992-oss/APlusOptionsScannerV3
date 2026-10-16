@@ -377,6 +377,7 @@ class SafetyGateEngine:
         result.checks.append(
             self._mwpl_check(normalized_symbol, current.date())
         )
+        result.checks.append(self._option_price_check(option_contract))
 
         portfolio_check, portfolio_metrics = self._portfolio_check(
             option_contract=option_contract,
@@ -431,6 +432,24 @@ class SafetyGateEngine:
         else:
             result.decision = "PASS"
         return result
+
+    @staticmethod
+    def _option_price_check(option_contract: Any) -> GateCheck:
+        """Block an entry whose option price is at or above APLUS_BLOCK_OPTION_PRICE (0 or unset = off). 16 Oct 2026: 80, from the loss pattern in the
+        trade history (see gate_shadow.py / the premium-cap report)."""
+        try:
+            cap = float(os.getenv("APLUS_BLOCK_OPTION_PRICE", "0") or 0.0)
+        except ValueError:
+            cap = 0.0
+        if cap <= 0:
+            return GateCheck("OPTION_PRICE_CAP", GateStatus.PASS, "Option price cap is off")
+        price = (_number(_value(option_contract, "limit_price"))
+                 or _number(_value(option_contract, "ask"))
+                 or _number(_value(option_contract, "ltp")))
+        if price >= cap:
+            return GateCheck("OPTION_PRICE_CAP", GateStatus.BLOCK,
+                             f"Option price {price:.2f} is at or above the {cap:g} cap", {"price": price, "cap": cap})
+        return GateCheck("OPTION_PRICE_CAP", GateStatus.PASS, f"Option price {price:.2f} is below the {cap:g} cap", {"price": price, "cap": cap})
 
     def _expiry_check(
         self,
