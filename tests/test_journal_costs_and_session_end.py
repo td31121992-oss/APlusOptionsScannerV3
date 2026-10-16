@@ -279,18 +279,84 @@ class StopShadowTests(unittest.TestCase):
 
 
 class CarryoverTests(unittest.TestCase):
-    def test_open_trade_is_closed_not_dropped_when_date_changes(self) -> None:
+    def _history(self, tmp: str) -> list[dict]:
+        path = Path(tmp, "reports", "paper_trade_history.json")
+        return json.loads(path.read_text(encoding="utf-8"))["paper_trades"]
+
+    def test_fresh_session_end_mark_closes_trade_on_rollover(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            journal = _journal(tmp, "2026-10-06", [_open_trade(last_option_price=8.0)])
+            journal = _journal(tmp, "2026-10-06", [_open_trade(
+                last_option_price=8.0, last_successful_mark_at="2026-10-06T15:29:20+05:30",
+                mark_status="VALID")])
             journal._ensure_date(date(2026, 10, 7))
-            self.assertEqual(journal.trades, [])           # new day starts clean
-            history = json.loads(Path(tmp, "reports", "paper_trade_history.json").read_text(encoding="utf-8"))
-            rows = history["paper_trades"]
+            self.assertEqual(journal.trades, [])
+            rows = self._history(tmp)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "CLOSED")
-            self.assertEqual(rows[0]["exit_reason"], "PRIOR_SESSION_UNRESOLVED")
-            self.assertEqual(rows[0]["exit_price"], 8.0)   # last known price, nothing invented
+            self.assertEqual(rows[0]["exit_reason"], "PRIOR_SESSION_LAST_MARK")
+            self.assertEqual(rows[0]["exit_price"], 8.0)
             self.assertLess(rows[0]["net_pnl"], 0)
+
+    def test_stale_mark_remains_open_and_is_persisted_as_unresolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-06", [_open_trade(
+                last_option_price=8.0, last_successful_mark_at="2026-10-06T14:00:00+05:30",
+                mark_status="VALID")])
+            journal._ensure_date(date(2026, 10, 7))
+            self.assertEqual(journal.trades, [])
+            rows = self._history(tmp)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "OPEN")
+            self.assertEqual(rows[0]["position_lifecycle_status"], "CLOSE_PENDING_NO_VALID_EXIT_MARK")
+            self.assertEqual(rows[0]["pnl_data_status"], "INCOMPLETE_OPEN_POSITION_MARKS")
+            self.assertNotIn("exit_price", rows[0])
+            self.assertNotIn("net_pnl", rows[0])
+
+    def test_missing_mark_never_falls_back_to_entry_price(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-06", [_open_trade(
+                last_option_price=0.0, last_successful_mark_at="", entry_price=10.0)])
+            journal._ensure_date(date(2026, 10, 7))
+            row = self._history(tmp)[0]
+            self.assertEqual(row["status"], "OPEN")
+            self.assertEqual(row["entry_price"], 10.0)
+            self.assertNotIn("exit_price", row)
+            self.assertNotIn("exit_time", row)
+
+    def test_repeated_history_sync_is_idempotent_by_trade_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = _journal(tmp, "2026-10-06", [_open_trade(
+                last_option_price=8.0, last_successful_mark_at="2026-10-06T14:00:00+05:30")])
+            journal._ensure_date(date(2026, 10, 7))
+            from paper_trade_history_store import sync_history
+            sync_history(Path(tmp, "reports"), journal.trades)
+            sync_history(Path(tmp, "reports"), self._history(tmp))
+            self.assertEqual(len(self._history(tmp)), 1)
+
+    def test_dashboard_keeps_history_fields_and_does_not_reopen_closed_trade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reports = Path(tmp)
+            history = {"paper_trades": [{
+                "paper_trade_id": "PT-TEST-1", "entry_time": "2026-10-06T10:00:00+05:30",
+                "symbol": "TEST", "status": "CLOSED", "entry_price": 10.0, "exit_price": 8.0,
+                "net_pnl": -200.0, "exit_reason": "OPTION_STOP_LOSS", "position_lifecycle_status": "CLOSED",
+            }]}
+            latest = {"paper_trades": [{
+                "paper_trade_id": "PT-TEST-1", "entry_time": "2026-10-06T10:00:00+05:30",
+                "symbol": "TEST", "status": "OPEN", "entry_price": 10.0, "last_option_price": 8.5,
+            }]}
+            (reports / "paper_trade_history.json").write_text(json.dumps(history), encoding="utf-8")
+            (reports / "paper_trades_latest.json").write_text(json.dumps(latest), encoding="utf-8")
+            import paper_trade_history_dashboard as dashboard
+            from unittest.mock import patch
+            with patch.object(dashboard, "REPORTS", reports):
+                rows = dashboard.all_trades()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["status"], "CLOSED")
+                self.assertEqual(rows[0]["exit_reason"], "OPTION_STOP_LOSS")
+                self.assertEqual(rows[0]["net_pnl"], -200.0)
+                payload = dashboard.history_payload("2026-10-06")
+                self.assertEqual(payload["net_pnl"], -200.0)
 
 
 if __name__ == "__main__":
