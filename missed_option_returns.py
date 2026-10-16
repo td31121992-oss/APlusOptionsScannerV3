@@ -211,6 +211,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         big_movers_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # early-mover shadow list (research only)
+        import early_movers
+
+        early_movers.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
