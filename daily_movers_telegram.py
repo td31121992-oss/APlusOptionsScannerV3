@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import date, datetime, time as clock
 from pathlib import Path
 from typing import Any
@@ -88,7 +89,11 @@ def fetch_option_rows(day: str, stock_pct_override: dict[str, float] | None = No
     def quote(segment: str, ids: list[int]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         for i in range(0, len(ids), 900):
-            r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=headers, timeout=30, json={segment: ids[i:i + 900]})
+            for attempt in range(5):
+                r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=headers, timeout=30, json={segment: ids[i:i + 900]})
+                if r.status_code != 429:
+                    break
+                time.sleep(3 * (attempt + 1))
             if r.status_code == 200:
                 out.update((r.json().get("data") or {}).get(segment) or {})
         return out
@@ -148,7 +153,7 @@ def format_option_section(calls: list[dict], puts: list[dict]) -> list[str]:
 
 
 def format_message(day: date, gainers: list[dict], losers: list[dict], total: int, calls: list[dict] | None = None,
-                   puts: list[dict] | None = None) -> str:
+                   puts: list[dict] | None = None, extra: list[str] | None = None) -> str:
     def line(i: int, x: dict) -> str:
         return f"{i}. {x['symbol']}  ₹{x['ltp']:,.2f}  ({x['pct']:+.2f}%)"
 
@@ -159,6 +164,8 @@ def format_message(day: date, gainers: list[dict], losers: list[dict], total: in
     out += [line(i, x) for i, x in enumerate(losers, 1)] or ["(none)"]
     if calls is not None or puts is not None:
         out += format_option_section(calls or [], puts or [])
+    if extra:
+        out += list(extra)
     out += ["", f"{total} F&O stocks, change vs previous close", "", TAGLINE]
     return "\n".join(out)
 
@@ -328,8 +335,12 @@ def fetch_rows(day: str) -> list[dict[str, Any]]:
     by_id = {v: k for k, v in universe.items()}
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
     token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
-    resp = requests.post("https://api.dhan.co/v2/marketfeed/quote", timeout=25, json={"NSE_EQ": list(universe.values())},
-                         headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
+    for attempt in range(5):                                # 429 = rate limit (the evening jobs all start near 15:40): wait and try again
+        resp = requests.post("https://api.dhan.co/v2/marketfeed/quote", timeout=25, json={"NSE_EQ": list(universe.values())},
+                             headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
+        if resp.status_code != 429:
+            break
+        time.sleep(3 * (attempt + 1))
     if resp.status_code != 200:
         raise RuntimeError(f"quote HTTP {resp.status_code}")
     data = (resp.json().get("data") or {}).get("NSE_EQ") or {}
@@ -380,7 +391,7 @@ def main() -> int:
     if args.card:
         print(render_card(report_day, gainers, losers, Path(args.card)))
         return 0
-    message = format_message(report_day, gainers, losers, len(rows), calls, puts)
+    premium_lines: list[str] = []
     try:                                                   # premium tracker line + the day's history file: an extra, never blocks the message
         import premium_tracker
 
@@ -388,9 +399,10 @@ def main() -> int:
         prows = premium_tracker.compute(pday, ROOT)
         if not args.dry_run:
             premium_tracker.record(pday, prows, ROOT)
-        message += "\n".join(premium_tracker.telegram_lines(premium_tracker.enrich(prows, ROOT, pday)))
+        premium_lines = premium_tracker.telegram_lines(premium_tracker.enrich(prows, ROOT, pday))
     except Exception as exc:  # noqa: BLE001
         print(f"premium tracker skipped: {type(exc).__name__}: {exc}")
+    message = format_message(report_day, gainers, losers, len(rows), calls, puts, premium_lines)
     if args.dry_run:
         print(message)
         return 0
