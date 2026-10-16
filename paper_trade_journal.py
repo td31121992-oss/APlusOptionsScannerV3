@@ -129,6 +129,8 @@ class PaperTradeJournal:
         "unrealized_pnl", "realized_pnl", "total_pnl", "pnl_data_status",
         "target1_hit_at", "target2_hit_at", "target3_hit_at",
         "runner_mode", "runner_activated_at", "runner_stop",
+        "stop_trigger_at", "stop_trigger_reason", "stop_trigger_level",
+        "stop_trigger_price", "stop_trigger_gap_percent",
         "exit_time", "exit_price", "exit_reason", "holding_seconds",
         "gross_pnl", "estimated_costs", "net_pnl", "return_percent", "result",
     )
@@ -357,6 +359,9 @@ class PaperTradeJournal:
             "mae_amount": 0.0,
             "target1_hit_at": "", "target2_hit_at": "", "target3_hit_at": "",
             "runner_mode": False, "runner_activated_at": "", "runner_stop": 0.0,
+            "stop_trigger_at": "", "stop_trigger_reason": "",
+            "stop_trigger_level": 0.0, "stop_trigger_price": 0.0,
+            "stop_trigger_gap_percent": 0.0,
             "exit_time": "", "exit_price": 0.0, "exit_reason": "",
             "holding_seconds": 0, "gross_pnl": 0.0, "estimated_costs": 0.0,
             "net_pnl": 0.0, "return_percent": 0.0, "result": "OPEN",
@@ -589,9 +594,44 @@ class PaperTradeJournal:
                 # reached with a valid positive price), never leave it open.
                 reason = force_close_reason
             if reason:
+                if reason in {
+                    "MANUAL_STOP_LOSS", "OPTION_STOP_LOSS",
+                    "RUNNER_TRAIL_EXIT", "PROFIT_PROTECTION_EXIT",
+                    "PROFIT_LOCK_EXIT",
+                }:
+                    trigger_level = (
+                        self._profit_lock_floor(entry, high)
+                        if reason == "PROFIT_LOCK_EXIT" else protected_stop
+                    )
+                    self._record_stop_trigger(
+                        trade, when=when, observed_price=price,
+                        stop_level=trigger_level, reason=reason,
+                    )
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    @staticmethod
+    def _record_stop_trigger(
+        trade: dict[str, Any], *, when: datetime, observed_price: float,
+        stop_level: float, reason: str,
+    ) -> None:
+        """Capture the stop level and first observed quote at exit for forensic review.
+
+        This is additive telemetry only: it does not change the trigger, exit price,
+        stop policy, or paper-trade P&L calculation.
+        """
+        if stop_level <= 0 or observed_price <= 0:
+            return
+        trade.update({
+            "stop_trigger_at": when.isoformat(),
+            "stop_trigger_reason": str(reason),
+            "stop_trigger_level": round(stop_level, 4),
+            "stop_trigger_price": round(observed_price, 4),
+            "stop_trigger_gap_percent": round(
+                max(0.0, (stop_level - observed_price) / stop_level * 100.0), 4
+            ),
+        })
 
     RESPONSE_MILESTONES = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0)
 
