@@ -957,6 +957,15 @@ class OpeningMomentumScanner:
                             candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: which candidate entry gates would have blocked this trade (see gate_shadow.py)
+                        import gate_shadow
+                        _gc = plan.get("option_contract") or {}
+                        candidate_record.update(gate_shadow.tags(
+                            candidate.direction, _gc.get("limit_price") or _gc.get("ask") or _gc.get("ltp"),
+                            current_time.hour * 60 + current_time.minute, getattr(candidate, "recent_move_15m_percent", None),
+                            getattr(candidate, "setup_family", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: stock-structure stop levels for the skorb / sksw shadow exits (see stock_stops.py)
                         import stock_stops
                         candidate_record.update(stock_stops.entry_levels(day_candles, candidate.direction))

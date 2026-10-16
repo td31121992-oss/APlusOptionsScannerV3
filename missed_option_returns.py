@@ -217,6 +217,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         early_movers.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # candidate entry-gate review on every signal (research only)
+        import gate_review
+
+        gate_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
