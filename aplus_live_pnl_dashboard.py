@@ -181,7 +181,7 @@ def _stop_fields(t):
     """start / current stop-loss and why it moved (see stop_view.py); empty when the trade lacks the fields."""
     try:
         import stop_view
-        return stop_view.stop_state(t)
+        return {**stop_view.stop_state(t), **stop_view.stock_needs(t)}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -586,12 +586,14 @@ function vpct(v,e){v=Number(v);e=Number(e);if(!(v>0)||!(e>0))return "";var p=(v/
 function fmtAge(m){m=Number(m);return m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m"}
 function highAge(x){if(x.high_age_min==null||!x.high)return "";var m=Number(x.high_age_min),c=x.status!=="OPEN"?"#8ea0bd":(m>=30?"#f31260":m>=15?"#ffb454":"#8ea0bd");
  return '<br><small style="color:'+c+'" title="Time since the option made its high">'+fmtAge(m)+' since high</small>'}
+function needLine(x){if(!x||x.status!=="OPEN"||x.need10==null)return "";
+ return '<br><small style="color:#8ea0bd" title="How far the stock must move in our favour for the option to gain 10 / 20 / 30% (time decay ignored)">stock needs +'+x.need10+'% / +'+x.need20+'% / +'+x.need30+'% for option +10 / 20 / 30%</small>'}
 function slCell(x){if(!x||!x.cur_sl)return "-";var moved=Number(x.cur_sl)>Number(x.start_sl)+0.004;
  var col=Number(x.sl_vs_entry_pct)>=0?"#17c964":(moved?"#ffb454":"#8ea0bd");
  var gap=(x.status==="OPEN"&&Number(x.last)>0)?" &middot; "+(((Number(x.last)-Number(x.cur_sl))/Number(x.last))*100).toFixed(1)+"% below":"";
  return '<span style="color:#8ea0bd">'+fmt(x.start_sl)+'</span> &rarr; <b style="color:'+col+'">'+fmt(x.cur_sl)+'</b><br><small style="color:'+col+'">'+(x.sl_label||"")
   +(Number(x.sl_vs_entry_pct)!==0?" ("+(x.sl_vs_entry_pct>0?"+":"")+x.sl_vs_entry_pct+"%)":"")+gap+'</small>'
-  +((x.status==="OPEN"&&x.sl_next)?'<br><small style="color:#8ea0bd">next: '+x.sl_next+'</small>':"")}
+  +((x.status==="OPEN"&&x.sl_next)?'<br><small style="color:#8ea0bd">next: '+x.sl_next+'</small>':"")+needLine(x)}
 function watchPeak(x){if(!x||x.status!=="OPEN"||!(Number(x.entry)>0)||!(Number(x.high)>0))return 0;var p=(Number(x.high)/Number(x.entry)-1)*100;return p>=10?p:0}
 function watchRow(x){return watchPeak(x)?' style="background:#33290a;box-shadow:inset 3px 0 0 #ffb454"':""}
 function watchBadge(x){var p=watchPeak(x);if(!p)return "";var now=(Number(x.last)/Number(x.entry)-1)*100;return ' <span style="background:#ffb454;color:#1a1200;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:800" title="Option reached +'+p.toFixed(0)+'% - watch for reversal">WATCH +'+p.toFixed(0)+'% \u2192 now '+(now>=0?"+":"")+now.toFixed(0)+'%</span>'}

@@ -69,10 +69,12 @@ function holdHint(x){
 function gapLine(x){var h=Number(x.high),l=Number(x.last),e=Number(x.entry),q=Number(x.qty)||0;
  if(x.status!=="OPEN"||!(h>0)||!(l>0)||!(e>0)||l>=h)return "";
  var g=h-l;return 'Gap to high <b style="color:var(--text)">&#8377;'+g.toFixed(2)+'</b> ('+(g/h*100).toFixed(1)+'% of high) &middot; <b style="color:var(--text)">&#8377;'+Math.round(g*q).toLocaleString("en-IN")+'</b> given back &middot; '+(g/e*100).toFixed(1)+' pts'}
+function needText(x){if(!x||x.status!=="OPEN"||x.need10==null)return "";
+ return '<br><span style="color:var(--muted)" title="How far the stock must move in our favour for the option to gain 10 / 20 / 30% (time decay ignored)">Stock needs +'+x.need10+'% / +'+x.need20+'% / +'+x.need30+'% for option +10 / 20 / 30%</span>'}
 function slText(x){if(!x||!x.cur_sl)return x&&x.sl?'SL '+Number(x.sl).toFixed(2):'';
  var s=Number(x.start_sl),c=Number(x.cur_sl),p=Number(x.sl_vs_entry_pct),col=p>=0?"#17c964":(c>s+0.004?"#ffb454":"var(--muted)");
  return 'Stop <span style="color:var(--muted)">'+s.toFixed(2)+'</span> &rarr; <b style="color:'+col+'">'+c.toFixed(2)+'</b> <span style="color:'+col+'">'+(x.sl_label||"")
-  +(p!==0?" ("+(p>0?"+":"")+p+"%)":"")+'</span>'+(x.status==="OPEN"&&x.sl_next?'<br><span style="color:var(--muted)">next: '+x.sl_next+'</span>':"")}
+  +(p!==0?" ("+(p>0?"+":"")+p+"%)":"")+'</span>'+(x.status==="OPEN"&&x.sl_next?'<br><span style="color:var(--muted)">next: '+x.sl_next+'</span>':"")+needText(x)}
 function holdColor(x){return x&&x.high_state==="STOCK_REVERSING"?"#ff6363":(x&&x.high_state==="MELTING"?"#ffb454":"#8ea0bd")}
 function ctl(x){
  var cur=Number(x.cur_sl)||Math.max(Number(x.sl)||0,Number(x.ladder_stop)||0),entry=Number(x.entry)||0,last=Number(x.last)||0;

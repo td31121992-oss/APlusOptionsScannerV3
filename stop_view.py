@@ -79,3 +79,27 @@ def stop_state(t: Mapping[str, Any], ladder_mode: str | None = None, profit_lock
         cur, label = manual, "Manual"
     return {"start_sl": round(start, 2), "cur_sl": round(cur, 2), "sl_label": label, "sl_next": nxt,
             "sl_vs_entry_pct": round((cur / entry - 1.0) * 100.0, 1)}
+
+
+TYPICAL_ELASTICITY = 24.0          # option % per 1% stock move: median of the journal's response data (22-28) when the contract's own delta is unknown
+
+
+def stock_needs(t: Mapping[str, Any]) -> dict[str, Any]:
+    """How far the STOCK has to move in our favour for the option to gain 10 / 20 / 30% (display only).
+    Uses the contract's own elasticity (|delta| x stock price / option price) when the trade has its Greeks, else the typical 24. Time decay is ignored, so
+    the real need is a little higher. need10/20/30 are percent moves from the stock's entry price, need10_px/20_px/30_px the matching stock levels."""
+    entry, ue = _f(t.get("entry_price")), _f(t.get("underlying_entry"))
+    if entry <= 0 or ue <= 0:
+        return {}
+    delta = _f(t.get("gk_delta"))
+    el, src = (abs(delta) * ue / entry if delta else 0.0), "delta"
+    if not 5.0 <= el <= 80.0:
+        el, src = TYPICAL_ELASTICITY, "typical"
+    put = str(t.get("option_type") or "").upper().startswith("P")
+    out: dict[str, Any] = {"needs_el": round(el, 1), "needs_src": src}
+    for x in (10, 20, 30):
+        pct = x / el
+        out[f"need{x}"] = round(pct, 2)
+        out[f"need{x}_px"] = round(ue * (1.0 - pct / 100.0) if put else ue * (1.0 + pct / 100.0), 2)
+    return out
+
