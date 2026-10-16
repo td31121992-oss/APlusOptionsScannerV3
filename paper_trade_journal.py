@@ -599,9 +599,13 @@ class PaperTradeJournal:
                     "RUNNER_TRAIL_EXIT", "PROFIT_PROTECTION_EXIT",
                     "PROFIT_LOCK_EXIT",
                 }:
+                    trigger_level = (
+                        self._profit_lock_floor(entry, high)
+                        if reason == "PROFIT_LOCK_EXIT" else protected_stop
+                    )
                     self._record_stop_trigger(
                         trade, when=when, observed_price=price,
-                        stop_level=protected_stop, reason=reason,
+                        stop_level=trigger_level, reason=reason,
                     )
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
