@@ -745,6 +745,18 @@ class Handler(BaseHTTPRequestHandler):
                 _mx = {"ok": False, "error": type(exc).__name__}
             body = json.dumps(_mx, ensure_ascii=False).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/focus":
+            import premarket_focus
+            body = premarket_focus.FOCUS_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/premarket-focus":
+            try:
+                import premarket_focus
+                _pf = premarket_focus.payload(ROOT)
+            except Exception as exc:
+                _pf = {"ok": False, "error": type(exc).__name__, "focus": []}
+            body = json.dumps(_pf, ensure_ascii=False).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/premium":
             import premium_tracker
             body = premium_tracker.PREMIUM_HTML.encode("utf-8")

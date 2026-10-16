@@ -863,6 +863,12 @@ class OpeningMomentumScanner:
                         candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: was the stock on this morning's pre-market focus list (see premarket_focus.py)
+                        import premarket_focus
+                        candidate_record.update(premarket_focus.entry_tags(str(candidate.symbol), candidate.direction,
+                                                                           Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: news catalyst for this stock (see catalyst.py)
                         import catalyst
                         candidate_record.update(catalyst.entry_tags(str(candidate.symbol), candidate.direction,
