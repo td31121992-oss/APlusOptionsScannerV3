@@ -54,7 +54,18 @@ def sync_history(report_dir:Path,trades:Iterable[Mapping[str,Any]]):
             if not isinstance(raw,Mapping):continue
             row=dict(raw);k=_key(row)
             if not k:continue
-            if k in merged:merged[k].update(row);updated+=1
+            if k in merged:
+                existing=merged[k]
+                # A stale latest snapshot must not reopen a trade already closed in history.
+                if str(existing.get("status") or "").upper()=="CLOSED" and str(row.get("status") or "").upper()=="OPEN":
+                    for field,value in row.items():
+                        if field not in existing or existing.get(field) in ("",None):
+                            existing[field]=value
+                else:
+                    for field,value in row.items():
+                        if value not in ("",None):
+                            existing[field]=value
+                updated+=1
             else:merged[k]=row;added+=1
         rows=sorted(merged.values(),key=lambda x:str(x.get("entry_time") or x.get("generated_at") or ""))
         _atomic_text(report_dir/HISTORY_JSON,json.dumps({"paper_trades":rows,"trade_count":len(rows)},ensure_ascii=False,indent=2,default=str))
