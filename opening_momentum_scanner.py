@@ -1003,6 +1003,14 @@ class OpeningMomentumScanner:
                                 continue
                     except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
                         pass
+                    try:                      # experimental quality gate: diagnostics only, never enforces
+                        import entry_quality_gate
+                        candidate_record.update(entry_quality_gate.evaluate(
+                            candidate_record, getattr(self, "_market_context", None)))
+                    except Exception as _quality_exc:  # noqa: BLE001 - shadow diagnostics must never stop the scanner
+                        candidate_record["quality_gate_mode"] = "SHADOW_ONLY"
+                        candidate_record["quality_gate_verdict"] = "ERROR"
+                        candidate_record["quality_gate_reasons"] = type(_quality_exc).__name__
                     try:                      # shadow tag only: no-trade-day verdict (see no_trade_day.py)
                         import entry_pause as _epn
                         import no_trade_day
