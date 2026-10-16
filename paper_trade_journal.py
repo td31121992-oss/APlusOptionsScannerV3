@@ -1100,11 +1100,12 @@ class PaperTradeJournal:
             self.lanes = {}
 
     def _close_unresolved_prior_trades(self) -> None:
-        """Never silently drop OPEN trades when the trading date changes.
+        """Reconcile OPEN trades at the prior session boundary without inventing an exit.
 
-        Each is closed at its last recorded option price (no new price is
-        invented) with reason PRIOR_SESSION_UNRESOLVED at 15:30 of its session,
-        then persisted to the history so the P&L is not lost.
+        A prior-session trade is closed only when its last option mark was fresh
+        at the session close. Missing/stale marks remain OPEN and are explicitly
+        flagged as unresolved in permanent history; entry price is never used as
+        a synthetic exit price.
         """
         if not self.trading_date or not self.trades:
             return
@@ -1113,22 +1114,36 @@ class PaperTradeJournal:
         except ValueError:
             return
         from zoneinfo import ZoneInfo
-        when = datetime(session_day.year, session_day.month, session_day.day, 15, 30,
-                        tzinfo=ZoneInfo("Asia/Kolkata"))
+        when = datetime(
+            session_day.year, session_day.month, session_day.day, 15, 30,
+            tzinfo=ZoneInfo("Asia/Kolkata"),
+        )
         changed = False
         for trade in self.trades:
             if str(trade.get("status") or "").upper() != "OPEN":
                 continue
-            last = self._number(trade.get("last_option_price")) or self._number(trade.get("entry_price"))
-            if last <= 0:
-                continue
-            self._close_trade(trade, when, last, "PRIOR_SESSION_UNRESOLVED")
+            last = self._number(trade.get("last_option_price"))
+            fresh, _age = self._current_mark(trade, when)
+            if fresh and last > 0:
+                self._close_trade(trade, when, last, "PRIOR_SESSION_LAST_MARK")
+            else:
+                trade["position_lifecycle_status"] = "CLOSE_PENDING_NO_VALID_EXIT_MARK"
+                trade["position_status_reason"] = (
+                    "Prior session ended without a fresh valid exit mark; "
+                    "trade remains unresolved and no exit price/P&L was inferred."
+                )
+                trade["pnl_data_status"] = "INCOMPLETE_OPEN_POSITION_MARKS"
+                trade["unrealized_pnl"] = None
+                trade["total_pnl"] = None
+                trade["last_mark_evaluated_at"] = when.isoformat()
             changed = True
         if changed:
-            try:
-                sync_history(self.report_dir, self.trades)
-            except Exception as exc:  # never block the scanner on persistence
-                logger.warning("History sync after prior-session close failed: %s: %s", type(exc).__name__, exc)
+            result = sync_history(self.report_dir, self.trades)
+            if not result.get("ok"):
+                logger.warning(
+                    "History sync after prior-session reconciliation failed: %s",
+                    result.get("error", "unknown error"),
+                )
 
     def _load(self) -> None:
         if not self.state_path.exists():
