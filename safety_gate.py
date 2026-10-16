@@ -527,6 +527,10 @@ class SafetyGateEngine:
         symbol: str,
         today: date,
     ) -> GateCheck:
+        if str(os.getenv("APLUS_CORPORATE_EVENT_BLOCK", "1")).strip().lower() in {"0", "false", "no", "off"}:
+            # 17 Oct 2026 (user decision): results / event stocks are the ones that move most, so an event no longer blocks an entry. The event data is still
+            # recorded on the trade (event_tags) and measured nightly (event_reaction_review). The exchange MWPL ban check below is unaffected.
+            return GateCheck("CORPORATE_EVENT", GateStatus.PASS, "Corporate-event block is switched off (APLUS_CORPORATE_EVENT_BLOCK=0)")
         path = self.safety_dir / "corporate_events.csv"
         # Live NSE announcements (written by announcement_feed.py) are merged with the calendar.
         rows = _read_csv(path) + _read_csv(self.safety_dir / "announcement_events.csv")
