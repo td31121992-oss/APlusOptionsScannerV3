@@ -235,6 +235,13 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         wait_cost_review.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # keep tomorrow's event calendar and measure today's event reactions (research only)
+        import event_reaction_review
+
+        event_reaction_review.archive(root)
+        event_reaction_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
