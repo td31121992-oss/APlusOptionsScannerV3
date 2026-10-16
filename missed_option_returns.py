@@ -248,6 +248,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         premarket_focus.review(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # how other tools' picks did, next to ours (research only)
+        import external_picks
+
+        external_picks.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
