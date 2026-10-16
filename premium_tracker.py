@@ -204,14 +204,14 @@ def payload(root: Path = ROOT) -> dict[str, Any]:
     if stale and not _STATE["loading"]:
         _STATE["loading"] = True
         threading.Thread(target=_refresh, args=(root,), daemon=True).start()
-        if _STATE["data"] is None:                         # first request: the previous day's file is shown while the live numbers load
-            files = sorted(glob.glob(str(root / "data" / "premium_tracker" / "20*.csv")))
-            if files:
-                with open(files[-1], encoding="utf-8", newline="") as h:
-                    rows = [{**r, "ce_cr": _f(r["ce_cr"]), "pe_cr": _f(r["pe_cr"]), "total_cr": _f(r["total_cr"]), "ce_share": _f(r["ce_share"]),
-                             "stock_pct": _f(r.get("stock_pct"))} for r in csv.DictReader(h)]
-                return {"ok": True, "rows": enrich(rows, root, Path(files[-1]).stem), "overall": overall(rows), "loading": True,
-                        "as_of": Path(files[-1]).stem, "stale": True}
+    if _STATE["data"] is None:                             # until the live numbers are ready, show the last saved day
+        files = sorted(glob.glob(str(root / "data" / "premium_tracker" / "20*.csv")))
+        if files:
+            with open(files[-1], encoding="utf-8", newline="") as h:
+                rows = [{**r, "ce_cr": _f(r["ce_cr"]), "pe_cr": _f(r["pe_cr"]), "total_cr": _f(r["total_cr"]), "ce_share": _f(r["ce_share"]),
+                         "stock_pct": _f(r.get("stock_pct"))} for r in csv.DictReader(h)]
+            return {"ok": True, "rows": enrich(rows, root, Path(files[-1]).stem), "overall": overall(rows), "loading": True,
+                    "as_of": Path(files[-1]).stem, "stale": True}
     rows = _STATE.get("data")
     if rows is None:
         return {"ok": True, "rows": [], "overall": overall([]), "loading": True, "as_of": "", "error": _STATE.get("error", "")}
