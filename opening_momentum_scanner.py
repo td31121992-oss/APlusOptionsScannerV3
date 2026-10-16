@@ -725,6 +725,14 @@ class OpeningMomentumScanner:
                     + "; ".join(blocked.get("reasons", []) or [])
                 )
 
+        try:      # data only: every entry-ready candidate with the features it was judged on (see signal_snapshots.py)
+            import signal_snapshots
+            if getattr(self, "_snap_writer", None) is None:
+                self._snap_writer = signal_snapshots.SnapshotWriter(Path(self.config.paths.data_dir))
+            self._snap_writer.signals(current_time, entry_ready, {(x.symbol, x.direction) for x in actionable})
+        except Exception:      # noqa: BLE001 - a recorder must never affect trading
+            pass
+
         movement_leaders = sorted(
             candidates,
             key=lambda item: (
@@ -2901,6 +2909,15 @@ class OpeningMomentumScanner:
                         else self.option_chain.fetch(underlying)
                     )
                     self._oc_last = {**getattr(self, "_oc_last", {}), str(candidate.symbol): snapshot}      # for the oc_ shadow tags at entry
+                    try:                  # data only: save the chain summary for every candidate a chain was fetched for, not just trades
+                        import options_tags
+                        import signal_snapshots
+                        if getattr(self, "_snap_writer", None) is None:
+                            self._snap_writer = signal_snapshots.SnapshotWriter(Path(self.config.paths.data_dir))
+                        self._snap_writer.chain(datetime.now(), str(candidate.symbol), str(candidate.direction),
+                                                options_tags.chain_tags(snapshot, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:     # noqa: BLE001 - never affects trading
+                        pass
                     selected = self.option_selector.select(
                         snapshot=snapshot,
                         underlying=underlying,
