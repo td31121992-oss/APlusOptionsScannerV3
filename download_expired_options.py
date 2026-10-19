@@ -216,12 +216,18 @@ def run(args, session=None, headers_factory=None, now_fn=lambda: datetime.now(IS
         if stats["calls"] % 500 == 0 and disk_free_gb(out) < args.min_free_gb:
             print(f"low disk (<{args.min_free_gb} GB free) - stopping"); break
         if headers is None or time.time() - token_at > 1200:
-            headers, token_at = headers_factory(), time.time()
+            try:
+                headers, token_at = headers_factory(), time.time()
+            except Exception as exc:                   # noqa: BLE001 - the shared Dhan token expired / could not be checked (weekend, overnight run)
+                print(f"{now_fn():%H:%M:%S} token not usable ({exc}) - stopping; the next scheduled run resumes where this left off"); break
         limiter.wait()
         try:
             res = fetch(session, headers, build_body(t, args.interval), sleep=sleep)
         except AuthError as exc:
-            headers = headers_factory()                # one refresh attempt
+            try:
+                headers = headers_factory()            # one refresh attempt
+            except Exception as exc2:                  # noqa: BLE001
+                print(f"auth failure and token refresh failed ({exc2}) - stopping"); break
             token_at = time.time()
             try:
                 res = fetch(session, headers, build_body(t, args.interval), sleep=sleep)
