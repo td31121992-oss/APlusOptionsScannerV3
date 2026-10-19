@@ -67,6 +67,16 @@ class WriterAndFootprintTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertIsNone(fl.run("2026-10-20", root))
 
+    def test_truncated_gzip_still_gives_the_rows_before_the_cut(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "data" / "ticks" / "2026-10-19"
+            folder.mkdir(parents=True)
+            lines = ["ts,sym,ltp,tq,side,bq,aq"] + [f"09:15:{i:02d}.000,TCS,100,10,B,5,5" for i in range(40)]
+            raw = gzip.compress(("\n".join(lines) + "\n").encode())
+            (folder / "TCS.csv.gz").write_bytes(raw[:-12])                      # cut off: no end-of-stream marker, like a recorder killed mid-write
+            out = fl.run("2026-10-19", Path(tmp))
+            self.assertIsNotNone(out)
+
     def test_candle_labels(self):
         rows = [{"ts": "09:15:01.000", "ltp": "100", "tq": "10", "side": "B", "bq": "5", "aq": "5"},
                 {"ts": "09:16:01.000", "ltp": "102", "tq": "30", "side": "B", "bq": "5", "aq": "5"},

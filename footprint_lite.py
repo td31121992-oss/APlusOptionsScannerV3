@@ -83,11 +83,13 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         return None
     rows: list[dict[str, Any]] = []
     for p in sorted(folder.glob("*.csv.gz")):
+        ticks = []
         try:
             with gzip.open(p, "rt", encoding="utf-8", newline="") as h:
-                ticks = list(csv.DictReader(h))
-        except (OSError, EOFError):                        # a file cut off by a crash still gives what was written
-            continue
+                for row in csv.DictReader(h):
+                    ticks.append(row)
+        except (OSError, EOFError):                        # a file cut off by a crash still gives the rows read before the cut
+            pass
         rows += candles_from_ticks(ticks, day, p.name.split(".")[0])
     if not rows:
         return None
