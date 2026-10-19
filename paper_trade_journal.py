@@ -582,6 +582,13 @@ class PaperTradeJournal:
                         trade["lock_shadow_exit_at"] = when.isoformat()      # what the rule WOULD have done; trade untouched
                         trade["lock_shadow_exit_price"] = round(price, 4)
                         trade["lock_shadow_floor"] = round(lock_floor, 4)
+            if not reason and trade.get("confirm5") == "FAILED":
+                c5mode = self._confirm5_mode()
+                if c5mode == "ENFORCE":
+                    reason = "CONFIRM5_EXIT"
+                elif c5mode == "SHADOW" and not trade.get("confirm5_shadow_exit_at"):
+                    trade["confirm5_shadow_exit_at"] = when.isoformat()      # what 'confirm within 5 minutes or leave' WOULD have done; trade untouched
+                    trade["confirm5_shadow_exit_price"] = round(price, 4)
             if not reason and trade.get("manual_exit_requested_at"):
                 reason = "MANUAL_EXIT"
             if not reason and force_close:
@@ -900,6 +907,11 @@ class PaperTradeJournal:
                 trade[f"shadow_{name}_exit_at"] = when.isoformat()
                 trade[f"shadow_{name}_exit_price"] = round(price, 4)
                 trade[f"shadow_{name}_at_real_exit"] = True
+
+    @staticmethod
+    def _confirm5_mode() -> str:
+        mode = str(os.getenv("APLUS_CONFIRM5_EXIT_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"OFF", "SHADOW", "ENFORCE"} else "SHADOW"
 
     @staticmethod
     def _profit_lock_mode() -> str:
