@@ -213,5 +213,35 @@ class ShadowTests(unittest.TestCase):
             self.assertAlmostEqual(float(lines[1].split(",")[4]), 0.0435, places=3)    # |2301/2300-1|*100
 
 
+class OptionChainTests(unittest.TestCase):
+    def client(self, routes):
+        return UpstoxClient(token="t", session=FakeSession(routes), master=MASTER, budget=_Budget(1000, 100000, 100000))
+
+    def test_expiries_and_nearest_chain(self):
+        leg = {"instrument_key": "NSE_FO|129677", "market_data": {"ltp": 159.7, "volume": 10, "oi": 841050.0, "close_price": 167.9, "bid_price": 159.2, "bid_qty": 225,
+                                                                  "ask_price": 161.6, "ask_qty": 450, "prev_oi": 931050.0},
+               "option_greeks": {"vega": 0.5, "theta": -0.9, "gamma": 0.001, "delta": 0.93, "iv": 31.0, "pop": 47.8}}
+        routes = {"/v2/option/contract": Resp(200, {"status": "success", "data": [{"expiry": "2026-11-23"}, {"expiry": "2026-10-27"}, {"expiry": "2020-01-01"}]}),
+                  "/v2/option/chain": Resp(200, {"status": "success", "data": [
+                      {"strike_price": 2400.0, "pcr": 1.5, "underlying_spot_price": 2460.9, "call_options": leg, "put_options": None},
+                      {"strike_price": 2300.0, "pcr": 2.0, "underlying_spot_price": 2460.9, "call_options": None, "put_options": leg}]})}
+        c = self.client(routes)
+        self.assertEqual(c.get_expiries(11536), ["2020-01-01", "2026-10-27", "2026-11-23"])
+        ch = c.get_option_chain(11536, "2026-10-27")
+        self.assertEqual([r["strike"] for r in ch["rows"]], [2300.0, 2400.0])             # sorted
+        self.assertEqual(ch["underlying_ltp"], 2460.9)
+        ce = ch["rows"][1]["ce"]
+        self.assertEqual((ce["security_id"], ce["bid_qty"], ce["ask_qty"], ce["previous_oi"], ce["delta"], ce["iv"]), ("129677", 225, 450, 931050, 0.93, 31.0))
+        self.assertIsNone(ch["rows"][1]["pe"])
+        params = c._session.calls[-1][1]
+        self.assertEqual((params["instrument_key"], params["expiry_date"]), ("NSE_EQ|INE467B01029", "2026-10-27"))
+
+    def test_unknown_underlying_and_no_token(self):
+        with self.assertRaises(UpstoxError):
+            self.client({}).get_option_chain(1)
+        with self.assertRaises(UpstoxError):
+            UpstoxClient(token="", session=FakeSession({"/v2/option/contract": Resp(200, {"data": []})}), master=MASTER).get_expiries(11536)
+
+
 if __name__ == "__main__":
     unittest.main()

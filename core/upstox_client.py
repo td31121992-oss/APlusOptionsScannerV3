@@ -209,6 +209,50 @@ class UpstoxClient:
                 merged.setdefault(segment, {})[sid] = self._normalise_quote(item)
         return merged
 
+    # ------------------------------------------------------------------ option chain
+    def get_expiries(self, security_id: str | int, segment: str = "NSE_EQ") -> list[str]:
+        """Listed option expiries (YYYY-MM-DD, ascending) for an underlying."""
+        key = self.instrument_key(segment, security_id)
+        if not key:
+            raise UpstoxError(f"no Upstox instrument for {segment}:{security_id}")
+        body = self._get("/v2/option/contract", {"instrument_key": key}, auth=True)
+        return sorted({str(x.get("expiry"))[:10] for x in body.get("data") or [] if x.get("expiry")})
+
+    def get_option_chain(self, security_id: str | int, expiry: str | None = None, segment: str = "NSE_EQ") -> dict[str, Any]:
+        """Full chain for one expiry (the nearest listed one when omitted), normalised:
+
+            {"expiry", "underlying_ltp", "rows": [{"strike", "pcr", "ce": leg | None, "pe": leg | None}]}
+            leg = ltp, volume, oi, previous_oi, previous_close, bid, bid_qty, ask, ask_qty, iv, delta, gamma, theta, vega, pop, security_id
+        """
+        key = self.instrument_key(segment, security_id)
+        if not key:
+            raise UpstoxError(f"no Upstox instrument for {segment}:{security_id}")
+        if not expiry:
+            exps = [e for e in self.get_expiries(security_id, segment) if e >= datetime.now(IST).date().isoformat()]
+            if not exps:
+                raise UpstoxError(f"no expiry listed for {segment}:{security_id}")
+            expiry = exps[0]
+        body = self._get("/v2/option/chain", {"instrument_key": key, "expiry_date": expiry}, auth=True)
+        rows, spot = [], 0.0
+        for item in body.get("data") or []:
+            spot = _f(item.get("underlying_spot_price")) or spot
+            rows.append({"strike": _f(item.get("strike_price")), "pcr": _f(item.get("pcr")),
+                         "ce": self._normalise_leg(item.get("call_options")), "pe": self._normalise_leg(item.get("put_options"))})
+        rows.sort(key=lambda r: r["strike"])
+        return {"expiry": str(expiry)[:10], "underlying_ltp": spot, "rows": rows}
+
+    @staticmethod
+    def _normalise_leg(leg: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not leg:
+            return None
+        md_, gk = leg.get("market_data") or {}, leg.get("option_greeks") or {}
+        ikey = str(leg.get("instrument_key") or "")
+        return {"security_id": ikey.split("|")[-1], "ltp": _f(md_.get("ltp")), "volume": int(_f(md_.get("volume"))), "oi": int(_f(md_.get("oi"))),
+                "previous_oi": int(_f(md_.get("prev_oi"))), "previous_close": _f(md_.get("close_price")), "bid": _f(md_.get("bid_price")),
+                "bid_qty": int(_f(md_.get("bid_qty"))), "ask": _f(md_.get("ask_price")), "ask_qty": int(_f(md_.get("ask_qty"))),
+                "iv": _f(gk.get("iv")), "delta": _f(gk.get("delta")), "gamma": _f(gk.get("gamma")), "theta": _f(gk.get("theta")),
+                "vega": _f(gk.get("vega")), "pop": _f(gk.get("pop"))}
+
     # ------------------------------------------------------------------ candles
     def get_intraday_candles(self, *, security_id: str | int, segment: str, instrument: str = "", interval: int, from_datetime: datetime,
                              to_datetime: datetime, oi: bool = False) -> dict[str, list[Any]]:
