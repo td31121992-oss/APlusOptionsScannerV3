@@ -27,7 +27,8 @@ SIGNAL_FIELDS = ["time", "symbol", "direction", "status", "passed", "stage", "se
                  "opening_range_breakout", "r1", "s1", "reasons"]
 CHAIN_FIELDS = ["time", "symbol", "direction", "oc_pcr_oi", "oc_pcr_vol", "oc_atm_iv", "oc_iv_skew", "oc_call_wall", "oc_call_wall_pct", "oc_put_wall", "oc_put_wall_pct",
                 "oc_room_pct", "oc_wall_close", "oc_flow", "oc_flow_aligned", "oc_k_strike", "oc_k_ltp", "oc_k_spread_pct", "oc_k_vol", "oc_k_oi",
-                "oc_k_oi_chg_pct", "oc_k_run_pct", "oc_k_delta", "oc_k_theta_pct_day", "oc_k_move_for_10", "oc_iv_rank"]
+                "oc_k_oi_chg_pct", "oc_k_run_pct", "oc_k_delta", "oc_k_theta_pct_day", "oc_k_move_for_10", "oc_iv_rank",
+                "fp_gamma_wall", "fp_gamma_wall_dist_pct", "fp_gamma_ahead_strike", "fp_gamma_ahead_share", "fp_oi_win_min", "fp_oi_win_pct", "fp_oi_flat"]
 
 
 def _g(c: Any, name: str, default: Any = "") -> Any:

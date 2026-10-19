@@ -72,6 +72,10 @@ def chain_tags(snapshot: Any, direction: str, spot: float | None = None) -> dict
             out["oc_flow"] = round(flow, 2)
             out["oc_flow_aligned"] = bool(flow > 0.1 if bull else flow < -0.1)
         out.update(contract_tags(snapshot, direction, px))
+        import flow_tags
+
+        out.update(flow_tags.gamma_tags(snapshot, direction, px))
+        out.update(flow_tags.oi_window_tags(snapshot, direction, px))
         return out
     except Exception:                                      # noqa: BLE001 - a shadow tag must never break an entry
         return {}

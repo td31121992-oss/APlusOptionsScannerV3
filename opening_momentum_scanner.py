@@ -971,6 +971,11 @@ class OpeningMomentumScanner:
                             candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: linear cumulative delta from the recorded ticks (see flow_tags.py)
+                        import flow_tags
+                        candidate_record.update(flow_tags.cvd_tags(str(candidate.symbol), candidate.direction, current_time.date().isoformat()))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: which candidate entry gates would have blocked this trade (see gate_shadow.py)
                         import gate_shadow
                         _gc = plan.get("option_contract") or {}
