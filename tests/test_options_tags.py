@@ -47,6 +47,30 @@ class OptionTagTests(unittest.TestCase):
             k.call.previous_oi = k.put.previous_oi = 0
         self.assertNotIn("oc_flow", ot.chain_tags(s, "BULLISH", 100.0))
 
+    def test_contract_quality_and_iv_rank(self):
+        import tempfile
+        from pathlib import Path
+
+        import iv_history as ivh
+
+        s = snap()
+        s.symbol, s.expiry = "ZZZ", "2026-12-31"
+        for k in s.strikes:
+            for lg in (k.call, k.put):
+                lg.ltp, lg.bid, lg.ask, lg.previous_close = 5.0, 4.9, 5.1, 4.0
+        t = ot.chain_tags(s, "BULLISH", 100.0)
+        self.assertEqual(t["oc_k_strike"], 100)                    # 99.5 wanted: nearest listed strike
+        self.assertAlmostEqual(t["oc_k_spread_pct"], 4.0, places=1)
+        self.assertEqual(t["oc_k_run_pct"], 25.0)
+        self.assertIn("oc_k_delta", t)
+        self.assertNotIn("oc_iv_rank", t)                          # no history yet
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for i in range(12):
+                ivh.record("Q", 20.0 + i, f"2026-09-{i + 1:02d}", root)
+            self.assertEqual(ivh.rank("Q", 25.5, root=root, day="2026-10-01"), 50.0)
+            self.assertIsNone(ivh.rank("Q", 25.5, root=root, day="2026-09-05"))      # fewer than 10 earlier days
+
     def test_bad_input_never_raises(self):
         self.assertEqual(ot.chain_tags(None, "BULLISH", 100.0), {})
         self.assertEqual(ot.chain_tags(NS(strikes=[]), "BULLISH", 100.0), {})
