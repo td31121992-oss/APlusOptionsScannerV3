@@ -1055,6 +1055,12 @@ class OpeningMomentumScanner:
                             _ctxn.get("nifty_pct_open"), candidate_record.get("breadth_pct_with"), _epn.account_capital()))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: would a market brake (Nifty against our side since the open / last 15 min) have blocked this? (see market_brake.py)
+                        import market_brake
+                        candidate_record.update(market_brake.brake_tags(
+                            candidate.direction, (getattr(self, "_market_context", None) or {}).get("nifty_pct_open")))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # dashboard "pause new entries" / day-target switch (see entry_pause.py); fail-open
                         import entry_pause
                         _root = Path(__file__).resolve().parent
