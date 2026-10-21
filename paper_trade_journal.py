@@ -783,6 +783,40 @@ class PaperTradeJournal:
                 continue
         return done
 
+    def record_stock_rank(self, ranks: Mapping[str, Any], when: datetime, extra: Iterable[dict[str, Any]] = ()) -> int:
+        """Display only: the stock's rank among all F&O stocks by move from the open, judged on the trade's own side (call -> top gainers, put -> top losers).
+        Stores rank_entry (first look after entry), rank_now, rank_best, rank_worst, rank_close (the look when the trade closed) and rank_path (changes only)."""
+        done = 0
+        seen: set[int] = set()
+        for trade in [x for x in self.trades if str(x.get("status") or "").upper() == "OPEN"] + list(extra or []):
+            if id(trade) in seen:
+                continue
+            seen.add(id(trade))
+            try:
+                info = ranks.get(str(trade.get("symbol") or "").upper())
+                if not info:
+                    continue
+                bull = str(trade.get("direction") or "").upper() == "BULLISH"
+                r = int(info["gain" if bull else "loss"])
+                closed = str(trade.get("status") or "").upper() == "CLOSED"
+                trade["rank_side"] = "GAINERS" if bull else "LOSERS"
+                trade["rank_n"] = int(info.get("n") or 0)
+                if not trade.get("rank_entry"):
+                    trade["rank_entry"] = r
+                trade["rank_now"] = r
+                trade["rank_best"] = min(r, int(trade.get("rank_best") or r))
+                trade["rank_worst"] = max(r, int(trade.get("rank_worst") or r))
+                path = list(trade.get("rank_path") or [])
+                if not path or path[-1][1] != r:
+                    path.append([when.strftime("%H:%M"), r])
+                    trade["rank_path"] = path[-60:]
+                if closed and not trade.get("rank_close"):
+                    trade["rank_close"] = r
+                done += 1
+            except Exception:                               # noqa: BLE001 - display only, never breaks the journal
+                continue
+        return done
+
     def _record_confirm5(self, trade: dict[str, Any], fav: float, when: datetime) -> None:
         """SHADOW quality filter: did the stock keep going our way once 5 minutes had passed since entry (HELD) or not (FAILED)?
         Also stores the day's entry order so the review can show 'first 5 confirmed entries of the day'. Never touches the trade."""

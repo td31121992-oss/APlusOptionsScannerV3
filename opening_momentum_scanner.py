@@ -1480,6 +1480,20 @@ class OpeningMomentumScanner:
                             prices[str(inst.symbol).upper()] = float(lp)
                 if prices:
                     self.paper_journal.record_stock_response(prices, now, extra=closed)
+                try:      # display only: rank among all F&O stocks by move from the open, for the dashboard (see mover_rank.py)
+                    import mover_rank
+                    _rq = {}
+                    for sid, item in (eq.items() if isinstance(eq, Mapping) else ()):
+                        inst = self._by_security_id.get(str(sid)) if getattr(self, "_by_security_id", None) else None
+                        if inst is not None and isinstance(item, Mapping):
+                            _lp = item.get("last_price", item.get("ltp"))
+                            _op = (item.get("ohlc") or {}).get("open")
+                            if _lp and _op:
+                                _rq[str(inst.symbol).upper()] = (float(_lp), float(_op))
+                    if _rq:
+                        self.paper_journal.record_stock_rank(mover_rank.ranks_from_quotes(_rq), now, extra=closed)
+                except Exception:         # noqa: BLE001 - never affects trading
+                    pass
                 if getattr(self, "_sector_tape", None) is not None:
                     self._sector_tape.update()
                     self.paper_journal.record_sector_fade(self._sector_tape.ltps, now)

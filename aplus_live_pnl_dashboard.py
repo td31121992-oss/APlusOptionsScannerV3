@@ -203,6 +203,21 @@ def _trade_scan(t):
     return out
 
 
+def _trade_rank(t):
+    """Rank among all F&O stocks by move from the open on the trade's own side (call: gainers, put: losers) at entry, now, best, and at close."""
+    if t.get("rank_entry") in (None, ""):
+        return None
+    def i(k):
+        v = t.get(k)
+        try:
+            return int(float(v)) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    path = t.get("rank_path")
+    return {"side": str(t.get("rank_side") or ""), "entry": i("rank_entry"), "now": i("rank_now"), "best": i("rank_best"), "worst": i("rank_worst"),
+            "close": i("rank_close"), "n": i("rank_n"), "path": path if isinstance(path, list) else []}
+
+
 def _entries_state():
     import entry_pause
     today = datetime.now().date()
@@ -524,6 +539,7 @@ def snapshot():
             **(lambda hl: {**hl, **_since_high(t, hl)})(_hl_fields(t)),
             **_stop_fields(t),
             "scan": _trade_scan(t),
+            "rank": _trade_rank(t),
         })
 
     return {
@@ -643,7 +659,7 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`+scanRow(x)}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}${rankLine(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`+scanRow(x)}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);loadMW();setInterval(loadMW,15000);
@@ -669,6 +685,11 @@ load();setInterval(load,5000);loadMW();setInterval(loadMW,15000);
  <div class="mgmsg" id="mgmsg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade.</div>
 </div></div>
 <script>
+function rankText(x){var r=x.rank;if(!r||r.entry==null)return "";var side=r.side==="GAINERS"?"gainer":"loser";
+ var t="Top "+side+" #"+r.entry+" at entry";if(r.now!=null&&x.status==="OPEN")t+=" &rarr; #"+r.now+" now";if(r.best!=null&&r.best!==r.entry)t+=" (best #"+r.best+")";if(r.close!=null)t+=" &rarr; #"+r.close+" at close";
+ return t}
+function rankLine(x){var t=rankText(x);if(!t)return "";var r=x.rank,col=(r.now!=null&&r.entry!=null&&r.now<r.entry)?"#17c964":((r.now!=null&&r.entry!=null&&r.now>r.entry)?"#ffb454":"#8ea0bd");
+ var path=(r.path||[]).map(function(p){return "#"+p[1]}).join(" &rarr; ");return '<br><small style="color:'+col+'" title="'+(path?"Rank path: "+path:"")+'">'+t+'</small>'}
 var mw={};
 function loadMW(){fetch('/api/fno-market-watch?ts='+Date.now()).then(function(r){return r.json()}).then(function(d){mw={};(d.rows||[]).forEach(function(r){mw[r.symbol]=r});if(lastData)renderRows(lastData)}).catch(function(){})}
 function chip(t,c){return '<span style="display:inline-block;margin:2px 5px 2px 0;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;background:'+(c==="g"?"#12351f":c==="r"?"#3a1620":c==="y"?"#3a2f12":"#232b3f")+';color:'+(c==="g"?"#b9f5cf":c==="r"?"#ffb9c8":c==="y"?"#ffe2a8":"#c8d3e8")+'">'+t+'</span>'}
@@ -697,6 +718,7 @@ function scanRow(x){
  if(s.rule_nifty_pct_open!=null)e+=chip("Nifty "+sgn(s.rule_nifty_pct_open)+" at entry","n");
  if(s.underlying_entry!=null)e+=chip("Stock entry "+Number(s.underlying_entry).toFixed(2)+(s.underlying_stop!=null?" &middot; stop "+Number(s.underlying_stop).toFixed(2):"")+(s.underlying_target1!=null?" &middot; T1 "+Number(s.underlying_target1).toFixed(2):""),"n");
  if(s.oc_k_move_for_10!=null)e+=chip("Stock must move "+Number(s.oc_k_move_for_10).toFixed(2)+"% for +10% option","n");
+ var rk=rankText(x);if(rk)e=chip(rk,"n")+e;
  var hint=holdHint(x),why=s.entry_reason?'<div style="margin-top:4px;color:#8ea0bd;font-size:12px;white-space:normal"><b style="color:#e7eefc">Why we entered:</b> '+String(s.entry_reason).split("<").join("&lt;")+'</div>':"";
  return '<tr class="scanrow"><td colspan="22" style="background:#0e1527;white-space:normal;padding:6px 14px 10px 28px;border-bottom:1px solid #27334d"><div style="font-size:11px;color:#8ea0bd;margin-bottom:2px">INTRADAY SCAN &mdash; '+x.symbol+(m?"":" (live scan data not loaded yet)")+'</div>'+h+(h&&e?"<br>":"")+e+why+(hint?'<div style="margin-top:4px;font-size:12px;color:'+holdColor(x)+'"><b>Hold / exit:</b> '+hint+'</div>':"")+'</td></tr>'}
 var mgRow=null;
