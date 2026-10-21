@@ -1048,6 +1048,21 @@ class OpeningMomentumScanner:
                                 continue
                     except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
                         pass
+                    try:                      # settle window (see settle_window.py): SHADOW records only; ENFORCE (APLUS_SETTLE_MODE) lets no entry fire before APLUS_SETTLE_UNTIL
+                        import settle_window
+                        if settle_window.mode() != "OFF":
+                            _sm = current_time.hour * 60 + current_time.minute
+                            candidate_record.update(settle_window.evaluate(_sm))
+                            if settle_window.blocks(_sm):
+                                candidate.paper_trade_status = "SETTLE_WINDOW_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # shadow tag only: how much of the stock's sector is moving our way (see sector_priority.py)
+                        import sector_priority
+                        candidate_record.update(sector_priority.sector_tags((fno_market_watch or {}).get("rows", []), str(candidate.symbol), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: no-trade-day verdict (see no_trade_day.py)
                         import entry_pause as _epn
                         import no_trade_day
