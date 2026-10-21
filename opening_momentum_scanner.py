@@ -984,6 +984,11 @@ class OpeningMomentumScanner:
                             candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: big prints and delta trend from the recorded ticks (see tick_tags.py)
+                        import tick_tags
+                        candidate_record.update(tick_tags.tick_tags(str(candidate.symbol), candidate.direction, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: linear cumulative delta from the recorded ticks (see flow_tags.py)
                         import flow_tags
                         candidate_record.update(flow_tags.cvd_tags(str(candidate.symbol), candidate.direction, current_time.date().isoformat()))
