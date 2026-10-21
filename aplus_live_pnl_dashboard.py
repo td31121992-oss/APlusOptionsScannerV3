@@ -186,6 +186,23 @@ def _stop_fields(t):
         return {}
 
 
+def _trade_scan(t):
+    """Entry-time scan facts for an OPEN trade, shown under the trade row so hold / exit can be judged from the reason it was taken."""
+    if _status(t) != "OPEN":
+        return None
+    def g(k):
+        v = t.get(k)
+        return None if v in (None, "") else v
+    keys = ("entry_reason", "setup_family", "selection_tier", "pivot_state", "tr_scans_names", "tr_scans_against_names", "tr_aligned_5m", "tr_aligned_15m",
+            "tr_aligned_daily", "tr_all_aligned", "ms_trend", "ms_bos", "ms_choch", "chop_state", "kl_level", "ctx_done_move_pct", "ctx_range_pos", "ctx_last15_pct",
+            "ctx_vs_vwap_pct", "ctx_fading", "underlying_entry", "underlying_stop", "underlying_target1", "confirm5", "confirm5_pct", "day_entry_rank", "oc_k_spread_pct",
+            "oc_iv_rank", "oc_k_move_for_10", "sp_frac", "sp_sector", "breadth_tag", "nt_verdict", "rule_nifty_pct_open")
+    out = {k: g(k) for k in keys if g(k) is not None}
+    if isinstance(out.get("entry_reason"), str):
+        out["entry_reason"] = out["entry_reason"][:400]
+    return out
+
+
 def _entries_state():
     import entry_pause
     today = datetime.now().date()
@@ -506,6 +523,7 @@ def snapshot():
             "clean": _num(t.get("clean_trend_score")),
             **(lambda hl: {**hl, **_since_high(t, hl)})(_hl_fields(t)),
             **_stop_fields(t),
+            "scan": _trade_scan(t),
         })
 
     return {
@@ -625,10 +643,10 @@ function renderSummary(d){
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`+scanRow(x)}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
-load();setInterval(load,5000);
+load();setInterval(load,5000);loadMW();setInterval(loadMW,15000);
 </script>
 <style>
 .mgbtn{background:#1c4e80;color:#fff;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer}
@@ -651,6 +669,36 @@ load();setInterval(load,5000);
  <div class="mgmsg" id="mgmsg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade.</div>
 </div></div>
 <script>
+var mw={};
+function loadMW(){fetch('/api/fno-market-watch?ts='+Date.now()).then(function(r){return r.json()}).then(function(d){mw={};(d.rows||[]).forEach(function(r){mw[r.symbol]=r});if(lastData)renderRows(lastData)}).catch(function(){})}
+function chip(t,c){return '<span style="display:inline-block;margin:2px 5px 2px 0;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;background:'+(c==="g"?"#12351f":c==="r"?"#3a1620":c==="y"?"#3a2f12":"#232b3f")+';color:'+(c==="g"?"#b9f5cf":c==="r"?"#ffb9c8":c==="y"?"#ffe2a8":"#c8d3e8")+'">'+t+'</span>'}
+function sgn(v){v=Number(v);return (v>=0?"+":"")+v.toFixed(2)+"%"}
+function scanRow(x){
+ if(x.status!=="OPEN"||!x.scan)return "";
+ var s=x.scan,m=mw[x.symbol],bull=String(x.side).indexOf("BULLISH")===0,dirn=bull?1:-1,h="";
+ if(m){var fo=dirn*Number(m.from_open_pct||0);
+  h+=chip("Stock now "+Number(m.ltp||0).toFixed(2)+" &middot; "+sgn(m.from_open_pct)+" from open",fo>=0?"g":"r");
+  h+=chip("Day range position "+Number(m.range_position_pct||0).toFixed(0)+"%","n");
+  (m.scans||[]).forEach(function(c){h+=chip(c.text+(c.time?" @ "+c.time:""),c.tone==="bull"?"g":"r")});
+  if(m.catalyst)h+=chip("News: "+String(m.catalyst.type||"event").split("_").join(" ")+(m.catalyst.event_risk?" &#9888;":""),m.catalyst.direction==="BULLISH"?"g":(m.catalyst.direction==="BEARISH"?"r":"n"))}
+ var e="";
+ if(s.confirm5)e+=chip("5-min check: "+s.confirm5+(s.confirm5_pct!=null?" ("+sgn(s.confirm5_pct)+")":""),s.confirm5==="HELD"?"g":"r");
+ if(s.setup_family)e+=chip(String(s.setup_family).split("_").join(" ")+(s.selection_tier?" / "+String(s.selection_tier).split("_").join(" "):""),"n");
+ if(s.pivot_state)e+=chip("Pivot "+String(s.pivot_state).split("_").join(" "),"n");
+ if(s.day_entry_rank!=null)e+=chip("Entry #"+s.day_entry_rank+" of the day","n");
+ if(s.tr_all_aligned!=null)e+=chip("5m/15m/daily "+(String(s.tr_all_aligned).toLowerCase()==="true"?"aligned":"not all aligned"),String(s.tr_all_aligned).toLowerCase()==="true"?"g":"y");
+ if(s.tr_scans_names)e+=chip("Scans for: "+s.tr_scans_names,"g");
+ if(s.tr_scans_against_names)e+=chip("Scans against: "+s.tr_scans_against_names,"r");
+ if(s.ms_trend)e+=chip("Structure "+s.ms_trend+(s.ms_bos?" / BOS "+s.ms_bos:"")+(s.ms_choch?" / CHoCH "+s.ms_choch:""),"n");
+ if(s.chop_state)e+=chip("Tape "+String(s.chop_state).toLowerCase(),s.chop_state==="TRENDING"?"g":"y");
+ if(s.ctx_done_move_pct!=null)e+=chip("Already "+sgn(s.ctx_done_move_pct)+" at entry, range pos "+Math.round(Number(s.ctx_range_pos||0)*100)+"%"+(String(s.ctx_fading).toLowerCase()==="true"?" &middot; fading":""),String(s.ctx_fading).toLowerCase()==="true"?"y":"n");
+ if(s.ctx_vs_vwap_pct!=null)e+=chip("VWAP "+sgn(s.ctx_vs_vwap_pct)+(s.ctx_last15_pct!=null?" &middot; 15m "+sgn(s.ctx_last15_pct):""),"n");
+ if(s.sp_frac!=null)e+=chip("Sector "+Math.round(Number(s.sp_frac)*100)+"% moving our way","n");
+ if(s.rule_nifty_pct_open!=null)e+=chip("Nifty "+sgn(s.rule_nifty_pct_open)+" at entry","n");
+ if(s.underlying_entry!=null)e+=chip("Stock entry "+Number(s.underlying_entry).toFixed(2)+(s.underlying_stop!=null?" &middot; stop "+Number(s.underlying_stop).toFixed(2):"")+(s.underlying_target1!=null?" &middot; T1 "+Number(s.underlying_target1).toFixed(2):""),"n");
+ if(s.oc_k_move_for_10!=null)e+=chip("Stock must move "+Number(s.oc_k_move_for_10).toFixed(2)+"% for +10% option","n");
+ var hint=holdHint(x),why=s.entry_reason?'<div style="margin-top:4px;color:#8ea0bd;font-size:12px;white-space:normal"><b style="color:#e7eefc">Why we entered:</b> '+String(s.entry_reason).split("<").join("&lt;")+'</div>':"";
+ return '<tr class="scanrow"><td colspan="22" style="background:#0e1527;white-space:normal;padding:6px 14px 10px 28px;border-bottom:1px solid #27334d"><div style="font-size:11px;color:#8ea0bd;margin-bottom:2px">INTRADAY SCAN &mdash; '+x.symbol+(m?"":" (live scan data not loaded yet)")+'</div>'+h+(h&&e?"<br>":"")+e+why+(hint?'<div style="margin-top:4px;font-size:12px;color:'+holdColor(x)+'"><b>Hold / exit:</b> '+hint+'</div>':"")+'</td></tr>'}
 var mgRow=null;
 function holdHint(x){
  if(!x||x.high_age_min==null||x.from_high_pct==null)return "";
