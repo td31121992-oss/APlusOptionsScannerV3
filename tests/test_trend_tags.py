@@ -27,6 +27,20 @@ class TrendTagTests(unittest.TestCase):
         t2 = tt.tags_from_trend(trend(-0.7, -0.4, -0.5), "BEARISH")
         self.assertTrue(t2["tr_all_aligned"])
 
+    def test_higher_timeframes_30m_1h_and_the_count_of_aligned_ones(self):
+        tr_ = trend(-0.7, -0.4, -0.5)
+        tr_["30M"] = {"bullish": 1, "neutral": 1, "bearish": 8, "score": -0.7, "table": []}
+        tr_["1H"] = {"bullish": 2, "neutral": 1, "bearish": 7, "score": -0.5, "table": []}
+        t = tt.tags_from_trend(tr_, "BEARISH")
+        self.assertEqual((t["tr_30m_score"], t["tr_1h_score"]), (-0.7, -0.5))
+        self.assertTrue(t["tr_aligned_30m"] and t["tr_aligned_1h"])
+        self.assertEqual((t["tr_htf_n"], t["tr_htf_all"]), (4, True))              # 15m, 30m, 1h and daily all point down
+        c = tt.tags_from_trend(tr_, "BULLISH")                                      # the same tape is against a call
+        self.assertEqual((c["tr_htf_n"], c["tr_htf_all"]), (0, False))
+        tr_["1H"]["score"] = 0.1
+        mixed = tt.tags_from_trend(tr_, "BEARISH")
+        self.assertEqual((mixed["tr_htf_n"], mixed["tr_htf_all"]), (3, False))
+
     def test_empty_trend(self):
         self.assertEqual(tt.tags_from_trend({}, "BULLISH"), {})
 
