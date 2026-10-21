@@ -10,7 +10,8 @@ writes every packet, so delta, cumulative delta and imbalance can be rebuilt per
               otherwise the tick rule (price up = B, down = S, flat = the last side); blank when nothing traded
     data/ticks/health.json               packets, last tick time, restarts (updated every 30 seconds)
 
-It is an approximation: a feed packet can cover several trades, and the buy/sell tag is inferred. Symbols: APLUS_TICK_SYMBOLS (comma list) or the default ten.
+It is an approximation: a feed packet can cover several trades, and the buy/sell tag is inferred. Symbols: every F&O stock by default (APLUS_TICK_SYMBOLS=ALL);
+APLUS_TICK_SYMBOLS can instead be a comma list (the old ten are DEFAULT_SYMBOLS).
 Runs 09:05-15:32 IST on trading days (the scheduled task APlus_Tick_Recorder starts it); it reconnects if the feed goes quiet for a minute.
 
     python tick_recorder.py               record until 15:32
@@ -36,6 +37,14 @@ DEFAULT_SYMBOLS = ("INFY", "TCS", "TECHM", "WIPRO", "KPITTECH", "HDFCBANK", "ICI
 FIELDS = ["ts", "sym", "ltp", "ltq", "ltt", "vol", "tbq", "tsq", "bid", "bq", "ask", "aq", "bsum5", "asum5", "tq", "side"]
 START, END = (9, 5), (15, 32)
 STALE_SECONDS = 60
+
+
+def resolve_symbols(setting: str, universe: dict[str, Any]) -> tuple[str, ...]:
+    """ALL (or empty) -> every F&O stock in the universe; otherwise the listed symbols that exist in it."""
+    setting = (setting or "ALL").strip()
+    if setting.upper() == "ALL":
+        return tuple(sorted(universe))
+    return tuple(s for s in (x.strip().upper() for x in setting.split(",")) if s in universe)
 
 
 def _f(v: Any) -> float:
@@ -178,8 +187,8 @@ def run(root: Path = ROOT, selftest_seconds: float = 0.0) -> int:
     sys.path.insert(0, str(root))
     from order_book_recorder import _universe
 
-    symbols = tuple(s.strip().upper() for s in os.getenv("APLUS_TICK_SYMBOLS", ",".join(DEFAULT_SYMBOLS)).split(",") if s.strip())
     uni = _universe()
+    symbols = resolve_symbols(os.getenv("APLUS_TICK_SYMBOLS", "ALL"), uni)
     ids = {s: str(uni[s]) for s in symbols if s in uni}
     if not ids:
         print("no known symbols")

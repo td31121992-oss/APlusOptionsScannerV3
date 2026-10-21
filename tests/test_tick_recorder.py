@@ -77,6 +77,12 @@ class WriterAndFootprintTests(unittest.TestCase):
             out = fl.run("2026-10-19", Path(tmp))
             self.assertIsNotNone(out)
 
+    def test_symbol_setting_all_or_a_list(self):
+        uni = {"TCS": 1, "INFY": 2, "SBIN": 3}
+        self.assertEqual(tr.resolve_symbols("ALL", uni), ("INFY", "SBIN", "TCS"))
+        self.assertEqual(tr.resolve_symbols("", uni), ("INFY", "SBIN", "TCS"))
+        self.assertEqual(tr.resolve_symbols("tcs, nope ,SBIN", uni), ("TCS", "SBIN"))
+
     def test_candle_labels(self):
         rows = [{"ts": "09:15:01.000", "ltp": "100", "tq": "10", "side": "B", "bq": "5", "aq": "5"},
                 {"ts": "09:16:01.000", "ltp": "102", "tq": "30", "side": "B", "bq": "5", "aq": "5"},
