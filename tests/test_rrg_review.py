@@ -26,7 +26,7 @@ class RrgReviewTests(unittest.TestCase):
             path = rr.run(None, root)
             text = path.read_text(encoding="utf-8")
         self.assertIn("5 closed paper trades with the tag over 2 day(s)", text)
-        self.assertIn("Trades skipped: **3** of 5 | P&L removed: **-1,100** | winners it would have lost: **1** (+300)", text)
+        self.assertIn("Trades skipped: **3** of 5, P&L removed: **-1,100** | winners it would have lost: **1** (+300)", text)
         self.assertIn("P&L of the remaining aligned trades: **+800**", text)
         self.assertIn("Aligned had the better average on **2 of 2** days", text)
 

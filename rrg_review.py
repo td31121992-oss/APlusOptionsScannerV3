@@ -52,7 +52,7 @@ def _row(g: pd.DataFrame) -> dict[str, Any]:
 
 
 def _fmt(r: dict[str, Any]) -> str:
-    return f"{r['n']} trades | {r['pnl']:+,.0f} | {r['win']:.0f}% win | avg {r['avg']:+,.0f}"
+    return f"{r['n']} trades, {r['pnl']:+,.0f}, {r['win']:.0f}% win, avg {r['avg']:+,.0f}"
 
 
 def build(d: pd.DataFrame) -> str:
@@ -63,7 +63,7 @@ def build(d: pd.DataFrame) -> str:
     a, n = d[d.aligned], d[~d.aligned]
     lines += [f"| Aligned | {_fmt(_row(a))} |", f"| Not aligned | {_fmt(_row(n))} |", ""]
     lines += ["## What a rule that skipped the not-aligned trades would have done", "",
-              f"- Trades skipped: **{len(n)}** of {len(d)} | P&L removed: **{n.net.sum():+,.0f}** | winners it would have lost: **{int((n.net > 0).sum())}** ({n[n.net > 0].net.sum():+,.0f})",
+              f"- Trades skipped: **{len(n)}** of {len(d)}, P&L removed: **{n.net.sum():+,.0f}** | winners it would have lost: **{int((n.net > 0).sum())}** ({n[n.net > 0].net.sum():+,.0f})",
               f"- P&L of the remaining aligned trades: **{a.net.sum():+,.0f}** (all trades: {d.net.sum():+,.0f})", "",
               "## By side", "", "| Side | Aligned | Not aligned |", "|---|---|---|"]
     for side in ("BULLISH", "BEARISH"):
