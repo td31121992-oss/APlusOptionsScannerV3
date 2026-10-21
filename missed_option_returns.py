@@ -260,6 +260,12 @@ def run(day: str, root: Path = ROOT) -> Path | None:
         footprint_lite.run(day, root)
     except Exception:                                      # noqa: BLE001
         pass
+    try:                                                   # sector-rotation (RRG) alignment vs paper-trade results, shadow review (see rrg_review.py)
+        import rrg_review
+
+        rrg_review.run(day, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     return folder
 
 
