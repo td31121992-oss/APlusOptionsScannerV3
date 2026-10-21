@@ -59,6 +59,29 @@ class ShadowTests(unittest.TestCase):
             self.assertIn("Established-trend setups V2 blocked", text)
             self.assertIn("before the 3-per-side cap):** n=1", text)
 
+    def test_loosened_bounce_limit_lets_a_small_bounce_through_and_reports_it(self) -> None:
+        from stock_selection_v2 import V2GateConfig, evaluate_entry_ready
+
+        c = SimpleNamespace(symbol="BBB", direction="BEARISH", stage="S", setup_family="X", move_from_0915_open_percent=-2.0, recent_move_5m_percent=0.20,
+                            recent_move_10m_percent=-0.3, recent_move_15m_percent=-0.5, completed_5m_bars=6, fresh_15m_high=False, fresh_15m_low=True,
+                            relative_volume=3.0, recent_relative_volume_15m=2.0, tape_volume_acceleration_5m=1.0, tape_volume_acceleration_15m=1.0,
+                            trend_retention_percent=80.0)
+        when = datetime(2026, 10, 21, 10, 0, tzinfo=IST)
+        ranking = {"top_up": [], "top_down": [{"symbol": "BBB", "v2_rank": 1, "from_open_pct": -2.0}]}
+        live, blocked = evaluate_entry_ready(candidates=[c], mover_ranking=ranking, now=when, config=V2GateConfig())
+        self.assertEqual(len(live), 0)                                              # the stock bounced 0.20% against the short: live rule blocks it
+        self.assertTrue(any("CURRENT_5M_REVERSING" in r for r in blocked[0]["reasons"]))
+        loose, _ = evaluate_entry_ready(candidates=[c], mover_ranking=ranking, now=when, config=V2GateConfig(maximum_opposing_5m_pct=0.30))
+        self.assertEqual(len(loose), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            v2_shadow.log_new(loose, ranking, when, set(), root / "data" / "shadow_v2", scenario="bounce30")
+            (root / "data" / "missed_opportunities" / "2026-10-21").mkdir(parents=True)
+            opts = [{"symbol": "BBB", "dir": "BEARISH", "kind": "ATM", "fate": "V2_BLOCKED:x", "close": 20.0, "best": 60.0}]
+            Path(root, "data", "missed_opportunities", "2026-10-21", "option_returns.json").write_text(json.dumps(opts), encoding="utf-8")
+            text = v2_shadow.report(root).read_text(encoding="utf-8")
+            self.assertIn("5m bounce limit loosened to 0.30%:** n=1", text)
+
 
 if __name__ == "__main__":
     unittest.main()

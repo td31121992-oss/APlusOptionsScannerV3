@@ -158,7 +158,8 @@ def report(root: Path = ROOT) -> Path | None:
     """Writes data/shadow_v2/summary.md comparing outcomes (ATM option, hindsight, entry at first-ready candle +1%)."""
     groups: dict[str, tuple[list[float], list[float]]] = {"extra": ([], []), "norank_only": ([], []), "other_v2_blocked": ([], []), "traded": ([], []),
                                                          "est_trend": ([], []), "pullback": ([], []),
-                                                         "fresh15": ([], []), "fresh30": ([], [])}
+                                                         "fresh15": ([], []), "fresh30": ([], []),
+                                                         "bounce10": ([], []), "bounce20": ([], []), "bounce30": ([], [])}
     per_day = []
     for csv_path in sorted((root / "data" / "shadow_v2").glob("20*.csv")):
         day = csv_path.stem
@@ -172,7 +173,7 @@ def report(root: Path = ROOT) -> Path | None:
             norank = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "norank"} - extra
             est = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "est_trend"}
             pb = {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == "pullback"}
-            fr = {n: {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == n} for n in ("fresh15", "fresh30")}
+            fr = {n: {(r["symbol"], r["direction"]) for r in logged if r.get("scenario") == n} for n in ("fresh15", "fresh30", "bounce10", "bounce20", "bounce30")}
         except (OSError, ValueError, KeyError):
             continue
         day_extra = ([], [])
@@ -215,6 +216,9 @@ def report(root: Path = ROOT) -> Path | None:
              f"- **Pullback leaders (top-5 stocks V2 rejected only for a <=0.5% 5m dip, still on the right side of VWAP):** {_stats(*groups['pullback'])}",
              f"- **Fresh-movement ranking, last 15 min, top 5 per side (V2-blocked signals it would let in):** {_stats(*groups['fresh15'])}",
              f"- **Fresh-movement ranking, last 30 min, top 5 per side:** {_stats(*groups['fresh30'])}",
+             f"- **5m bounce limit loosened 0.06% -> 0.10% (top-N and every other V2 rule unchanged):** {_stats(*groups['bounce10'])}",
+             f"- **5m bounce limit loosened to 0.20%:** {_stats(*groups['bounce20'])}",
+             f"- **5m bounce limit loosened to 0.30%:** {_stats(*groups['bounce30'])}",
              f"- **Other V2-blocked:** {_stats(*groups['other_v2_blocked'])}",
              f"- **Live trades:** {_stats(*groups['traded'])}", "", "| Day | Extra top-10 passes |", "|---|---|"]
     lines += [f"| {day} | {_stats(*vals)} |" for day, vals in per_day]

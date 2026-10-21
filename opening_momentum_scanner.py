@@ -702,6 +702,14 @@ class OpeningMomentumScanner:
                 self._fresh_tracker = v2_shadow.FreshTracker()
             if not hasattr(self, "_v2_fresh_seen") or getattr(self, "_v2_fresh_day", None) != current_time.date():
                 self._v2_fresh_seen, self._v2_fresh_day = {"fresh15": set(), "fresh30": set()}, current_time.date()
+            # seventh to ninth scenarios: ONLY the 5-minute bounce limit loosened (0.06% -> 0.10 / 0.20 / 0.30); top-N and every other V2 rule exactly as live
+            if not hasattr(self, "_v2_bounce_seen") or getattr(self, "_v2_bounce_day", None) != current_time.date():
+                self._v2_bounce_seen, self._v2_bounce_day = {"bounce10": set(), "bounce20": set(), "bounce30": set()}, current_time.date()
+            for _bn, _lim in (("bounce10", 0.10), ("bounce20", 0.20), ("bounce30", 0.30)):
+                _cfg = V2GateConfig(top_n_per_side=v2_config.top_n_per_side, maximum_opposing_5m_pct=_lim)
+                _bp, _ = evaluate_entry_ready(candidates=pre_v2_candidates, mover_ranking=v2_movers, now=current_time, config=_cfg)
+                _bx = [x for x in _bp if (x.symbol, x.direction) not in live_keys]
+                v2_shadow.log_new(_bx, v2_movers, current_time, self._v2_bounce_seen[_bn], scenario=_bn)
             for _name, _win in (("fresh15", 15), ("fresh30", 30)):
                 _rk = v2_shadow.rank_fresh(universe, quote_map, self._fresh_tracker, current_time, _win, 5)
                 _pass, _ = evaluate_entry_ready(candidates=pre_v2_candidates, mover_ranking=_rk, now=current_time, config=v2_config)
