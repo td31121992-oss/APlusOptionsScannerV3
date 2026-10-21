@@ -885,6 +885,11 @@ class OpeningMomentumScanner:
                         candidate_record.update(smc_levels.entry_tags(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
                     except Exception:         # noqa: BLE001 - never affects trading
                         pass
+                    try:                      # shadow tag only: chart patterns formed in the last 15 minutes, with / against our side (see pattern_tags.py)
+                        import pattern_tags
+                        candidate_record.update(pattern_tags.pattern_tags(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: stock trend gauge 5M / 15M / daily + scans (see trend_tags.py)
                         import trend_tags
                         candidate_record.update(trend_tags.entry_trend(

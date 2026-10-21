@@ -55,14 +55,14 @@ def _minutes(ts: Any) -> int:
     return x.hour * 60 + x.minute
 
 
-def detect_events(candles: dict[str, list[float]], prev_high: float | None = None, prev_low: float | None = None) -> list[dict[str, Any]]:
+def detect_events(candles: dict[str, list[float]], prev_high: float | None = None, prev_low: float | None = None, min_bars: int = 8) -> list[dict[str, Any]]:
     """candles: parallel lists timestamp/open/high/low/close/volume for ONE day, 5-minute. Returns pattern events with forward moves."""
     import pandas as pd
 
     from candle_chart_patterns import add_candle_patterns, add_chart_structure
 
     n = len(candles.get("close") or [])
-    if n < 8:
+    if n < min_bars:
         return []
     df = pd.DataFrame({k: candles[k] for k in ("open", "high", "low", "close", "volume")}).astype(float)
     df = add_chart_structure(add_candle_patterns(df))
