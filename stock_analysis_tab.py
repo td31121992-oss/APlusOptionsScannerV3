@@ -432,15 +432,28 @@ _OPTION_CHAIN_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _OPTION_CHAIN_CACHE_SECONDS = 15.0
 
 
+_OPTION_CHAIN_BUILT_AT = 0.0
+_OPTION_CHAIN_CLIENT_REFRESH_SECONDS = 300.0      # the Dhan token is renewed every morning; a dashboard left running must not keep using yesterday's
+
+
 def _option_chain_runtime() -> tuple[Any, Any]:
-    global _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
-    if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None:
+    global _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER, _OPTION_CHAIN_BUILT_AT
+    now = time.monotonic()
+    stale = _OPTION_CHAIN_CLIENT is not None and now - _OPTION_CHAIN_BUILT_AT > _OPTION_CHAIN_CLIENT_REFRESH_SECONDS
+    if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None or stale:
         from config import AppConfig
         from core.dhan_client import DhanClient
         from core.instrument_loader import InstrumentLoader
-        cfg = AppConfig.from_env()
-        _OPTION_CHAIN_CLIENT = DhanClient(cfg.dhan)
-        _OPTION_CHAIN_LOADER = InstrumentLoader(cfg).load(force_refresh=False)
+        try:
+            cfg = AppConfig.from_env()                  # re-reads the current token
+            _OPTION_CHAIN_CLIENT = DhanClient(cfg.dhan)
+            _OPTION_CHAIN_BUILT_AT = now
+            if _OPTION_CHAIN_LOADER is None:
+                _OPTION_CHAIN_LOADER = InstrumentLoader(cfg).load(force_refresh=False)
+        except Exception:                               # noqa: BLE001 - keep serving with the old client if the refresh fails; a first-time failure still raises
+            if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None:
+                raise
+            _OPTION_CHAIN_BUILT_AT = now - _OPTION_CHAIN_CLIENT_REFRESH_SECONDS + 30.0      # try again in 30 seconds
     return _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
 
 
