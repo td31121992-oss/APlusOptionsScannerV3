@@ -589,7 +589,8 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 .exact-footer{padding:0!important;margin:12px 0 0!important;border-top:1px solid var(--line);background:#0b1020;display:block!important;width:100%;overflow:hidden}.exact-footer img{display:block;width:100%;height:auto;max-height:none;object-fit:contain}.crisp-footer{margin-top:14px;border-top:1px solid #1e6091;border-bottom:1px solid #1e6091;background:linear-gradient(90deg,#071426,#0b1b35,#071426);padding:16px 22px;display:grid;grid-template-columns:1.25fr 1.7fr 1.35fr .65fr;gap:22px;align-items:center;position:relative;z-index:2}.cf-quote{font-size:13px;line-height:1.45;color:#e7eefc}.cf-brand{display:flex;align-items:center;justify-content:center;gap:12px}.cf-logo{width:54px;height:54px}.cf-title{font-size:20px;font-weight:800;white-space:nowrap}.cf-title .live{color:#17c964}.cf-dev{font-size:12px;color:#d7e3f5;margin-top:4px;text-align:center}.cf-flow{font-size:11px;font-weight:700;white-space:nowrap}.cf-flow .dot{color:#17c964;padding:0 7px}.cf-safe{font-size:11px;color:#d7e3f5;margin-top:8px;white-space:nowrap}.cf-copy{text-align:right;font-size:11px;color:#d7e3f5;line-height:1.7}.cf-flag{font-size:18px}@media(max-width:1100px){.crisp-footer{grid-template-columns:1fr 1fr}.cf-copy{text-align:left}}</style></head><body><div id="aplus-main-nav" style="padding:12px 20px;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #27334d;background:#0b1020">
 <a href="/" style="padding:9px 14px;border:1px solid #22d3ee;border-radius:9px;color:#9ffcff;text-decoration:none;font-weight:800;background:#0f2730">LIVE TRADING</a>
 <a href="/fno-market-watch" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">F&amp;O MARKET WATCH</a>
-<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
+<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>
+<a href="/chart-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CHART LAB</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
 <a href="/sector-performance" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTOR PERFORMANCE</a>
 <a href="/opening-structure" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">OPENING STRUCTURE</a>
 <a href="http://127.0.0.1:8766" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">TECHNICAL ALERTS</a><a href="/stock-charts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK CHARTS</a>
@@ -794,6 +795,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stock-alerts":
             body = json.dumps(stock_alerts_payload()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-lab", "/api/chart-lab", "/api/chart-lab-delta", "/api/chart-lab-symbols"):
+            import chart_lab
+            q = parse_query(self.path)
+            if path == "/chart-lab":
+                body = chart_lab.CHART_LAB_HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                if path == "/api/chart-lab":
+                    out = chart_lab.candles(q.get("symbol") or "", q.get("tf") or "5m")
+                elif path == "/api/chart-lab-delta":
+                    out = chart_lab.delta_payload(q.get("symbol") or "")
+                else:
+                    out = {"ok": True, "symbols": chart_lab.symbols()}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-analysis":
             body=STOCK_ANALYSIS_HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
