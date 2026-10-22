@@ -43,7 +43,7 @@ TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
 # "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
 #   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
-SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_", "tr_", "smc_", "chop_", "cat_", "oc_", "bu_", "sk_", "gs_", "pv_", "nf_", "fp_", "mb_", "pt_", "sp_", "settle_", "tk_", "orb_")      # copied from the candidate onto the trade record as they are
+SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_", "tr_", "smc_", "chop_", "cat_", "oc_", "bu_", "sk_", "gs_", "pv_", "nf_", "fp_", "mb_", "pt_", "sp_", "settle_", "tk_", "orb_", "q_")      # copied from the candidate onto the trade record as they are
 STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
                        "moverover": ("over", 0.5)}
 STOCK_STRUCTURE_SHADOWS = {"skorb": "sk_orb_level", "sksw": "sk_sw_level"}      # stock trades beyond its opening-range / 30-min swing level (see stock_stops.py)

@@ -1113,6 +1113,17 @@ class OpeningMomentumScanner:
                             continue
                     except Exception:         # noqa: BLE001 - a control file must never stop the scanner
                         pass
+                    try:                      # entry quality gate (see quality_gate.py): SHADOW tags the score, ENFORCE (APLUS_QUALITY_GATE_MODE) skips what does not pass
+                        import quality_gate
+                        if quality_gate.mode() != "OFF":
+                            _qn = quality_gate.passes_so_far(getattr(self.paper_journal, "trades", []), current_time.date().isoformat())
+                            _qv = quality_gate.evaluate(candidate_record, _qn)
+                            candidate_record.update(_qv)
+                            if quality_gate.mode() == "ENFORCE" and not _qv["q_pass"]:
+                                candidate.paper_trade_status = "QUALITY_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
                         candidate=candidate_record,
