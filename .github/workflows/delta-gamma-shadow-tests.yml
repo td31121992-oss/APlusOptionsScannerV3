@@ -1,0 +1,29 @@
+name: Delta Gamma Shadow Tests
+
+on:
+  pull_request:
+    paths:
+      - 'research/delta-gamma-flip-shadow/**'
+      - '.github/workflows/delta-gamma-shadow-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-shadow-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile isolated research files
+        working-directory: research/delta-gamma-flip-shadow
+        run: python -m py_compile delta_gamma_flip_shadow.py test_delta_gamma_flip_shadow.py shadow_data_audit.py test_shadow_data_audit.py
+      - name: Run isolated unit tests
+        working-directory: research/delta-gamma-flip-shadow
+        run: python -m unittest -v test_delta_gamma_flip_shadow.py test_shadow_data_audit.py
