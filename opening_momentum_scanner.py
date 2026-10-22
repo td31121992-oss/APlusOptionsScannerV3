@@ -1076,6 +1076,11 @@ class OpeningMomentumScanner:
                                 continue
                     except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
                         pass
+                    try:                      # shadow tag only: money flow of the stock and its sector, session and last 15 minutes (see mf_tags.py)
+                        import mf_tags
+                        candidate_record.update(mf_tags.mf_tags(str(candidate.symbol), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
                     try:                      # shadow tag only: how much of the stock's sector is moving our way (see sector_priority.py)
                         import sector_priority
                         candidate_record.update(sector_priority.sector_tags((fno_market_watch or {}).get("rows", []), str(candidate.symbol), candidate.direction))
