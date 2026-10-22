@@ -1118,6 +1118,16 @@ class OpeningMomentumScanner:
                             continue
                     except Exception:         # noqa: BLE001 - a control file must never stop the scanner
                         pass
+                    try:                      # canary gate (see canary_gate.py): SHADOW tags "allowed / would be blocked"; ENFORCE (APLUS_CANARY_MODE) skips a pile-on onto a side that is not working yet
+                        import canary_gate
+                        if canary_gate.mode() != "OFF":
+                            _cv = canary_gate.evaluate(getattr(self.paper_journal, "trades", []), candidate.direction, current_time)
+                            candidate_record.update(_cv)
+                            if canary_gate.mode() == "ENFORCE" and not _cv["cn_ok"]:
+                                candidate.paper_trade_status = "CANARY_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
                     try:                      # entry quality gate (see quality_gate.py): SHADOW tags the score, ENFORCE (APLUS_QUALITY_GATE_MODE) skips what does not pass
                         import quality_gate
                         if quality_gate.mode() != "OFF":
