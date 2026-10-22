@@ -41,7 +41,6 @@ def _rows_from_json(path: Path) -> list[dict[str, Any]]:
                 candidates = obj[key]
                 break
         if candidates is None and all(isinstance(v, dict) for v in obj.values()):
-            # Some journal state files are keyed by trade ID.
             candidates = list(obj.values())
         if candidates is None:
             raise ValueError("JSON object has no recognized trade list")
@@ -96,7 +95,6 @@ def summarize(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "duplicate_ids": len(nonblank) - len(set(nonblank)),
         "id_set": set(nonblank),
         "status_counts": dict(sorted(statuses.items())),
-        "rows_data": rows,
     }
 
 
@@ -107,12 +105,14 @@ def audit(root: Path) -> dict[str, Any]:
     errors: list[str] = []
     for path in discovered["csv"] + discovered["json"]:
         try:
-            report = summarize(path, _read_ledger(path))
-            ledger_reports.append(report)
-        except Exception as exc:  # malformed files must be visible in audit output
+            ledger_reports.append(summarize(path, _read_ledger(path)))
+        except Exception as exc:
             errors.append(f"{path}: {type(exc).__name__}: {exc}")
 
-    history_reports = [x for x in ledger_reports if Path(x["path"]).name.lower() in {"paper_trade_history.csv", "paper_trade_history.json"}]
+    history_reports = [
+        x for x in ledger_reports
+        if Path(x["path"]).name.lower() in {"paper_trade_history.csv", "paper_trade_history.json"}
+    ]
     reconciliation: list[dict[str, Any]] = []
     for i, left in enumerate(history_reports):
         for right in history_reports[i + 1:]:
@@ -141,8 +141,13 @@ def audit(root: Path) -> dict[str, Any]:
                     except json.JSONDecodeError as exc:
                         snapshot_errors.append(f"{path}:{line_no}: invalid JSON ({exc.msg})")
                         continue
+                    if not isinstance(item, dict):
+                        snapshot_errors.append(f"{path}:{line_no}: JSON record is not an object")
+                        continue
                     snapshot_lines += 1
-                    metadata = item.get("metadata", {}) if isinstance(item, dict) else {}
+                    metadata = item.get("metadata", {})
+                    if not isinstance(metadata, dict):
+                        metadata = {}
                     stamp = str(metadata.get("captured_at") or item.get("captured_at") or "")
                     symbol = str(metadata.get("symbol") or item.get("symbol") or "").strip().upper()
                     if stamp:
@@ -152,6 +157,12 @@ def audit(root: Path) -> dict[str, Any]:
         except Exception as exc:
             snapshot_errors.append(f"{path}: {type(exc).__name__}: {exc}")
 
+    ledger_integrity_ok = (
+        bool(ledger_reports)
+        and not errors
+        and all(report["blank_ids"] == 0 and report["duplicate_ids"] == 0 for report in ledger_reports)
+        and all(item["ids_match"] and item["count_match"] for item in reconciliation)
+    )
     return {
         "root": str(root),
         "files": {
@@ -160,8 +171,9 @@ def audit(root: Path) -> dict[str, Any]:
             "option_chain_snapshot_files": [str(p) for p in snapshot_files],
             "signal_snapshot_csv_files": [str(p) for p in discovered["signals"]],
         },
-        "ledgers": [{k: v for k, v in report.items() if k not in {"id_set", "rows_data"}} for report in ledger_reports],
+        "ledgers": [{k: v for k, v in report.items() if k != "id_set"} for report in ledger_reports],
         "history_reconciliation": reconciliation,
+        "ledger_integrity_ok": ledger_integrity_ok,
         "snapshot_coverage": {
             "files": len(snapshot_files),
             "valid_records": snapshot_lines,
@@ -170,11 +182,10 @@ def audit(root: Path) -> dict[str, Any]:
             "errors": snapshot_errors,
         },
         "errors": errors,
-        "ready_for_strategy_replay": bool(ledger_reports)
-            and not errors
-            and all(report["blank_ids"] == 0 and report["duplicate_ids"] == 0 for report in ledger_reports),
+        "ready_for_strategy_replay": ledger_integrity_ok and snapshot_lines > 0 and not snapshot_errors,
         "notes": [
             "This is a read-only inventory/reconciliation preflight, not a profitability backtest.",
+            "A clean ledger is not enough: timestamp-aligned historical option-chain snapshots are also required for the delta/gamma shadow replay.",
             "Trade history can only be reconciled against a dashboard/history export if that export is present under the scanned root.",
             "Option-chain open interest alone does not establish dealer positioning or dealer gamma sign.",
         ],
