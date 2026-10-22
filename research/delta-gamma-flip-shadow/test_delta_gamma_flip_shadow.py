@@ -27,7 +27,10 @@ class GreeksShadowTests(unittest.TestCase):
             {"strike":105,"iv":20,"time_years":0.1,"option_type":"PE","open_interest":1000,"lot_size":25,"dealer_position_sign":-1},
         ]
         result = estimate_gamma_flip(contracts, range(80,121,2))
-        self.assertIn(result["status"], {"ESTIMATED", "NO_CROSSING_IN_GRID"})
+        self.assertEqual(result["status"], "ESTIMATED")
+        self.assertIsNotNone(result["flip_level"])
+        self.assertGreaterEqual(result["flip_level"], 80)
+        self.assertLessEqual(result["flip_level"], 120)
         self.assertEqual(result["contract_count"], 2)
         self.assertEqual(len(result["curve"]), 21)
 
