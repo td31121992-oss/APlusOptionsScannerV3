@@ -763,6 +763,26 @@ document.getElementById("mgback").addEventListener("click",function(e){if(e.targ
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        """Every page except the main one is passed through page_skin so the whole dashboard shares one compact look; JSON, files and the main page go straight through."""
+        _p = urlparse(self.path).path
+        if _p == "/" or _p.startswith(("/api/", "/static/")) or _p.endswith((".json", ".csv", ".png", ".js", ".svg", ".ico", ".webmanifest")):
+            return self._do_GET()
+        import io
+        import page_skin
+        real, buf = self.wfile, io.BytesIO()
+        self.wfile = buf
+        try:
+            self._do_GET()
+        finally:
+            self.wfile = real
+        data = buf.getvalue()
+        try:
+            data = page_skin.filter_response(data, (self.headers.get("Host") or "127.0.0.1").split(":")[0])
+        except Exception:  # noqa: BLE001 - a styling problem must never break a page
+            pass
+        real.write(data)
+
+    def _do_GET(self):
         if not dashboard_access.is_allowed(self.client_address[0]):
             body = b"Forbidden: the APlus dashboard is limited to the local network."
             self.send_response(403); self.send_header("Content-Type","text/plain; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
