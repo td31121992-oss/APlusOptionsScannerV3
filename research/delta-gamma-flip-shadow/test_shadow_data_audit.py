@@ -22,10 +22,15 @@ class ShadowDataAuditTests(unittest.TestCase):
             (reports / "paper_trade_history.json").write_text(
                 json.dumps({"trade_count": 2, "paper_trades": rows}), encoding="utf-8"
             )
+            day = root / "data" / "options_intelligence" / "2026-10-22"
+            day.mkdir(parents=True)
+            snapshot = {"metadata": {"captured_at": "2026-10-22T09:30:00+05:30", "symbol": "TCS"}, "rows": []}
+            (day / "option_chain_snapshots.jsonl").write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
             result = audit(root)
             self.assertEqual(len(result["ledgers"]), 2)
-            self.assertEqual(result["history_reconciliation"][0]["ids_match"], True)
-            self.assertEqual(result["history_reconciliation"][0]["count_match"], True)
+            self.assertTrue(result["history_reconciliation"][0]["ids_match"])
+            self.assertTrue(result["history_reconciliation"][0]["count_match"])
+            self.assertTrue(result["ledger_integrity_ok"])
             self.assertTrue(result["ready_for_strategy_replay"])
 
     def test_flags_duplicate_and_blank_ids(self):
@@ -40,6 +45,7 @@ class ShadowDataAuditTests(unittest.TestCase):
             ledger = result["ledgers"][0]
             self.assertEqual(ledger["duplicate_ids"], 1)
             self.assertEqual(ledger["blank_ids"], 1)
+            self.assertFalse(result["ledger_integrity_ok"])
             self.assertFalse(result["ready_for_strategy_replay"])
 
     def test_reads_option_chain_jsonl_coverage(self):
@@ -53,12 +59,14 @@ class ShadowDataAuditTests(unittest.TestCase):
             self.assertEqual(result["snapshot_coverage"]["valid_records"], 1)
             self.assertEqual(result["snapshot_coverage"]["dates"], ["2026-10-22"])
             self.assertEqual(result["snapshot_coverage"]["symbols"], ["TCS"])
+            self.assertFalse(result["ready_for_strategy_replay"])
 
     def test_missing_runtime_data_is_reported_not_invented(self):
         with tempfile.TemporaryDirectory() as temp:
             result = audit(Path(temp))
             self.assertEqual(result["ledgers"], [])
             self.assertEqual(result["snapshot_coverage"]["valid_records"], 0)
+            self.assertFalse(result["ledger_integrity_ok"])
             self.assertFalse(result["ready_for_strategy_replay"])
 
 
