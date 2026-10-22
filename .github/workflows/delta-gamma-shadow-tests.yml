@@ -22,7 +22,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile isolated research files
-        run: python -m py_compile research/delta-gamma-flip-shadow/delta_gamma_flip_shadow.py research/delta-gamma-flip-shadow/test_delta_gamma_flip_shadow.py
+        working-directory: research/delta-gamma-flip-shadow
+        run: python -m py_compile delta_gamma_flip_shadow.py test_delta_gamma_flip_shadow.py shadow_data_audit.py test_shadow_data_audit.py
       - name: Run isolated unit tests
         working-directory: research/delta-gamma-flip-shadow
-        run: python -m unittest -v test_delta_gamma_flip_shadow.py
+        run: python -m unittest -v test_delta_gamma_flip_shadow.py test_shadow_data_audit.py
