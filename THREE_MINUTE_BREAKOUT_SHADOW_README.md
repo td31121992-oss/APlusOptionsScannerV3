@@ -33,3 +33,23 @@ existing shortlist and a separate, budgeted 1-minute request path. Validate same
 volume from at least five prior sessions, timestamp/session boundaries, false breaks,
 follow-through, MFE/MAE and missed candidates. Do not change the current entry gate,
 paper-trade journal, or order behaviour during validation.
+
+
+## Historical replay runner (read-only)
+The branch also includes:
+- `run_three_minute_breakout_shadow_replay.py`: downloads up to 30 calendar days of 1-minute underlying OHLCV using the existing Upstox client, aggregates complete 3-minute bars, runs the classifier, and records candidate outcomes.
+- `run_three_minute_breakout_shadow_replay.bat`: Windows launcher; uses the repository virtual environment when present.
+
+Run from the repository root after pulling this research branch:
+```powershell
+.\.venv\Scripts\python.exe .\run_three_minute_breakout_shadow_replay.py --days 28
+```
+For a small connectivity check, use `--limit 5`; this is not a complete-universe replay.
+Outputs are written under `data/three_minute_shadow_replay/`: raw 1m OHLCV, aggregated 3m OHLCV, candidate/outcome CSV and JSONL, and `summary.json` with per-symbol coverage and failures. The script never writes to the production paper-trade journal and all candidate records carry `shadow_only=true` and `trade_authorized=false`.
+
+Interpretation safeguards:
+- Historical 1-minute candles are retrieved for a maximum of 30 calendar days per run because the Upstox V3 API's 1–15 minute historical retrieval limit is one month.
+- Relative volume is matched by actual 3-minute wall-clock slot and requires at least five prior sessions; missing slot data does not count as a match.
+- Forward outcomes stop at missing 3-minute buckets and require five consecutive future bars for a complete 5-bar outcome.
+- The current script measures underlying-stock movement (MFE/MAE and horizon close return), not option-premium return, slippage, brokerage, or net P&L.
+- Do not claim profitability or consider production integration until `summary.json` shows adequate data coverage and outcomes are independently reconciled.
