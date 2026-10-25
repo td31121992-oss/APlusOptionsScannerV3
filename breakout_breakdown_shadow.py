@@ -228,6 +228,16 @@ def evaluate_forward_outcome(
     if entry_price <= 0 or horizon_bars < 1:
         raise ValueError("entry_price and horizon_bars must be positive")
     window = list(future_bars[:horizon_bars])
+    if signal.timestamp:
+        try:
+            signal_time = _ist(datetime.fromisoformat(signal.timestamp))
+        except (TypeError, ValueError):
+            raise ValueError("signal.timestamp must be a valid ISO timestamp")
+        normalised_times = [_ist(bar.timestamp) for bar in window]
+        if any(ts <= signal_time for ts in normalised_times):
+            raise ValueError("future_bars must occur strictly after the signal timestamp")
+        if any(a >= b for a, b in zip(normalised_times, normalised_times[1:])):
+            raise ValueError("future_bars must be in strictly increasing timestamp order")
     if not window or signal.direction not in {"BULLISH", "BEARISH"}:
         return {"outcome": "PENDING_OR_NOT_DIRECTIONAL", "bars_observed": len(window),
                 "mfe_percent": None, "mae_percent": None, "close_return_percent": None}
