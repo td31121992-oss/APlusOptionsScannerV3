@@ -167,11 +167,16 @@ def main() -> int:
                 cumulative_pv += ((bar.high + bar.low + bar.close) / 3.0) * bar.volume
                 cumulative_volume += bar.volume
                 vwap = cumulative_pv / cumulative_volume if cumulative_volume > 0 else None
+                # Match the actual wall-clock slot, not list index: missing buckets
+                # are omitted by the aggregator and must not shift historical baselines.
+                slot = bar.timestamp.strftime("%H:%M")
                 prior_slot_volumes = []
                 for prior_day in prior_days:
                     prior_bars = day_map[prior_day]
-                    if len(prior_bars) > i:
-                        prior_slot_volumes.append(prior_bars[i].volume)
+                    match = next((pb for pb in prior_bars
+                                  if pb.timestamp.strftime("%H:%M") == slot), None)
+                    if match is not None:
+                        prior_slot_volumes.append(match.volume)
                 relvol = same_slot_relative_volume(
                     bar.volume, prior_slot_volumes, minimum_sessions=args.min_history_sessions
                 )
