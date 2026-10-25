@@ -186,8 +186,16 @@ def main() -> int:
                 if signal.direction not in {"BULLISH", "BEARISH"}:
                     continue
                 future = bars[i + 1:i + 6]
+                # Never treat bars separated by missing 3m buckets as consecutive horizons.
+                contiguous = []
+                expected_ts = bar.timestamp + timedelta(minutes=3)
+                for future_bar in future:
+                    if future_bar.timestamp != expected_ts:
+                        break
+                    contiguous.append(future_bar)
+                    expected_ts += timedelta(minutes=3)
                 outcome = evaluate_forward_outcome(
-                    signal=signal, entry_price=bar.close, future_bars=future, horizon_bars=5
+                    signal=signal, entry_price=bar.close, future_bars=contiguous, horizon_bars=5
                 )
                 candidates.append({
                     "symbol": symbol, "date": day, "timestamp": signal.timestamp,
