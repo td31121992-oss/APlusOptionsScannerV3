@@ -67,6 +67,18 @@ class ClassifierTests(unittest.TestCase):
     def test_insufficient_bars(self):
         self.assertEqual(classify_breakout_breakdown(symbol="TCS",bars=[b(0,100,101,99,100)],relative_volume=2,vwap=100).verdict,"DATA_INSUFFICIENT")
 
+    def test_outcome_rejects_lookahead_bars(self):
+        bars=[b(i,100,101,99,100.5) for i in range(5)]+[b(5,100.5,104,100,103.8)]
+        s=classify_breakout_breakdown(symbol="TCS",bars=bars,relative_volume=2,vwap=101)
+        with self.assertRaisesRegex(ValueError, "strictly after"):
+            evaluate_forward_outcome(signal=s,entry_price=103,future_bars=[b(5,103,106,102,105)])
+
+    def test_outcome_rejects_out_of_order_bars(self):
+        bars=[b(i,100,101,99,100.5) for i in range(5)]+[b(5,100.5,104,100,103.8)]
+        s=classify_breakout_breakdown(symbol="TCS",bars=bars,relative_volume=2,vwap=101)
+        with self.assertRaisesRegex(ValueError, "in strictly increasing"):
+            evaluate_forward_outcome(signal=s,entry_price=103,future_bars=[b(7,103,106,102,105),b(6,105,106,101,102)])
+
     def test_outcome_and_jsonl_ledger(self):
         bars=[b(i,100,101,99,100.5) for i in range(5)]+[b(5,100.5,104,100,103.8)]
         s=classify_breakout_breakdown(symbol="TCS",bars=bars,relative_volume=2,vwap=101)
