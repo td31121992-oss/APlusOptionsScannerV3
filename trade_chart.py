@@ -67,6 +67,13 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+    if not cid:
+        # APlus worktrees may intentionally omit .env. Reuse the shared
+        # CAlphaTrader client ID, matching dhan_auth's shared-token authority.
+        from dhan_auth import SHARED_ENV_PATH
+        from dotenv import dotenv_values
+
+        cid = str(dotenv_values(SHARED_ENV_PATH).get("DHAN_CLIENT_ID") or "").strip()
     token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
     # Start the window at 09:00, before the open: Dhan drops the first minute when it starts exactly at the open, and the first candle then loses the real open and low.
     from datetime import date as _date, timedelta as _td
@@ -96,6 +103,13 @@ def _headers() -> dict[str, str]:
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+    if not cid:
+        # APlus worktrees may intentionally omit .env. Reuse the shared
+        # CAlphaTrader client ID, matching dhan_auth's shared-token authority.
+        from dhan_auth import SHARED_ENV_PATH
+        from dotenv import dotenv_values
+
+        cid = str(dotenv_values(SHARED_ENV_PATH).get("DHAN_CLIENT_ID") or "").strip()
     token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
     return {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
 
