@@ -148,19 +148,22 @@ def build_rows(candidates, train_dates):
 
 
 def apply_overlap_control(rows, min_gap_bars=NON_OVERLAP_BARS):
-    """Mark eligible rows after spacing signals within symbol/session/side/variant."""
+    """Mark all horizon rows consistently while spacing signals within symbol/session/side/filter."""
     chosen = defaultdict(list)
-    for row in sorted(rows, key=lambda r: (r["symbol"], r["session_date"], r["side"],
-                                           r["filter_variant"], r["signal_timestamp"])):
+    decisions = {}
+    ordered = sorted(rows, key=lambda r: (r["symbol"], r["session_date"], r["side"],
+                                          r["filter_variant"], r["signal_timestamp"], r["horizon_bars"]))
+    for row in ordered:
         key = (row["symbol"], row["session_date"], row["side"], row["filter_variant"])
-        # Pullback variants can enter later, but signal spacing is based on original signal bars.
-        index = int(row["signal_index"])
-        accepted = not chosen[key] or index - chosen[key][-1] >= min_gap_bars
-        row["non_overlapping"] = accepted
-        if accepted:
-            chosen[key].append(index)
+        signal_key = key + (row["signal_timestamp"],)
+        if signal_key not in decisions:
+            index = int(row["signal_index"])
+            accepted = not chosen[key] or index - chosen[key][-1] >= min_gap_bars
+            decisions[signal_key] = accepted
+            if accepted:
+                chosen[key].append(index)
+        row["non_overlapping"] = decisions[signal_key]
     return rows
-
 
 def summarize(rows):
     if not rows:
