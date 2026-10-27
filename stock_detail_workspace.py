@@ -27,7 +27,7 @@ iframe{width:100%;border:0;background:var(--bg);display:block}.chartFrame{height
 @media(max-width:1000px){.layout{grid-template-columns:1fr}.chartFrame{height:500px}.analysisFrame{height:650px}.lower{grid-template-columns:1fr}}
 </style></head><body>
 <header><div><h1 id="heading">Stock Workspace</h1><div class="muted">Unified view • chart + stock analysis + supporting context • read-only</div></div>
-<div class="toolbar"><input id="symbol" placeholder="Stock symbol" value="MANKIND"><button id="open">Open stock</button><a class="pill" href="/">Dashboard</a><span class="status" id="status">Loading…</span></div></header>
+<div class="toolbar"><input id="symbol" placeholder="Stock symbol" value="MANKIND"><button id="open">Open stock</button><a class="pill" href="/">Dashboard</a><a class="pill" href="/orderflow-profile">Order Flow / Volume Profile</a><span class="status" id="status">Loading…</span></div></header>
 <main class="layout">
 <section class="panel"><h2><span>Intraday chart & levels</span><span class="muted">existing chart engine</span></h2><iframe id="chart" class="chartFrame" title="Stock intraday chart"></iframe></section>
 <section class="panel"><h2><span>Stock analysis</span><span class="muted">technical • order flow • why moving</span></h2><iframe id="analysis" class="analysisFrame" title="Stock analysis"></iframe></section>
