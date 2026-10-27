@@ -2,10 +2,17 @@
 import argparse
 import csv
 import json
+import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, median
+
+# When executed as "python scripts/offline_breakout_validation.py", Python puts
+# the scripts directory (not the repository root) first on sys.path.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.offline_breakout_replay import (
     DEFAULT_DATA, DEFAULT_OUT, HORIZONS, evaluate_signal, find_signals, load_candles, session_key,
