@@ -6,6 +6,7 @@ on:
     paths:
       - "stock_detail_workspace.py"
       - "stock_chart.py"
+      - "trade_chart.py"
       - "stock_analysis_tab.py"
       - "stock_chart_dashboard_module.py"
       - "aplus_live_pnl_dashboard.py"
@@ -33,6 +34,7 @@ jobs:
           analysis = Path("stock_analysis_tab.py").read_text(encoding="utf-8")
           dashboard = Path("aplus_live_pnl_dashboard.py").read_text(encoding="utf-8")
           module = Path("stock_chart_dashboard_module.py").read_text(encoding="utf-8")
+          trade_chart = Path("trade_chart.py").read_text(encoding="utf-8")
           checks = {
               "workspace route exists": 'if path == "/stock-detail":' in dashboard,
               "workspace embeds selected symbol in chart": "'/stock-chart?symbol='" in workspace,
@@ -40,6 +42,10 @@ jobs:
               "chart reads symbol query": 'get("symbol")' in chart,
               "analysis reads symbol query": 'params.get("symbol")' in analysis,
               "stock chart selection opens workspace": '"/stock-detail?symbol="' in module,
+              "stock chart appears before option chart": trade_chart.index('id="stkCard"') < trade_chart.index('id="optCard"'),
+              "5m 15m and 1h timeframe controls exist": all(f'data-interval="{tf}"' in trade_chart for tf in ("5", "15", "60")),
+              "EMA SMA and VWAP overlays are selectable": all(f'data-ind="{ind}"' in trade_chart for ind in ("ema9", "sma20", "vwap")),
+              "per-chart fullscreen control exists": "function expandCard(id)" in trade_chart,
               "context API routes exist": all(f'path == "{p}"' in dashboard for p in (
                   "/api/stock-trend", "/api/why-moving", "/api/catalyst"
               )),
