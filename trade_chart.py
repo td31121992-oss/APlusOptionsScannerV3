@@ -79,8 +79,10 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
     if r.status_code != 200:
         return []
     d = r.json()
-    return [{"t": int(ts) + 19800, "o": float(o), "h": float(h), "l": float(l), "c": float(c)}      # +5:30 so the chart axis shows IST
-            for ts, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or [])
+    timestamps = d.get("timestamp") or []
+    volumes = d.get("volume") or [0] * len(timestamps)
+    return [{"t": int(ts) + 19800, "o": float(o), "h": float(h), "l": float(l), "c": float(c), "v": float(v or 0)}  # +5:30 so the chart axis shows IST
+            for ts, o, h, l, c, v in zip(timestamps, d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or [], volumes)
             if datetime.fromtimestamp(int(ts), IST).date().isoformat() == day]
 
 
