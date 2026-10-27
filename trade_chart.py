@@ -262,7 +262,7 @@ TRADE_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><tit
 .head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:baseline;margin:6px 0 10px}h1{font-size:22px;margin:0}
 .pill{border-radius:999px;padding:3px 10px;font-size:12px;font-weight:800}.pill.open{background:#12351f;color:var(--green)}.pill.closed{background:#2a3350;color:#9fb3ff}
 .pos{color:var(--green)}.neg{color:var(--red)}.sub{color:var(--muted);font-size:12.5px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.toolbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:10px 0}.toolbar button,.toolbar label{background:#121a2d;color:#e7eefc;border:1px solid #27334d;border-radius:8px;padding:7px 10px;font-weight:700;cursor:pointer}.toolbar button.on{border-color:#2ecc71;color:#2ecc71}.toolbar label{font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:900px){.grid{grid-template-columns:1fr}}.card:fullscreen{background:#0b1020;padding:14px;overflow:auto}.card:fullscreen .chart{height:calc(100vh - 135px)}.card h2{display:flex;justify-content:space-between;gap:8px;align-items:center}.expand{font-size:12px;background:#0f1729;color:#e7eefc;border:1px solid #27334d;border-radius:7px;padding:5px 8px;cursor:pointer}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}.card h2{font-size:15px;margin:0 0 6px}
 .chart{height:420px}.lv{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:13px}.lv span b{font-weight:800}
 .lv .sl b{color:var(--red)}.lv .t b{color:var(--green)}.lv .e b{color:var(--amber)}
@@ -279,8 +279,9 @@ table.ind td:last-child{text-align:right;font-weight:700}.bull{color:var(--green
 </style></head><body><div class="wrap">
 <div><a href="/positions">&larr; Positions</a> &nbsp; <a href="/">Dashboard</a></div>
 <div class="head"><div><h1 id="title">Trade</h1><div class="sub" id="meta">loading...</div></div><div style="text-align:right"><div id="pnl" style="font-size:24px;font-weight:800"></div><div class="sub" id="state"></div></div></div>
-<div class="grid"><div class="card"><h2 id="optTitle">Option (5-minute)</h2><div class="chart" id="optChart"></div><div class="lv" id="optLv"></div></div>
-<div class="card"><h2 id="stkTitle">Stock (5-minute)</h2><div class="chart" id="stkChart"></div><div class="lv" id="stkLv"></div></div></div>
+<div class="toolbar" id="chartTools"><b>Timeframe:</b><button class="on" data-interval="5">5 min</button><button data-interval="15">15 min</button><button data-interval="60">1 hour</button><span style="width:8px"></span><b>Indicators:</b><label><input type="checkbox" data-ind="ema9" checked> EMA 9</label><label><input type="checkbox" data-ind="sma20"> SMA 20</label><label><input type="checkbox" data-ind="vwap"> VWAP</label></div>
+<div class="grid"><div class="card" id="stkCard"><h2><span id="stkTitle">Stock (5-minute)</span><button class="expand" onclick="expandCard('stkCard')">⛶ Full screen</button></h2><div class="chart" id="stkChart"></div><div class="lv" id="stkLv"></div></div>
+<div class="card" id="optCard"><h2><span id="optTitle">Option (5-minute)</span><button class="expand" onclick="expandCard('optCard')">⛶ Full screen</button></h2><div class="chart" id="optChart"></div><div class="lv" id="optLv"></div></div></div>
 <div class="grid3" id="trendRow" style="display:none">
 <div class="card"><h2>Stock trend</h2><div class="tabs" id="trTabs"></div><div id="gauge"></div><div id="gaugeLbl" class="glbl"></div><div class="counts" id="trCounts"></div></div>
 <div class="card"><h2>Tech indicators <span class="sub" id="trTf"></span></h2><table class="ind" id="indTbl"></table></div>
@@ -288,9 +289,14 @@ table.ind td:last-child{text-align:right;font-weight:700}.bull{color:var(--green
 </div>
 <div class="note">Lines: yellow = entry, red = stop loss, green = targets 1-3, gold dotted = the trade's own high (best point since entry) with its time. The marker shows the entry candle and entry time. Paper trade; read-only. Charts refresh every 15 seconds.</div>
 </div><script>
-var id=new URLSearchParams(location.search).get("id")||"",charts={};
+var id=new URLSearchParams(location.search).get("id")||"",charts={},rawData=null,interval=5,indicators={ema9:true,sma20:false,vwap:false};
+function expandCard(id){var el=document.getElementById(id);if(document.fullscreenElement){document.exitFullscreen()}else if(el.requestFullscreen){el.requestFullscreen()}setTimeout(resizeCharts,250)}
+function resizeCharts(){Object.keys(charts).forEach(function(k){var el=document.getElementById(k==="stk"?"stkChart":"optChart");charts[k].chart.applyOptions({width:el.clientWidth,height:el.clientHeight})})}
+function aggregate(a,n){if(n===5)return a||[];var out=[];(a||[]).forEach(function(x){var bucket=Math.floor((x.t%86400)/60/n),key=Math.floor(x.t/86400)*86400+bucket*n*60,z=out[out.length-1];if(!z||z._key!==key)out.push({_key:key,t:key,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v||0});else{z.h=Math.max(z.h,x.h);z.l=Math.min(z.l,x.l);z.c=x.c;z.v=(z.v||0)+(x.v||0)}});return out.map(function(x){delete x._key;return x})}
+function calcLine(a,kind){var out=[],sum=0,vol=0,ema=null,alpha=2/10;(a||[]).forEach(function(x,i){if(kind==="ema9"){ema=ema===null?x.c:alpha*x.c+(1-alpha)*ema;if(i>=8)out.push({time:x.t,value:ema})}else if(kind==="sma20"&&i>=19){var ss=0;for(var j=i-19;j<=i;j++)ss+=a[j].c;out.push({time:x.t,value:ss/20})}else if(kind==="vwap"){var typ=(x.h+x.l+x.c)/3;vol+=Number(x.v||1);sum+=typ*Number(x.v||1);out.push({time:x.t,value:sum/vol})}});return out}
+function redrawAll(){if(!rawData)return;var d=rawData,tf=interval===60?"1-hour":interval+"-minute";document.getElementById("optTitle").textContent="Option - "+d.option_label+" ("+tf+")";document.getElementById("stkTitle").textContent="Stock - "+d.symbol+" ("+tf+")";var om=aggregate(d.option,interval),sm=aggregate(d.stock,interval),tm=d.trade_marks||{};fill("stk","stkChart",sm,d.levels.stock,d.entry_epoch,d.stock_marks,tm.stock,d.entry_hm,tm.stock_is_high!==false);fill("opt","optChart",om,d.levels.option,d.entry_epoch,[],tm.option,d.entry_hm,true);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);["stk","opt"].forEach(function(k){var a=k==="stk"?sm:om,o=charts[k];Object.keys(o.indSeries||{}).forEach(function(n){o.chart.removeSeries(o.indSeries[n])});o.indSeries={};Object.keys(indicators).forEach(function(n){if(!indicators[n])return;var z=o.chart.addLineSeries({color:n==="ema9"?"#22d3ee":n==="sma20"?"#f5b942":"#b86bff",lineWidth:2,priceLineVisible:false,lastValueVisible:false,title:n.toUpperCase()});z.setData(calcLine(a,n));o.indSeries[n]=z})})}
 function mk(el){var c=LightweightCharts.createChart(document.getElementById(el),{layout:{background:{color:"#121a2d"},textColor:"#8ea0bd"},grid:{vertLines:{color:"#1d2842"},horzLines:{color:"#1d2842"}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:"#27334d"},rightPriceScale:{borderColor:"#27334d"},autoSize:true});
- var s=c.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"});return{chart:c,series:s,lines:[]}}
+ var s=c.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"});return{chart:c,series:s,lines:[],indSeries:{}}}
 function fill(k,el,candles,lv,entry,xm,tm,entryHm,isHigh){if(!charts[k])charts[k]=mk(el);var o=charts[k];xm=(xm||[]).slice();
  o.series.setData((candles||[]).map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));
  o.lines.forEach(function(l){o.series.removePriceLine(l)});o.lines=[];var ps=[],mkr=[];
@@ -340,6 +346,6 @@ function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-s
  TREND=d;drawTrend();var tmk=d.trade_marks||{};fill("opt","optChart",d.option,d.levels.option,d.entry_epoch,[],tmk.option,d.entry_hm,true);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks,tmk.stock,d.entry_hm,tmk.stock_is_high!==false);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
  if(!d.option.length&&!d.stock.length)document.getElementById("meta").textContent+=" - no candles yet";
  }).catch(function(){document.getElementById("meta").textContent="connection lost - retrying"})}
-load();setInterval(load,15000);
+document.querySelectorAll("[data-interval]").forEach(function(b){b.onclick=function(){interval=Number(b.dataset.interval);document.querySelectorAll("[data-interval]").forEach(function(x){x.classList.toggle("on",x===b)});redrawAll()}});document.querySelectorAll("[data-ind]").forEach(function(c){c.onchange=function(){indicators[c.dataset.ind]=c.checked;redrawAll()}});document.addEventListener("fullscreenchange",function(){setTimeout(resizeCharts,100)});load();setInterval(load,15000);
 </script></body></html>
 """
