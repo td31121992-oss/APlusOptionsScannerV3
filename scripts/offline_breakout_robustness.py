@@ -27,6 +27,13 @@ def parse_timestamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def comparable_timestamps(left, right):
+    """Only compare timestamps when both have the same timezone-awareness."""
+    if left is None or right is None:
+        return False
+    return (left.tzinfo is None) == (right.tzinfo is None)
+
+
 def load_events(path):
     with Path(path).open("r", newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
@@ -48,17 +55,18 @@ def summarize(rows):
                if row.get("directional_return_pct") not in ("", None)]
     if not returns:
         return {"n": 0}
-    ordered = sorted(returns)
     winners = [value for value in returns if value > 0]
     total_positive = sum(winners)
     top_winners = sorted(winners, reverse=True)
+    mfe_values = [float(r["mfe_pct"]) for r in rows if r.get("mfe_pct") not in ("", None)]
+    mae_values = [float(r["mae_pct"]) for r in rows if r.get("mae_pct") not in ("", None)]
     return {
         "n": len(returns),
         "positive_pct": round(100 * len(winners) / len(returns), 2),
         "mean_return_pct": round(mean(returns), 5),
         "median_return_pct": round(median(returns), 5),
-        "mean_mfe_pct": round(mean(float(r["mfe_pct"]) for r in rows if r.get("mfe_pct") not in ("", None)), 5),
-        "mean_mae_pct": round(mean(float(r["mae_pct"]) for r in rows if r.get("mae_pct") not in ("", None)), 5),
+        "mean_mfe_pct": round(mean(mfe_values), 5) if mfe_values else None,
+        "mean_mae_pct": round(mean(mae_values), 5) if mae_values else None,
         "top_1_winner_share_of_positive_returns_pct": round(100 * top_winners[0] / total_positive, 2) if total_positive > 0 else None,
         "top_5_winners_share_of_positive_returns_pct": round(100 * sum(top_winners[:5]) / total_positive, 2) if total_positive > 0 else None,
         "positive_return_sum_pct": round(total_positive, 5),
@@ -79,15 +87,11 @@ def build_report(rows):
             groups[split] = summarize(group)
         test_group = [r for r in test_spaced if int(r["interval_minutes"]) == interval and r["side"] == side
                       and int(r["horizon_bars"]) == horizon and r["filter_variant"] == variant]
-        symbol_rows = []
-        by_symbol = defaultdict(list)
-        by_session = defaultdict(list)
+        by_symbol, by_session = defaultdict(list), defaultdict(list)
         for row in test_group:
             by_symbol[row["symbol"]].append(row)
             by_session[row["session_date"]].append(row)
-        for symbol, group in by_symbol.items():
-            s = summarize(group)
-            symbol_rows.append({"symbol": symbol, **s})
+        symbol_rows = [{"symbol": symbol, **summarize(group)} for symbol, group in by_symbol.items()]
         session_stats = [summarize(group) for group in by_session.values()]
         candidate_reports.append({
             "interval_minutes": interval, "side": side, "horizon_bars": horizon,
@@ -107,8 +111,8 @@ def build_report(rows):
 
     stamps, offsets, naive = [], set(), 0
     invalid_order = 0
+    incomparable_order_checks = 0
     session_counts = defaultdict(int)
-    file_symbols = defaultdict(set)
     for row in rows:
         for field in ("signal_timestamp", "entry_timestamp", "exit_timestamp"):
             stamp = parse_timestamp(row.get(field, ""))
@@ -120,17 +124,24 @@ def build_report(rows):
                     offsets.add(str(stamp.utcoffset()))
         if row.get("session_date"):
             session_counts[row["session_date"]] += 1
-            file_symbols[row["session_date"]].add(row.get("symbol", ""))
         signal = parse_timestamp(row.get("signal_timestamp", ""))
         entry = parse_timestamp(row.get("entry_timestamp", ""))
         exit_ = parse_timestamp(row.get("exit_timestamp", ""))
-        if signal and entry and entry < signal:
-            invalid_order += 1
-        if entry and exit_ and exit_ <= entry:
-            invalid_order += 1
+        if signal and entry:
+            if comparable_timestamps(signal, entry):
+                if entry < signal:
+                    invalid_order += 1
+            else:
+                incomparable_order_checks += 1
+        if entry and exit_:
+            if comparable_timestamps(entry, exit_):
+                if exit_ <= entry:
+                    invalid_order += 1
+            else:
+                incomparable_order_checks += 1
     dates = sorted(session_counts)
     session_gaps = []
-    # This checks calendar-date gaps only; weekends/holidays are not classified.
+    # Calendar gaps are for review only; weekends and exchange holidays are not classified.
     for left, right in zip(dates, dates[1:]):
         delta = (datetime.fromisoformat(right) - datetime.fromisoformat(left)).days
         if delta > 1:
@@ -147,6 +158,7 @@ def build_report(rows):
             "explicit_utc_offsets_seen": sorted(offsets),
             "mixed_naive_and_offset_aware": bool(naive and offsets),
             "invalid_signal_entry_exit_order_count": invalid_order,
+            "incomparable_timezone_order_checks_skipped": incomparable_order_checks,
             "session_dates_seen": len(dates),
             "first_session_date": dates[0] if dates else None,
             "last_session_date": dates[-1] if dates else None,
@@ -156,9 +168,10 @@ def build_report(rows):
         "candidate_results": candidate_reports,
         "limitations": [
             "Underlying directional returns are not options P&L and ignore costs, spreads, slippage and fill mechanics.",
-            "Symbols and sessions are correlated; symbol/session counts are robustness diagnostics, not independent statistical trials.",
-            "Top-winner contribution uses the sum of positive underlying returns, not portfolio profit attribution.",
-            "Pullback entries are selected using later candles; evaluate the pullback variant as a distinct entry rule, not as if entry occurred at the original signal.",
+            "Symbols and sessions are correlated; symbol/session counts are diagnostics, not independent statistical trials.",
+            "Top-winner contribution uses positive underlying percentage returns, not portfolio profit attribution.",
+            "Pullback entries occur after the original signal and must be evaluated as a distinct entry rule.",
+            "Timezone-incomparable timestamp pairs are flagged by the audit and excluded from ordering comparisons.",
             "This script does not modify scanner, broker, order, paper journal, or risk settings.",
         ],
     }
