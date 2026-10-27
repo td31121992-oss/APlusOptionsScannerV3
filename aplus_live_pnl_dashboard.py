@@ -829,6 +829,10 @@ class Handler(BaseHTTPRequestHandler):
                     out = {"ok": True, "symbols": chart_lab.symbols()}
                 body = json.dumps(out).encode("utf-8"); ctype = "application/json"
             self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/stock-detail":
+            import stock_detail_workspace
+            body=stock_detail_workspace.STOCK_DETAIL_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-analysis":
             body=STOCK_ANALYSIS_HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -1043,7 +1047,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(snapshot()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         import dashboard_skin
-        body = dashboard_skin.inject(index_strip.inject(_mobileize_html(HTML, self.headers.get("Host","127.0.0.1").split(":")[0]))).encode("utf-8")
+        _main_html = _mobileize_html(HTML, self.headers.get("Host","127.0.0.1").split(":")[0])
+        _main_html = _main_html.replace("/stock-analysis?symbol=", "/stock-detail?symbol=")
+        body = dashboard_skin.inject(index_strip.inject(_main_html)).encode("utf-8")
         self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
         def reply(code, payload):
