@@ -1,0 +1,51 @@
+name: Unified stock workspace checks
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "stock_detail_workspace.py"
+      - "stock_chart.py"
+      - "stock_analysis_tab.py"
+      - "stock_chart_dashboard_module.py"
+      - "aplus_live_pnl_dashboard.py"
+      - ".github/workflows/unified-stock-workspace-check.yml"
+  push:
+    branches: [feature/unified-stock-detail-workspace]
+
+jobs:
+  compile-and-route-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile changed Python modules
+        run: |
+          python -m py_compile stock_detail_workspace.py stock_chart.py stock_analysis_tab.py stock_chart_dashboard_module.py aplus_live_pnl_dashboard.py
+      - name: Verify unified workspace wiring
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          workspace = Path("stock_detail_workspace.py").read_text(encoding="utf-8")
+          chart = Path("stock_chart.py").read_text(encoding="utf-8")
+          analysis = Path("stock_analysis_tab.py").read_text(encoding="utf-8")
+          dashboard = Path("aplus_live_pnl_dashboard.py").read_text(encoding="utf-8")
+          module = Path("stock_chart_dashboard_module.py").read_text(encoding="utf-8")
+          checks = {
+              "workspace route exists": 'if path == "/stock-detail":' in dashboard,
+              "workspace embeds selected symbol in chart": "'/stock-chart?symbol='" in workspace,
+              "workspace embeds selected symbol in analysis": "'/stock-analysis?symbol='" in workspace,
+              "chart reads symbol query": 'get("symbol")' in chart,
+              "analysis reads symbol query": 'params.get("symbol")' in analysis,
+              "stock chart selection opens workspace": '"/stock-detail?symbol="' in module,
+              "context API routes exist": all(f'path == "{p}"' in dashboard for p in (
+                  "/api/stock-trend", "/api/why-moving", "/api/catalyst"
+              )),
+          }
+          for name, ok in checks.items():
+              print(("PASS" if ok else "FAIL") + ": " + name)
+          if not all(checks.values()):
+              raise SystemExit(1)
+          PY
