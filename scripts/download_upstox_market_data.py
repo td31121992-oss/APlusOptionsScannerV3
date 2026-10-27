@@ -11,16 +11,16 @@ MASTER = "https://assets.upstox.com/market-quote/instruments/exchange/complete.j
 API = "https://api.upstox.com/v3/historical-candle"
 
 def token_from_env():
-    token = os.getenv("UPSTOX_ACCESS_TOKEN") or os.getenv("UPSTOX_API_ACCESS_TOKEN")
+    token = os.getenv("UPSTOX_ANALYTICS_TOKEN") or os.getenv("UPSTOX_ACCESS_TOKEN") or os.getenv("UPSTOX_API_ACCESS_TOKEN")
     if token: return token.strip()
     env = ROOT / ".env"
     if env.exists():
         for line in env.read_text(encoding="utf-8-sig").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
-                if key.strip() in ("UPSTOX_ACCESS_TOKEN", "UPSTOX_API_ACCESS_TOKEN"):
+                if key.strip() in ("UPSTOX_ANALYTICS_TOKEN", "UPSTOX_ACCESS_TOKEN", "UPSTOX_API_ACCESS_TOKEN"):
                     return value.strip().strip("'").strip('"')
-    raise RuntimeError("Set UPSTOX_ACCESS_TOKEN in local .env or environment. Do not share it.")
+    raise RuntimeError("Set UPSTOX_ANALYTICS_TOKEN, UPSTOX_ACCESS_TOKEN, or UPSTOX_API_ACCESS_TOKEN in local .env or environment. Do not share it.")
 
 def main():
     p = argparse.ArgumentParser()
