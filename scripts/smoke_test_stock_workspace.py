@@ -42,6 +42,7 @@ def main() -> int:
         (f"{base}/stock-detail?symbol={quote(symbol)}", "APlus Stock Workspace", "unified workspace page"),
         (f"{base}/stock-chart?symbol={quote(symbol)}", "get(\"symbol\")", "chart reads the selected symbol"),
         (f"{base}/stock-analysis?symbol={quote(symbol)}", 'params.get("symbol")', "analysis reads the selected symbol"),
+        (f"{base}/trade", 'data-interval="5"', "trade chart exposes timeframe controls"),
     ]
     failed = False
     for url, marker, label in checks:
@@ -51,6 +52,20 @@ def main() -> int:
             print(f'{"PASS" if ok else "FAIL"}: {label} (HTTP {status})')
             if not ok:
                 failed = True
+            if label == "trade chart exposes timeframe controls" and ok:
+                required = {
+                    "stock chart on left": body.find('id="stkCard"') < body.find('id="optCard"') and 'id="stkCard"' in body and 'id="optCard"' in body,
+                    "15-minute timeframe": 'data-interval="15"' in body,
+                    "1-hour timeframe": 'data-interval="60"' in body,
+                    "EMA 9 overlay": 'data-ind="ema9"' in body,
+                    "SMA 20 overlay": 'data-ind="sma20"' in body,
+                    "VWAP overlay": 'data-ind="vwap"' in body,
+                    "fullscreen chart controls": "function expandCard(id)" in body,
+                }
+                for sublabel, subok in required.items():
+                    print(f'{"PASS" if subok else "FAIL"}: {sublabel}')
+                    if not subok:
+                        failed = True
         except RuntimeError as exc:
             print(f"FAIL: {label} — {exc}")
             failed = True
@@ -60,7 +75,7 @@ def main() -> int:
         print("Smoke test failed. No files or trading settings were changed.")
         return 1
     print(f"HTTP workspace smoke test passed for {symbol}.")
-    print("Note: this checks route delivery and symbol wiring only; verify chart data in the browser.")
+    print("Note: this checks route delivery and UI wiring only; verify chart data and fullscreen resizing in the browser.")
     return 0
 
 
