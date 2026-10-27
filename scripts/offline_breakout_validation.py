@@ -216,17 +216,20 @@ def run(data_dir=DEFAULT_DATA, out_dir=DEFAULT_VALIDATION_OUT, intervals=(3, 5),
     summaries = []
     for split in ("train", "test"):
         for interval in intervals:
-            for side in ("LONG_BREAKOUT", "SHORT_BREAKDOWN"):
-                for variant in ("baseline", "volume_confirmed", "trend_aligned", "volume_and_trend", "pullback_entry"):
-                    for overlap in ("all_signals", "non_overlapping"):
-                        group = [row for row in all_rows if row["split"] == split
-                                 and row["interval_minutes"] == interval and row["side"] == side
-                                 and row["filter_variant"] == variant and row["outcome_available"]
-                                 and (overlap == "all_signals" or row["non_overlapping"])]
-                        item = {"split": split, "interval_minutes": interval, "side": side,
-                                "filter_variant": variant, "signal_sample": overlap}
-                        item.update(summarize(group))
-                        summaries.append(item)
+            for horizon in HORIZONS:
+                for side in ("LONG_BREAKOUT", "SHORT_BREAKDOWN"):
+                    for variant in ("baseline", "volume_confirmed", "trend_aligned", "volume_and_trend", "pullback_entry"):
+                        for overlap in ("all_signals", "non_overlapping"):
+                            group = [row for row in all_rows if row["split"] == split
+                                     and row["interval_minutes"] == interval
+                                     and row["horizon_bars"] == horizon and row["side"] == side
+                                     and row["filter_variant"] == variant and row["outcome_available"]
+                                     and (overlap == "all_signals" or row["non_overlapping"])]
+                            item = {"split": split, "interval_minutes": interval,
+                                    "horizon_bars": horizon, "horizon_minutes": horizon * interval,
+                                    "side": side, "filter_variant": variant, "signal_sample": overlap}
+                            item.update(summarize(group))
+                            summaries.append(item)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     events_path = out_dir / "breakout_validation_events.csv"
