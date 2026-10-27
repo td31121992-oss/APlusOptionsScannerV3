@@ -342,8 +342,7 @@ function load(){fetch("/api/trade-chart?id="+encodeURIComponent(id),{cache:"no-s
  document.getElementById("meta").textContent=(d.direction||"")+" - "+d.setup+" - expiry "+d.expiry+" - qty "+d.qty+(d.exit_reason?" - "+d.exit_reason:"");
  var p=document.getElementById("pnl");p.textContent=(d.pnl<0?"-":"")+"₹"+Math.abs(d.pnl).toLocaleString("en-IN",{maximumFractionDigits:2});p.className=d.pnl>=0?"pos":"neg";
  document.getElementById("state").textContent=(d.status==="OPEN"?"Last ":"Exit ")+d.last.toFixed(2)+(d.error?" - chart data issue: "+d.error:"");
- document.getElementById("optTitle").textContent="Option - "+d.option_label+" (5-minute)";document.getElementById("stkTitle").textContent="Stock - "+d.symbol+" (5-minute)";
- TREND=d;drawTrend();var tmk=d.trade_marks||{};fill("opt","optChart",d.option,d.levels.option,d.entry_epoch,[],tmk.option,d.entry_hm,true);fill("stk","stkChart",d.stock,d.levels.stock,d.entry_epoch,d.stock_marks,tmk.stock,d.entry_hm,tmk.stock_is_high!==false);chips("optLv",d.levels.option);chips("stkLv",d.levels.stock);
+ TREND=d;drawTrend();rawData=d;redrawAll();
  if(!d.option.length&&!d.stock.length)document.getElementById("meta").textContent+=" - no candles yet";
  }).catch(function(){document.getElementById("meta").textContent="connection lost - retrying"})}
 document.querySelectorAll("[data-interval]").forEach(function(b){b.onclick=function(){interval=Number(b.dataset.interval);document.querySelectorAll("[data-interval]").forEach(function(x){x.classList.toggle("on",x===b)});redrawAll()}});document.querySelectorAll("[data-ind]").forEach(function(c){c.onchange=function(){indicators[c.dataset.ind]=c.checked;redrawAll()}});document.addEventListener("fullscreenchange",function(){setTimeout(resizeCharts,100)});load();setInterval(load,15000);
