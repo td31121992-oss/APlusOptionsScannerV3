@@ -9,6 +9,9 @@ set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "LOG=%~dp0data\logs\options_intelligence_runtime.log"
 set "HEALTH=%~dp0data\options_intelligence\runtime_health.json"
 
+rem The scanner makes its own option-chain calls at 0.25/s. Dhan allows about one per 3 seconds in total, so this recorder takes the remainder.
+set "OPTION_CHAIN_REQUESTS_PER_SECOND=0.07"
+
 if not exist "%PYTHON%" (
     echo [%date% %time%] ERROR: project venv Python not found: %PYTHON%>>"%LOG%"
     exit /b 13

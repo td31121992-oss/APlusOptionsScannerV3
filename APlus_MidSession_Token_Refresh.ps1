@@ -34,10 +34,34 @@ if (-not $Force) {
     $n = Get-Date
     if ($n.DayOfWeek -eq [DayOfWeek]::Saturday -or $n.DayOfWeek -eq [DayOfWeek]::Sunday) { exit 0 }
     $hm = [int]$n.ToString("HHmm")
-    if ($hm -lt 1430 -or $hm -gt 1455) {
-        Log "SKIP outside safe mid-session refresh window."
+    # Token refresh now runs in the morning (08:40) so the 24-hour token covers the whole next session; the old 14:30-14:55
+    # window is still allowed for a manual or fallback run.
+    $inMorning = ($hm -ge 830 -and $hm -le 910)
+    $inAfternoon = ($hm -ge 1430 -and $hm -le 1455)
+    if (-not ($inMorning -or $inAfternoon)) {
+        Log "SKIP outside the safe refresh windows (08:30-09:10 or 14:30-14:55)."
         exit 0
     }
+}
+
+function UpstoxOnly {
+    # Dhan plan expired on 2026-11-03: with APLUS_DATA_PROVIDER=UPSTOX (and no APLUS_DHAN_FALLBACK=1) there is no Dhan token to refresh.
+    $envFile = Join-Path $ProjectRoot ".env"
+    if (-not (Test-Path $envFile)) { return $false }
+    $lines = Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue
+    $prov = @($lines | Where-Object { $_ -match '^\s*APLUS_DATA_PROVIDER\s*=\s*UPSTOX\s*$' }).Count -gt 0
+    $fb = @($lines | Where-Object { $_ -match '^\s*APLUS_DHAN_FALLBACK\s*=\s*(1|true|yes|on)\s*$' }).Count -gt 0
+    return ($prov -and -not $fb)
+}
+
+if (UpstoxOnly) {
+    Log "Upstox-only mode: no Dhan token to refresh. Re-validating market-data authorization (one read-only Upstox quote)."
+    $validator = Join-Path $ProjectRoot "validate_market_data_authorization.py"
+    if ((Test-Path $Python) -and (Test-Path $validator)) {
+        $vOut = & $Python $validator 2>&1
+        if ($LASTEXITCODE -eq 0) { Log "PASS authorization revalidated: $($vOut -join ' ')" } else { Log "WARN authorization revalidation did not pass: $($vOut -join ' ')" }
+    }
+    exit 0
 }
 
 if (-not (Test-Path $Python)) { Log "ERROR project Python missing: $Python"; exit 13 }
@@ -47,9 +71,18 @@ Log "Refreshing Dhan token ahead of known mid-session expiry."
 
 $oldEnv = Join-Path $CAlphaRoot ".env"
 $oldStamp = if (Test-Path $oldEnv) { (Get-Item $oldEnv).LastWriteTimeUtc } else { [datetime]::MinValue }
-$out = & $Python $TokenScript 2>&1
-$exit = $LASTEXITCODE
-$out | Set-Content -LiteralPath $LastPath -Encoding UTF8
+# Up to 3 attempts, 40 s apart: a one-off "Invalid TOTP" (e.g. a code generated at a 30-second window
+# boundary, as on 2026-10-06 14:40:01) normally succeeds on the next window. No token is issued on a
+# failed attempt, so retrying is safe.
+$maxAttempts = 3
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $out = & $Python $TokenScript 2>&1
+    $exit = $LASTEXITCODE
+    $out | Set-Content -LiteralPath $LastPath -Encoding UTF8
+    if ($exit -eq 0 -and (($out -join [Environment]::NewLine) -match "DHAN_TOKEN_REFRESH_OK")) { break }
+    Log "WARN token refresh attempt $attempt of $maxAttempts failed (exit=$exit)."
+    if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 40 }
+}
 
 if ($exit -ne 0 -or -not (($out -join [Environment]::NewLine) -match "DHAN_TOKEN_REFRESH_OK")) {
     Log "ERROR token refresh failed exit=$exit. Scanner was NOT restarted."
@@ -60,11 +93,30 @@ if (-not (Test-Path $oldEnv) -or (Get-Item $oldEnv).LastWriteTimeUtc -le $oldSta
     exit 21
 }
 
-Log "Token refresh OK. Checking scanner before controlled restart."
+Log "Token refresh OK. Re-validating market-data authorization (one read-only quote)."
+$validator = Join-Path $ProjectRoot "validate_market_data_authorization.py"
+if (Test-Path $validator) {
+    $vOut = & $Python $validator 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Log "PASS authorization latch revalidated: $($vOut -join ' ')"
+    } else {
+        Log "WARN authorization revalidation did not pass: $($vOut -join ' '). Existing latch state left unchanged."
+    }
+}
+Log "Checking scanner before controlled restart."
 $p = ScannerProcesses
 
 if ($p.Count -eq 0) {
-    Log "PASS token refreshed; scanner not running, so no restart was attempted."
+    # The scanner normally runs from an elevated task, whose command line this task cannot see. A fresh
+    # report proves it is alive, so say that instead of claiming it is not running.
+    $report = Join-Path $ProjectRoot "data\reports\intraday_movement_latest.json"
+    $fresh = $false
+    try { $fresh = (Test-Path $report) -and (((Get-Date) - (Get-Item $report).LastWriteTime).TotalSeconds -le 360) } catch { }
+    if ($fresh) {
+        Log "WARN token refreshed; scanner is running (fresh report) but is not visible to this task, so it was NOT restarted and keeps its current token."
+    } else {
+        Log "PASS token refreshed; scanner not running, so no restart was attempted."
+    }
     exit 0
 }
 if ($p.Count -gt 1) {

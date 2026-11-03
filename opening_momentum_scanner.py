@@ -42,6 +42,10 @@ from option_selector import OptionSelectionError, OptionSelector
 from paper_trade_journal import PaperTradeJournal
 from safety_gate import SafetyGateEngine
 from scanner_authorization_state import scanner_authorization_is_blocked
+from trading_calendar import is_trading_day
+import market_context
+import order_block
+import v2_shadow
 
 
 logger = get_logger(__name__)
@@ -378,7 +382,7 @@ class OpeningMomentumScanner:
             capital = float(cfg.fallback_account_capital)
         max_daily_loss = capital * float(cfg.maximum_daily_loss_percent) / 100.0
         result["maximum_daily_loss"] = round(max_daily_loss, 2)
-        if realized_pnl <= -max_daily_loss:
+        if float(cfg.maximum_daily_loss_percent) > 0 and realized_pnl <= -max_daily_loss:
             result["reasons"].append(
                 "DAILY_LOSS_LIMIT: "
                 f"realized_pnl={realized_pnl:.2f} limit=-{max_daily_loss:.2f}"
@@ -403,6 +407,7 @@ class OpeningMomentumScanner:
         now: datetime | None = None,
     ) -> dict[str, Any]:
         started_monotonic = time.monotonic()
+        stage_marks: dict[str, float] = {"start": started_monotonic}  # per-cycle timing (log only)
         current_time = self._as_ist(now or datetime.now(IST))
         phase = self._session_phase(current_time)
 
@@ -417,8 +422,28 @@ class OpeningMomentumScanner:
             if str(item.get("option_security_id") or "")
         })
         quote_request = {"NSE_EQ": [item.security_id for item in universe]}
-        if open_option_ids:
-            quote_request["NSE_FNO"] = open_option_ids
+        fut_ids: list[str] = []
+        try:                      # tells the dashboard this scanner honours the pause-new-entries switch (see entry_pause.py)
+            import entry_pause as _ep
+            _ep.heartbeat(Path(__file__).resolve().parent)
+        except Exception:         # noqa: BLE001 - never affects trading
+            pass
+        try:                      # SHADOW: sector-index tape for the sector-fade tags - see sector_tape.py (built once, keeps its history)
+            if getattr(self, "_sector_tape", None) is None:
+                import sector_tape
+                self._sector_tape = sector_tape.SectorTape(Path(__file__).resolve().parent)
+        except Exception:         # noqa: BLE001 - never affects trading
+            self._sector_tape = None
+        try:                      # SHADOW: near-month stock futures ride on the same quote call (price, OI) - see futures_flow.py
+            import futures_flow
+            if getattr(self, "_fut_flow", None) is None:
+                self._fut_flow = futures_flow.FuturesFlow(Path(self.config.paths.data_dir))
+            fut_ids = self._fut_flow.request_ids(current_time.date(), [item.symbol for item in universe])
+        except Exception:         # noqa: BLE001 - never affects trading
+            fut_ids = []
+        if open_option_ids or fut_ids:
+            quote_request["NSE_FNO"] = sorted(set(open_option_ids) | set(fut_ids))
+        market_context.add_to_request(quote_request)  # NIFTY/BANKNIFTY/VIX ride on this same call
         try:
             quote_map = self.client.get_market_quotes(quote_request, mode="quote")
         except DhanMarketDataAuthorizationError as exc:
@@ -444,13 +469,34 @@ class OpeningMomentumScanner:
             )
             raise _MarketDataCycleError(type(exc).__name__) from exc
 
+        # Market-trend context (never allowed to affect the cycle if it fails).
+        self._market_context = None
+        try:
+            self._market_context = market_context.summarize(quote_map)
+            if self._market_context:
+                market_context.record(self._market_context, current_time, self.intraday_state_dir.parent)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Market context skipped: %s: %s", type(exc).__name__, exc)
+
+        try:                      # SHADOW: keep the futures snapshots (price, open interest) for the entry tags
+            if getattr(self, "_fut_flow", None) is not None and fut_ids:
+                _cash = {}
+                for _sid, _raw in (quote_map.get("NSE_EQ", {}) or {}).items():
+                    _inst = self._by_security_id.get(str(_sid)) if getattr(self, "_by_security_id", None) else None
+                    if _inst is not None and isinstance(_raw, Mapping):
+                        _cash[str(_inst.symbol).upper()] = float(_raw.get("last_price") or 0)
+                self._fut_flow.update(quote_map, _cash, current_time)
+        except Exception:         # noqa: BLE001 - never affects trading
+            pass
+        stage_marks["quotes"] = time.monotonic()
+
         # Stock Selection V2: rank the full F&O universe by actual movement
         # from today's market open. Top-5 UP are CE-eligible; Top-5 DOWN are
         # PE-eligible. Membership is dynamic on every scanner cycle.
         v2_movers = rank_raw_movers(
             universe=universe,
             quote_map=quote_map,
-            top_n=5,
+            top_n=int(os.getenv("APLUS_V2_TOP_N", "5") or 5),      # Stock Selection V2 rank limit per side (15 from 16 Oct 2026, set in .env)
         )
         v2_mover_symbols = set(v2_movers.get("symbols", []) or [])
 
@@ -480,6 +526,34 @@ class OpeningMomentumScanner:
             quote_map=quote_map,
             now=current_time,
         )
+        try:      # SHADOW ONLY: event-day checkpoint log (see event_tags.py); never affects trading
+            import event_tags
+            _seg = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, Mapping) else {}
+            self._event_volumes = {}
+            for _row in (fno_market_watch or {}).get("rows", []):
+                _raw = _seg.get(str(_row.get("security_id"))) or _seg.get(_row.get("security_id"))
+                if isinstance(_raw, Mapping):
+                    self._event_volumes[_row["symbol"]] = float(_raw.get("volume") or 0)
+            try:
+                self._event_ind = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json").read_text(encoding="utf-8")).get("symbols", {})
+            except (OSError, ValueError):
+                self._event_ind = getattr(self, "_event_ind", {})
+            if not hasattr(self, "_event_state"):
+                self._event_state = {}
+            event_tags.observe((fno_market_watch or {}).get("rows", []), self._event_volumes, self._event_ind, current_time,
+                               self._event_state, Path(self.config.paths.data_dir).parent)
+            try:                  # SHADOW: results-reaction watch for stocks whose results are out (see result_reaction.py)
+                import result_reaction
+                _vw = {}
+                for _row in (fno_market_watch or {}).get("rows", []):
+                    _raw = _seg.get(str(_row.get("security_id"))) or _seg.get(_row.get("security_id"))
+                    if isinstance(_raw, Mapping):
+                        _vw[_row["symbol"]] = float(_raw.get("average_price") or 0)
+                result_reaction.observe((fno_market_watch or {}).get("rows", []), self._event_volumes, self._event_ind, _vw, current_time, Path(self.config.paths.data_dir).parent)
+            except Exception:  # noqa: BLE001 - never affects trading
+                pass
+        except Exception:      # noqa: BLE001 - never affects trading
+            pass
 
         # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
         paper_position_update = self._monitor_paper_positions_from_quote_map(
@@ -514,6 +588,7 @@ class OpeningMomentumScanner:
             candle_shortlist,
             current_time,
         )
+        stage_marks["histories"] = time.monotonic()
 
         candidates: list[MomentumCandidate] = []
         for quote in candle_shortlist:
@@ -595,13 +670,63 @@ class OpeningMomentumScanner:
 
         # Quality-first: trade count is an outcome, never a quota.
         actionable = selective_entry_ready
-        v2_config = V2GateConfig()
+        v2_config = V2GateConfig(top_n_per_side=int(os.getenv("APLUS_V2_TOP_N", "5") or 5))
+        pre_v2_candidates = list(actionable)
         actionable, v2_blocked = evaluate_entry_ready(
             candidates=actionable,
             mover_ranking=v2_movers,
             now=current_time,
             config=v2_config,
         )
+        try:      # SHADOW ONLY: what would pass the V2 gate if the top-5 limit were top-10 (logged, never traded)
+            shadow_ranking = rank_raw_movers(universe=universe, quote_map=quote_map, top_n=10)
+            shadow_pass, _ = evaluate_entry_ready(
+                candidates=pre_v2_candidates, mover_ranking=shadow_ranking, now=current_time, config=v2_config,
+            )
+            live_keys = {(x.symbol, x.direction) for x in actionable}
+            extra_top10 = [x for x in shadow_pass if (x.symbol, x.direction) not in live_keys]
+            if not hasattr(self, "_v2_shadow_seen") or getattr(self, "_v2_shadow_day", None) != current_time.date():
+                self._v2_shadow_seen, self._v2_shadow_day = set(), current_time.date()
+            v2_shadow.log_new(extra_top10, shadow_ranking, current_time, self._v2_shadow_seen)
+            # second scenario: no ranking rule at all (every stock may qualify on its own strength)
+            norank_ranking = rank_raw_movers(universe=universe, quote_map=quote_map, top_n=max(len(universe), 300))
+            norank_pass, _ = evaluate_entry_ready(
+                candidates=pre_v2_candidates, mover_ranking=norank_ranking, now=current_time, config=v2_config,
+            )
+            extra_norank = [x for x in norank_pass if (x.symbol, x.direction) not in live_keys]
+            if not hasattr(self, "_v2_norank_seen") or getattr(self, "_v2_norank_day", None) != current_time.date():
+                self._v2_norank_seen, self._v2_norank_day = set(), current_time.date()
+            v2_shadow.log_new(extra_norank, norank_ranking, current_time, self._v2_norank_seen, scenario="norank")
+            # third scenario: only ESTABLISHED_TREND setups that V2's rank rule blocked (test of letting them through, cap 3 per side)
+            est_trend = [x for x in extra_norank if str(getattr(x, "setup_family", "")).upper() == "ESTABLISHED_TREND"]
+            if not hasattr(self, "_v2_est_seen") or getattr(self, "_v2_est_day", None) != current_time.date():
+                self._v2_est_seen, self._v2_est_day = set(), current_time.date()
+            v2_shadow.log_new(est_trend, norank_ranking, current_time, self._v2_est_seen, scenario="est_trend")
+            # fourth scenario: leaders in the top 5 that V2 rejected only for a small 5m dip / continuation votes, still above (below for puts) VWAP
+            pullback = v2_shadow.pullback_pass(pre_v2_candidates, v2_blocked)
+            if not hasattr(self, "_v2_pb_seen") or getattr(self, "_v2_pb_day", None) != current_time.date():
+                self._v2_pb_seen, self._v2_pb_day = set(), current_time.date()
+            v2_shadow.log_new(pullback, v2_movers, current_time, self._v2_pb_seen, scenario="pullback")
+            # fifth/sixth scenarios: rank by the move over the LAST 15 / 30 minutes instead of the move since the open
+            if getattr(self, "_fresh_tracker", None) is None:
+                self._fresh_tracker = v2_shadow.FreshTracker()
+            if not hasattr(self, "_v2_fresh_seen") or getattr(self, "_v2_fresh_day", None) != current_time.date():
+                self._v2_fresh_seen, self._v2_fresh_day = {"fresh15": set(), "fresh30": set()}, current_time.date()
+            # seventh to ninth scenarios: ONLY the 5-minute bounce limit loosened (0.06% -> 0.10 / 0.20 / 0.30); top-N and every other V2 rule exactly as live
+            if not hasattr(self, "_v2_bounce_seen") or getattr(self, "_v2_bounce_day", None) != current_time.date():
+                self._v2_bounce_seen, self._v2_bounce_day = {"bounce10": set(), "bounce20": set(), "bounce30": set()}, current_time.date()
+            for _bn, _lim in (("bounce10", 0.10), ("bounce20", 0.20), ("bounce30", 0.30)):
+                _cfg = V2GateConfig(top_n_per_side=v2_config.top_n_per_side, maximum_opposing_5m_pct=_lim)
+                _bp, _ = evaluate_entry_ready(candidates=pre_v2_candidates, mover_ranking=v2_movers, now=current_time, config=_cfg)
+                _bx = [x for x in _bp if (x.symbol, x.direction) not in live_keys]
+                v2_shadow.log_new(_bx, v2_movers, current_time, self._v2_bounce_seen[_bn], scenario=_bn)
+            for _name, _win in (("fresh15", 15), ("fresh30", 30)):
+                _rk = v2_shadow.rank_fresh(universe, quote_map, self._fresh_tracker, current_time, _win, 5)
+                _pass, _ = evaluate_entry_ready(candidates=pre_v2_candidates, mover_ranking=_rk, now=current_time, config=v2_config)
+                _extra = [x for x in _pass if (x.symbol, x.direction) not in live_keys]
+                v2_shadow.log_new(_extra, _rk, current_time, self._v2_fresh_seen[_name], scenario=_name)
+        except Exception:      # noqa: BLE001 - shadow logging must never affect trading
+            pass
         for blocked in v2_blocked:
             candidate = next(
                 (
@@ -617,6 +742,17 @@ class OpeningMomentumScanner:
                     "Stock Selection V2 blocked: "
                     + "; ".join(blocked.get("reasons", []) or [])
                 )
+
+        try:      # data only: every entry-ready candidate with the features it was judged on (see signal_snapshots.py)
+            import signal_snapshots
+            if getattr(self, "_snap_writer", None) is None:
+                self._snap_writer = signal_snapshots.SnapshotWriter(Path(self.config.paths.data_dir))
+            self._snap_writer.signals(current_time, entry_ready, {(x.symbol, x.direction) for x in actionable})
+            # data only: where the rest were lost - every analysed candidate that did NOT become entry-ready with its stage / rejection, and the radar's top 80 with their rank
+            self._snap_writer.analysed(current_time, candidates, {(x.symbol, x.direction) for x in entry_ready}, {q.symbol: i for i, q in enumerate(radar_ranked, 1)})
+            self._snap_writer.radar(current_time, radar_ranked, {x.symbol for x in candidates})
+        except Exception:      # noqa: BLE001 - a recorder must never affect trading
+            pass
 
         movement_leaders = sorted(
             candidates,
@@ -682,8 +818,21 @@ class OpeningMomentumScanner:
                 )
             actionable_for_plans = []
 
+        # Optional counter-trend filter (APLUS_MARKET_REGIME_MODE=ENFORCE; default SHADOW = off).
+        regime_ctx = getattr(self, "_market_context", None)
+        if regime_ctx and actionable_for_plans and market_context.mode() == "ENFORCE":
+            kept_for_regime = []
+            for candidate in actionable_for_plans:
+                if market_context.direction_allowed(regime_ctx.get("regime", "UNKNOWN"), candidate.direction):
+                    kept_for_regime.append(candidate)
+                else:
+                    candidate.paper_trade_status = "MARKET_REGIME_BLOCKED"
+            actionable_for_plans = kept_for_regime
+
         if self._new_entries_allowed(current_time) and actionable_for_plans:
+            _acct_t0 = time.monotonic()
             account_context = self._load_account_safety_context()
+            stage_marks["account_s"] = stage_marks.get("account_s", 0.0) + (time.monotonic() - _acct_t0)
             for candidate in actionable_for_plans:
                 if not self.paper_journal.can_generate(
                     symbol=candidate.symbol,
@@ -694,6 +843,10 @@ class OpeningMomentumScanner:
                         "ALREADY_JOURNALED_WAITING_FOR_SETUP_RESET"
                     )
                     duplicate_paper_signals_suppressed += 1
+                    logger.info(                      # log only: why a candidate that passed every gate was not converted (added 28 Oct 2026 after VOLTAS passed and was not traded)
+                        "PAPER conversion skipped symbol=%s direction=%s reason=ALREADY_JOURNALED lane=%s",
+                        candidate.symbol, candidate.direction, self.paper_journal.lanes.get(self.paper_journal._lane_key(candidate.symbol, candidate.direction)),
+                    )
                     continue
 
                 underlying = self._by_security_id.get(candidate.security_id)
@@ -702,6 +855,8 @@ class OpeningMomentumScanner:
                         "Underlying instrument metadata is unavailable"
                     )
                     candidate.paper_trade_status = "OPTION_PLAN_FAILED"
+                    logger.info("PAPER conversion skipped symbol=%s direction=%s reason=UNDERLYING_METADATA_UNAVAILABLE security_id=%s",
+                                candidate.symbol, candidate.direction, candidate.security_id)           # log only
                     continue
                 plan = self._build_option_plan(
                     candidate=candidate,
@@ -719,9 +874,431 @@ class OpeningMomentumScanner:
                     candidate.option_error or '',
                 )
                 if plan is not None:
+                    candidate_record = candidate.to_dict()
+                    try:                      # shadow tag only: where price sits relative to a fresh order block
+                        day_candles = [
+                            c for c in (history_by_symbol.get(candidate.symbol) or [])
+                            if c.timestamp.date() == current_time.date()
+                        ]
+                        ob = order_block.order_block_state(day_candles, candidate.direction)
+                        candidate_record["ob_shadow"] = ob["state"]
+                        candidate_record["ob_zone"] = f"{ob['zone_low']}-{ob['zone_high']}" if ob["state"] != "NONE" else ""
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        candidate_record["ob_shadow"] = ""
+                    try:                      # shadow tag only: how stretched the stock already was at entry (see entry_tags.entry_context)
+                        import entry_tags as _et
+                        candidate_record.update(_et.entry_context(day_candles, candidate.direction, getattr(candidate, "ltp", None), now=current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: gap / yesterday's volume = is the stock "in play" (see entry_tags.mover_tags)
+                        import entry_tags as _et
+                        candidate_record.update(_et.mover_tags(str(candidate.symbol), candidate.direction, getattr(candidate, "gap_percent", None)))
+                        candidate_record.update(_et.opening_volume_tags(history_by_symbol.get(candidate.symbol) or [], current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: was the stock on this morning's pre-market focus list (see premarket_focus.py)
+                        import premarket_focus
+                        candidate_record.update(premarket_focus.entry_tags(str(candidate.symbol), candidate.direction,
+                                                                           Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: news catalyst for this stock (see catalyst.py)
+                        import catalyst
+                        candidate_record.update(catalyst.entry_tags(str(candidate.symbol), candidate.direction,
+                                                                    Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: choppiness - trending or going sideways (see chop.py)
+                        import chop
+                        candidate_record.update(chop.measures(day_candles))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: order block and liquidity pools (see smc_levels.py)
+                        import smc_levels
+                        candidate_record.update(smc_levels.entry_tags(day_candles, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: chart patterns formed in the last 15 minutes, with / against our side (see pattern_tags.py)
+                        import pattern_tags
+                        candidate_record.update(pattern_tags.pattern_tags(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: stock trend gauge 5M / 15M / daily + scans (see trend_tags.py)
+                        import trend_tags
+                        candidate_record.update(trend_tags.entry_trend(
+                            str(candidate.symbol), candidate.direction, current_time.date().isoformat(),
+                            Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: key-level push shape (see key_level.py)
+                        import key_level
+                        try:
+                            _kli = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json")
+                                              .read_text(encoding="utf-8")).get("symbols", {}).get(str(candidate.symbol), {})
+                        except (OSError, ValueError):
+                            _kli = {}
+                        _rv = getattr(candidate, "recent_relative_volume_15m", None)
+                        candidate_record.update(key_level.push_tags(
+                            day_candles, candidate.direction, _kli.get("pdh"), _kli.get("pdl"),
+                            float(_rv) if _rv not in (None, "") else None, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: multi-timeframe context 15m + daily (see mtf.py)
+                        import mtf
+                        try:
+                            _dly = json.loads((Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json")
+                                              .read_text(encoding="utf-8")).get("symbols", {}).get(str(candidate.symbol), {})
+                        except (OSError, ValueError):
+                            _dly = {}
+                        candidate_record.update(mtf.mtf_tags(day_candles, candidate.direction, _dly, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: option greeks at entry (see greeks.py)
+                        import greeks
+                        _oc = plan.get("option_contract") or {}
+                        _un = plan.get("underlying") or {}
+                        _px = _oc.get("limit_price") or _oc.get("ask") or _oc.get("ltp")
+                        candidate_record.update(greeks.greeks_at_entry(
+                            _un.get("entry") or getattr(candidate, "ltp", None), _oc.get("strike"), _oc.get("expiry"),
+                            _oc.get("option_type"), _px, _oc.get("iv"), current_time.date(),
+                            str(candidate.direction).upper() == "BULLISH"))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: market structure BOS / CHOCH / FVG (see market_structure.py)
+                        import market_structure
+                        candidate_record.update(market_structure.structure_tags(
+                            day_candles, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: market-breadth rule (see breadth_gate.py)
+                        import breadth_gate
+                        _ind_path = Path(self.config.paths.data_dir) / "reports" / "daily_indicators.json"
+                        try:
+                            _ind = json.loads(_ind_path.read_text(encoding="utf-8")).get("symbols", {})
+                        except (OSError, ValueError):
+                            _ind = {}
+                        candidate_record.update(breadth_gate.evaluate(
+                            candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []), _ind,
+                            float(getattr(candidate, "recent_relative_volume_15m", 0) or 0)))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: regime + sector gate (majority side of the market, top sector only; see regime_sector_gate.py)
+                        import regime_sector_gate
+                        candidate_record.update(regime_sector_gate.evaluate(candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", [])))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: top-2 sector focus until 10:30 + same-sector stacking (see sector_focus_shadow.py)
+                        import sector_focus_shadow
+                        candidate_record.update(sector_focus_shadow.evaluate(
+                            candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []),
+                            self.paper_journal.open_positions(current_time), current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: event-day flag (see event_tags.py)
+                        import event_tags
+                        candidate_record.update(event_tags.trade_tags(
+                            candidate.symbol, (fno_market_watch or {}).get("rows", []), getattr(self, "_event_volumes", {}),
+                            getattr(self, "_event_ind", {}), current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: how far the option had already run before entry (one candle request per entry)
+                        import entry_tags as _et3
+                        _opt = plan.get("option_contract") or {}
+                        _sid = _opt.get("security_id")
+                        _px = _opt.get("limit_price") or _opt.get("ask") or _opt.get("ltp")
+                        if _sid and _px:
+                            _resp = self.client.get_intraday_candles(
+                                security_id=_sid, segment="NSE_FNO", instrument="OPTSTK", interval=5,
+                                from_datetime=datetime.combine(current_time.date(), clock_time(9, 0)),
+                                to_datetime=current_time.replace(tzinfo=None) + timedelta(minutes=1), oi=False)
+                            candidate_record.update(_et3.option_run(_resp, _px, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: option-chain walls / put-call ratio / IV / OI flow (see options_tags.py)
+                        import options_tags
+                        _snap = getattr(self, "_oc_last", {}).get(str(candidate.symbol))
+                        if _snap is not None:
+                            candidate_record.update(options_tags.chain_tags(_snap, candidate.direction, getattr(candidate, "ltp", None),
+                                                                            stock_volume=getattr(self, "_event_volumes", {}).get(str(candidate.symbol))))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: 30-minute opening-range breakout / retest state (see orb_tags.py)
+                        import orb_tags
+                        candidate_record.update(orb_tags.orb_tags(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: big prints and delta trend from the recorded ticks (see tick_tags.py)
+                        import tick_tags
+                        candidate_record.update(tick_tags.tick_tags(str(candidate.symbol), candidate.direction, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: did the tick burst detector fire for this stock in the last 15 minutes (see tick_detector.py)
+                        import tick_detector
+                        candidate_record.update(tick_detector.event_tags(str(candidate.symbol), candidate.direction, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: breakdown / breakout setup state and market breadth (see setup_tags.py)
+                        import setup_tags
+                        candidate_record.update(setup_tags.setup_tags(str(candidate.symbol), day_candles, candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: how far this stock is ahead of / behind the market right now, from the live tick ranking (see rs_leaders.py)
+                        import rs_leaders
+                        candidate_record.update(rs_leaders.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: the story of the stock's last candles (rejection, absorption, pullback and resume ...) (see candle_story.py)
+                        import candle_story
+                        candidate_record.update(candle_story.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: what could be known before the open about today's gap (after-close filings, yesterday's stretch) (see gap_watch.py)
+                        import gap_watch
+                        candidate_record.update(gap_watch.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: auction-market-theory levels (value area, POC, initial balance) and CVD divergence (see amt_profile.py)
+                        import amt_profile
+                        candidate_record.update(amt_profile.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: cumulative buy-minus-sell volume and its recent flip (see delta_flow.py)
+                        import delta_flow
+                        candidate_record.update(delta_flow.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: has this stock broken a tight base while the market moved against it today (see base_break.py)
+                        import base_break
+                        candidate_record.update(base_break.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: how closely this stock's chart matches those that went on to make big option moves (see chart_opportunity.py)
+                        import chart_opportunity
+                        candidate_record.update(chart_opportunity.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: moving with a high-volume event move (see event_momentum.py)
+                        import event_momentum
+                        candidate_record.update(event_momentum.tags(candidate_record, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: machine-learning score of this candidate (see ml_shadow.py); recorded, never used
+                        import ml_shadow
+                        candidate_record.update(ml_shadow.tags(str(candidate.symbol), candidate.direction, current_time, candidate_record, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: what the stock's latest filing says (good / bad news), read from its title and summary (see filing_text.py)
+                        import filing_text
+                        candidate_record.update(filing_text.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: results-reaction state of this stock (see result_reaction.py)
+                        import result_reaction
+                        candidate_record.update(result_reaction.tags(str(candidate.symbol), candidate.direction, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: NSE daily data (delivery %, F&O OI / PCR / premium, bulk-block deals) and the pre-open auction (see nse_tags.py)
+                        import nse_tags
+                        candidate_record.update(nse_tags.tags(str(candidate.symbol), candidate.direction, current_time, Path(self.config.paths.data_dir).parent))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: option premium traded today vs the stock's usual, and its direction (see premium_flow.py)
+                        import premium_flow
+                        candidate_record.update(premium_flow.tags(str(candidate.symbol), candidate.direction, current_time))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: linear cumulative delta from the recorded ticks (see flow_tags.py)
+                        import flow_tags
+                        candidate_record.update(flow_tags.cvd_tags(str(candidate.symbol), candidate.direction, current_time.date().isoformat()))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: which candidate entry gates would have blocked this trade (see gate_shadow.py)
+                        import gate_shadow
+                        _gc = plan.get("option_contract") or {}
+                        candidate_record.update(gate_shadow.tags(
+                            candidate.direction, _gc.get("limit_price") or _gc.get("ask") or _gc.get("ltp"),
+                            current_time.hour * 60 + current_time.minute, getattr(candidate, "recent_move_15m_percent", None),
+                            getattr(candidate, "setup_family", None), candidate_record.get("tr_daily_score"),
+                            bid=_gc.get("bid"), ask=_gc.get("ask"), clean_score=candidate_record.get("clean_trend_score"),
+                            nifty_pct_open=(getattr(self, "_market_context", None) or {}).get("nifty_pct_open")))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: stock-structure stop levels for the skorb / sksw shadow exits (see stock_stops.py)
+                        import stock_stops
+                        candidate_record.update(stock_stops.entry_levels(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: when the stock broke R1 (calls) / S1 (puts) today (see break_tags.py)
+                        import break_tags
+                        candidate_record.update(break_tags.break_tags(
+                            day_candles, candidate.direction, getattr(candidate, "r1", 0), getattr(candidate, "s1", 0), getattr(candidate, "ltp", None),
+                            current_time.hour * 60 + current_time.minute))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: volume-burst ratio of the stock's 5-minute bars (see burst_tags.py)
+                        import burst_tags
+                        candidate_record.update(burst_tags.burst_tags(day_candles, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: futures premium and open-interest flow (see futures_flow.py)
+                        if getattr(self, "_fut_flow", None) is not None:
+                            candidate_record.update(self._fut_flow.tags_for(candidate.symbol, candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: sector index state at entry (see sector_tape.py)
+                        if getattr(self, "_sector_tape", None) is not None:
+                            _row = next((r for r in (fno_market_watch or {}).get("rows", [])
+                                         if str(r.get("symbol") or "").upper() == str(candidate.symbol).upper()), None)
+                            candidate_record.update(self._sector_tape.tags_for(str((_row or {}).get("sector") or ""), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: sector rotation (see sector_rrg.py); reads a cache file, never the network
+                        import sector_rrg
+                        candidate_record.update(sector_rrg.tags_for(
+                            candidate.symbol, candidate.direction, (fno_market_watch or {}).get("rows", []),
+                            Path(self.config.paths.data_dir) / "cache" / "sector_rrg.json"))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: entry-quality flags (see entry_tags.py)
+                        import entry_tags
+                        _opt = plan.get("option_contract") or {}
+                        _ep = _opt.get("limit_price") or _opt.get("ask") or _opt.get("ltp")
+                        candidate_record.update(entry_tags.evaluate(
+                            _ep, current_time, entry_tags.regime_of(getattr(self, "_market_context", None))))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # entry rules (see entry_rules.py): tag in SHADOW, skip the entry in ENFORCE
+                        import entry_rules
+                        if entry_rules.mode() != "OFF":
+                            _same = sum(1 for x in self.paper_journal.open_positions(current_time)
+                                        if str(x.get("direction") or "").upper() == str(candidate.direction).upper())
+                            _ctx = getattr(self, "_market_context", None) or {}
+                            _verdict = entry_rules.evaluate(candidate.direction, current_time.hour * 60 + current_time.minute,
+                                                            _ctx.get("nifty_pct_open"), _same)
+                            candidate_record.update(_verdict)
+                            if entry_rules.mode() == "ENFORCE" and _verdict["rule_verdict"] != "PASS":
+                                candidate.paper_trade_status = "ENTRY_RULE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # settle window (see settle_window.py): SHADOW records only; ENFORCE (APLUS_SETTLE_MODE) lets no entry fire before APLUS_SETTLE_UNTIL
+                        import settle_window
+                        if settle_window.mode() != "OFF":
+                            _sm = current_time.hour * 60 + current_time.minute
+                            candidate_record.update(settle_window.evaluate(_sm))
+                            if settle_window.blocks(_sm):
+                                candidate.paper_trade_status = "SETTLE_WINDOW_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # shadow tag only: money flow of the stock and its sector, session and last 15 minutes (see mf_tags.py)
+                        import mf_tags
+                        candidate_record.update(mf_tags.mf_tags(str(candidate.symbol), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: how much of the stock's sector is moving our way (see sector_priority.py)
+                        import sector_priority
+                        candidate_record.update(sector_priority.sector_tags((fno_market_watch or {}).get("rows", []), str(candidate.symbol), candidate.direction))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: no-trade-day verdict (see no_trade_day.py)
+                        import entry_pause as _epn
+                        import no_trade_day
+                        _dayn = current_time.date().isoformat()
+                        _today = [x for x in getattr(self.paper_journal, "trades", [])
+                                  if str(x.get("entry_time") or x.get("generated_at") or "")[:10] == _dayn]
+                        _ctxn = getattr(self, "_market_context", None) or {}
+                        candidate_record.update(no_trade_day.evaluate(
+                            _today, candidate.direction, current_time.hour * 60 + current_time.minute,
+                            _ctxn.get("nifty_pct_open"), candidate_record.get("breadth_pct_with"), _epn.account_capital()))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # shadow tag only: would a market brake (Nifty against our side since the open / last 15 min) have blocked this? (see market_brake.py)
+                        import market_brake
+                        candidate_record.update(market_brake.brake_tags(
+                            candidate.direction, (getattr(self, "_market_context", None) or {}).get("nifty_pct_open")))
+                    except Exception:         # noqa: BLE001 - never affects trading
+                        pass
+                    try:                      # dashboard "pause new entries" / day-target switch (see entry_pause.py); fail-open
+                        import entry_pause
+                        _root = Path(__file__).resolve().parent
+                        _day = current_time.date().isoformat()
+                        _pnl = entry_pause.day_pnl(getattr(self.paper_journal, "trades", []), _day)
+                        _blocked, _why = entry_pause.check(_root, _pnl, entry_pause.account_capital(), current_time.date())
+                        if _blocked:
+                            candidate.paper_trade_status = "ENTRIES_PAUSED"
+                            if getattr(self, "_pause_logged", "") != _why:
+                                self._pause_logged = _why
+                                logger.warning("New entries are paused (%s); open trades keep being managed.", _why)
+                            continue
+                    except Exception:         # noqa: BLE001 - a control file must never stop the scanner
+                        pass
+                    try:                      # big-player gate (see big_player_gate.py): SHADOW tags whether big prints are with or against us; ENFORCE (APLUS_BIGPLAYER_GATE_MODE) skips trades against them
+                        import big_player_gate
+                        if big_player_gate.mode() != "OFF":
+                            _bv = big_player_gate.evaluate(str(candidate.symbol), candidate.direction, current_time)
+                            candidate_record.update(_bv)
+                            if big_player_gate.mode() == "ENFORCE" and not _bv.get("bp_ok", 1):
+                                candidate.paper_trade_status = "BIGPLAYER_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # weak-market call gate (see weak_market_gate.py): SHADOW tags; ENFORCE (APLUS_WEAKMKT_CE_MODE) skips a call into a weak market unless there is news or big buying
+                        import weak_market_gate
+                        if weak_market_gate.mode() != "OFF":
+                            _wv = weak_market_gate.evaluate(candidate_record, candidate.direction)
+                            candidate_record.update(_wv)
+                            if weak_market_gate.mode() == "ENFORCE" and not _wv.get("wk_ok", 1):
+                                candidate.paper_trade_status = "WEAK_MARKET_CE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # do-not-chase check (see chase_gate.py): SHADOW tags; ENFORCE (APLUS_CHASE_GATE_MODE) skips an entry after the stock already ran our way / into an extended market
+                        import chase_gate
+                        if chase_gate.mode() != "OFF":
+                            _cg = chase_gate.evaluate(candidate_record, candidate.direction)
+                            candidate_record.update(_cg)
+                            if chase_gate.mode() == "ENFORCE" and not _cg.get("cg_ok", 1):
+                                candidate.paper_trade_status = "CHASE_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # corporate-event calendar + gate (see event_calendar.py, event_gate.py): results / ex-date tags; ENFORCE (APLUS_EVENT_GATE_MODE) skips entries into inflated pre-results premiums
+                        import event_calendar
+                        import event_gate
+                        if event_gate.mode() != "OFF":
+                            candidate_record.update(event_calendar.tags(str(candidate.symbol), current_time))
+                            _ev = event_gate.evaluate(candidate_record)
+                            candidate_record.update(_ev)
+                            if event_gate.mode() == "ENFORCE" and not _ev.get("evg_ok", 1):
+                                candidate.paper_trade_status = "EVENT_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # canary gate (see canary_gate.py): SHADOW tags "allowed / would be blocked"; ENFORCE (APLUS_CANARY_MODE) skips a pile-on onto a side that is not working yet
+                        import canary_gate
+                        if canary_gate.mode() != "OFF":
+                            _cv = canary_gate.evaluate(getattr(self.paper_journal, "trades", []), candidate.direction, current_time)
+                            candidate_record.update(_cv)
+                            if canary_gate.mode() == "ENFORCE" and not _cv["cn_ok"]:
+                                candidate.paper_trade_status = "CANARY_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
+                    try:                      # entry quality gate (see quality_gate.py): SHADOW tags the score, ENFORCE (APLUS_QUALITY_GATE_MODE) skips what does not pass
+                        import quality_gate
+                        if quality_gate.mode() != "OFF":
+                            _qn = quality_gate.passes_so_far(getattr(self.paper_journal, "trades", []), current_time.date().isoformat())
+                            _qv = quality_gate.evaluate(candidate_record, _qn)
+                            candidate_record.update(_qv)
+                            if quality_gate.mode() == "ENFORCE" and not _qv["q_pass"]:
+                                candidate.paper_trade_status = "QUALITY_GATE_BLOCKED"
+                                continue
+                    except Exception:         # noqa: BLE001 - a rule failure must never stop the scanner
+                        pass
                     record = self.paper_journal.record_trade(
                         plan=plan,
-                        candidate=candidate.to_dict(),
+                        candidate=candidate_record,
                         when=current_time,
                     )
                     trade_id = str(record.get("paper_trade_id") or "")
@@ -749,10 +1326,12 @@ class OpeningMomentumScanner:
                 when=current_time,
             )
 
+        stage_marks["analysis_and_plans"] = time.monotonic()
         # Persist the full-universe tape, state machine and paper-trade journal.
         self.intraday_engine.flush()
         self.paper_journal.flush()
         paper_journal_summary = self.paper_journal.summary(current_time)
+        stage_marks["flush"] = time.monotonic()
 
         elapsed = round(time.monotonic() - started_monotonic, 2)
         payload = {
@@ -898,6 +1477,21 @@ class OpeningMomentumScanner:
 
         self._write_reports(payload)
         self._write_authorization_state("HEALTHY", updated_at=current_time)
+        try:
+            _end = time.monotonic()
+            _order = ["start", "quotes", "histories", "analysis_and_plans", "flush"]
+            _prev, _parts = stage_marks["start"], []
+            for _name in _order[1:]:
+                if _name in stage_marks:
+                    _parts.append(f"{_name}={stage_marks[_name] - _prev:.1f}s")
+                    _prev = stage_marks[_name]
+            _parts.append(f"reports={_end - _prev:.1f}s")
+            logger.info(
+                "CYCLE_TIMING %s (account_fetch=%.1fs inside analysis_and_plans) total=%.1fs",
+                " ".join(_parts), stage_marks.get("account_s", 0.0), _end - stage_marks["start"],
+            )
+        except Exception:  # noqa: BLE001 - timing must never affect the cycle
+            pass
 
         logger.info(
             "Intraday movement cycle phase=%s universe=%d raw_quotes=%d "
@@ -928,6 +1522,7 @@ class OpeningMomentumScanner:
             int(poll_seconds or self.settings.poll_seconds),
         )
         first_run = True
+        non_trading_reason: str | None = None
 
         logger.info(
             "Continuous Intraday Movement Scanner started: %s-%s, poll=%ds, "
@@ -936,9 +1531,27 @@ class OpeningMomentumScanner:
             self.settings.session_stop.strftime("%H:%M"),
             interval,
         )
+        try:                      # open paper positions are also checked every few seconds between scans (see fast_monitor.py; APLUS_FAST_MONITOR=OFF disables)
+            import fast_monitor
+            self._fast_monitor = fast_monitor.start_for(self)
+        except Exception as exc:  # noqa: BLE001 - the scan loop must start regardless
+            logger.warning("Fast position monitor not started: %s: %s", type(exc).__name__, exc)
 
         while True:
             now = datetime.now(IST)
+            trading_day, day_reason = is_trading_day(now.date())
+            if not trading_day:
+                # Stay alive but idle (no quotes, no signals) so supervisors do
+                # not relaunch in a loop; re-check every 5 minutes.
+                if day_reason != non_trading_reason:
+                    logger.warning(
+                        "Not an NSE trading day (%s); scanner idle until the next trading day",
+                        day_reason,
+                    )
+                    non_trading_reason = day_reason
+                time.sleep(300)
+                continue
+            non_trading_reason = None
             if scanner_authorization_is_blocked(
                 self.authorization_state_path, self.authorization_validation_path,
             ):
@@ -1054,6 +1667,36 @@ class OpeningMomentumScanner:
                 force_close=force_close,
                 force_close_reason="SESSION_END",
             )
+            try:      # SHADOW: stock move since entry and the option's response (see stock_option_response_shadow.py)
+                eq = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, Mapping) else {}
+                prices = {}
+                for sid, item in (eq.items() if isinstance(eq, Mapping) else ()):
+                    inst = self._by_security_id.get(str(sid)) if getattr(self, "_by_security_id", None) else None
+                    if inst is not None and isinstance(item, Mapping):
+                        lp = item.get("last_price", item.get("ltp"))
+                        if lp:
+                            prices[str(inst.symbol).upper()] = float(lp)
+                if prices:
+                    self.paper_journal.record_stock_response(prices, now, extra=closed)
+                try:      # display only: rank among all F&O stocks by move from the open, for the dashboard (see mover_rank.py)
+                    import mover_rank
+                    _rq = {}
+                    for sid, item in (eq.items() if isinstance(eq, Mapping) else ()):
+                        inst = self._by_security_id.get(str(sid)) if getattr(self, "_by_security_id", None) else None
+                        if inst is not None and isinstance(item, Mapping):
+                            _lp = item.get("last_price", item.get("ltp"))
+                            _op = (item.get("ohlc") or {}).get("open")
+                            if _lp and _op:
+                                _rq[str(inst.symbol).upper()] = (float(_lp), float(_op))
+                    if _rq:
+                        self.paper_journal.record_stock_rank(mover_rank.ranks_from_quotes(_rq), now, extra=closed)
+                except Exception:         # noqa: BLE001 - never affects trading
+                    pass
+                if getattr(self, "_sector_tape", None) is not None:
+                    self._sector_tape.update()
+                    self.paper_journal.record_sector_fade(self._sector_tape.ltps, now)
+            except Exception:             # noqa: BLE001 - never affects trading
+                pass
             return {
                 "closed": closed,
                 "errors": ([f"shared quote missing option ids: {','.join(missing)}"] if missing else []),
@@ -1451,6 +2094,146 @@ class OpeningMomentumScanner:
         shortlist: Sequence[QuoteSnapshot],
         now: datetime,
     ) -> tuple[dict[str, list[Candle]], dict[str, str]]:
+        """Five-minute history of the shortlist. INTRADAY_HISTORY_CACHE = OFF (default: the full fetch below), SHADOW (full fetch decides, the cached path is compared on a few stocks) or
+        ENFORCE (cached path: completed sessions fetched once a day, only today's candles each cycle). See history_cache.py."""
+        if not shortlist:
+            return {}, {}
+        import history_cache
+
+        cache_mode = history_cache.mode()
+        if cache_mode == "ENFORCE":
+            result = self._fetch_histories_cached(shortlist, now)
+            try:
+                self._spot_check_history_cache(shortlist, now, result[0])
+            except Exception as exc:                      # noqa: BLE001 - the check never affects a decision
+                logger.warning("HISTORY_CACHE_SPOTCHECK failed: %s: %s", type(exc).__name__, exc)
+            return result
+        full = self._fetch_histories_full(shortlist, now)
+        if cache_mode == "SHADOW":
+            try:
+                self._shadow_check_history_cache(shortlist, now, full[0])
+            except Exception as exc:                      # noqa: BLE001 - the check never affects a decision
+                logger.warning("HISTORY_CACHE_CHECK failed: %s: %s", type(exc).__name__, exc)
+        return full
+
+    def _fetch_one_symbol_cached(self, quote: QuoteSnapshot, now: datetime) -> list[Candle]:
+        import history_cache
+
+        past_from, past_to, today_from, today_to = history_cache.windows(now, self.settings.history_calendar_days, self.settings.session_start, IST)
+        if not hasattr(self, "_hist_past"):
+            self._hist_past = {}
+        held = self._hist_past.get(quote.symbol)
+        if held is None or held[0] != now.date():          # completed sessions: once a stock per day
+            response = self.client.get_intraday_candles(security_id=quote.security_id, segment="NSE_EQ", instrument="EQUITY", interval=5,
+                                                        from_datetime=past_from, to_datetime=past_to, oi=False)
+            held = (now.date(), self._candles_from_response(response))
+            self._hist_past[quote.symbol] = held
+        response = self.client.get_intraday_candles(security_id=quote.security_id, segment="NSE_EQ", instrument="EQUITY", interval=5,
+                                                    from_datetime=today_from, to_datetime=today_to, oi=False)
+        today = self._candles_from_response(response)
+        if not today:
+            raise ValueError("historical API returned no candles")
+        return history_cache.merge(held[1], today)
+
+    def _fetch_histories_cached(
+        self,
+        shortlist: Sequence[QuoteSnapshot],
+        now: datetime,
+    ) -> tuple[dict[str, list[Candle]], dict[str, str]]:
+        """Cached path. Any problem with a stock's cached history falls back to the full single request for that stock before an error is reported."""
+        histories: dict[str, list[Candle]] = {}
+        errors: dict[str, str] = {}
+        today_start = datetime.combine(now.date(), self.settings.session_start, tzinfo=IST)
+        if now + timedelta(minutes=1) <= today_start:      # before the session: nothing cached applies
+            return self._fetch_histories_full(shortlist, now)
+
+        def one(quote: QuoteSnapshot) -> list[Candle]:
+            try:
+                return self._fetch_one_symbol_cached(quote, now)
+            except Exception as exc:                       # noqa: BLE001
+                logger.info("HISTORY_CACHE fallback to the full request for %s: %s: %s", quote.symbol, type(exc).__name__, exc)
+                if hasattr(self, "_hist_past"):
+                    self._hist_past.pop(quote.symbol, None)
+                full, errs = self._fetch_histories_full([quote], now)
+                if quote.symbol in full:
+                    return full[quote.symbol]
+                raise ValueError(errs.get(quote.symbol, "history unavailable"))
+
+        with ThreadPoolExecutor(max_workers=self.settings.historical_workers, thread_name_prefix="opening-history") as pool:
+            future_map = {pool.submit(one, quote): quote for quote in shortlist}
+            for future in as_completed(future_map):
+                quote = future_map[future]
+                try:
+                    histories[quote.symbol] = future.result()
+                except Exception as exc:
+                    errors[quote.symbol] = f"history {type(exc).__name__}: {exc}"
+        return histories, errors
+
+    def _spot_check_history_cache(self, shortlist: Sequence[QuoteSnapshot], now: datetime, cached: Mapping[str, list[Candle]]) -> None:
+        """ENFORCE safety net: every SPOTCHECK_EVERY-th cycle, fetch the full history of the first two stocks the old way and compare it with what the cache returned. A difference is logged as a
+        WARNING and that stock's cached past sessions are dropped so the next cycle rebuilds them."""
+        import history_cache
+
+        self._hist_cycles = getattr(self, "_hist_cycles", 0) + 1
+        if (self._hist_cycles - 1) % history_cache.SPOTCHECK_EVERY != 0:
+            return
+        sample = [q for q in list(shortlist)[: history_cache.SPOTCHECK_SAMPLE] if q.symbol in cached]
+        if not sample:
+            return
+        full, _ = self._fetch_histories_full(sample, now)
+        stats = getattr(self, "_hist_spot_stats", None)
+        if stats is None:
+            stats = self._hist_spot_stats = {"checks": 0, "different": 0}
+        bad = []
+        for q in sample:
+            if q.symbol not in full:
+                continue
+            stats["checks"] += 1
+            result = history_cache.compare(full[q.symbol], cached[q.symbol])
+            if not result["identical"]:
+                stats["different"] += 1
+                bad.append(f"{q.symbol}: {result['different']} different / {result['missing']} missing of {result['compared']}")
+                getattr(self, "_hist_past", {}).pop(q.symbol, None)
+        if bad:
+            logger.warning("HISTORY_CACHE_SPOTCHECK DIFFERENT | %s | day_total checks=%d different=%d", "; ".join(bad), stats["checks"], stats["different"])
+        else:
+            logger.info("HISTORY_CACHE_SPOTCHECK ok | day_total checks=%d different=%d", stats["checks"], stats["different"])
+
+    def _shadow_check_history_cache(self, shortlist: Sequence[QuoteSnapshot], now: datetime, full: Mapping[str, list[Candle]]) -> None:
+        """SHADOW: run the cached path for the first few stocks and compare it with the full fetch the decisions used (completed candles only)."""
+        import history_cache
+
+        stats = getattr(self, "_hist_shadow_stats", None)
+        if stats is None:
+            stats = self._hist_shadow_stats = {"checks": 0, "identical": 0, "different": 0}
+        checked = identical = 0
+        notes: list[str] = []
+        for quote in list(shortlist)[: history_cache.SHADOW_SAMPLE]:
+            if quote.symbol not in full:
+                continue
+            try:
+                cached = self._fetch_one_symbol_cached(quote, now)
+            except Exception as exc:                       # noqa: BLE001
+                notes.append(f"{quote.symbol}:error {type(exc).__name__}")
+                checked += 1
+                continue
+            result = history_cache.compare(full[quote.symbol], cached)
+            checked += 1
+            if result["identical"]:
+                identical += 1
+            else:
+                notes.append(f"{quote.symbol}: {result['different']} different / {result['missing']} missing of {result['compared']}")
+        stats["checks"] += checked
+        stats["identical"] += identical
+        stats["different"] += checked - identical
+        logger.info("HISTORY_CACHE_CHECK this_cycle=%d identical=%d different=%d | day_total=%d identical=%d different=%d%s", checked, identical, checked - identical,
+                    stats["checks"], stats["identical"], stats["different"], (" | " + "; ".join(notes[:3])) if notes else "")
+
+    def _fetch_histories_full(
+        self,
+        shortlist: Sequence[QuoteSnapshot],
+        now: datetime,
+    ) -> tuple[dict[str, list[Candle]], dict[str, str]]:
         if not shortlist:
             return {}, {}
 
@@ -1738,6 +2521,13 @@ class OpeningMomentumScanner:
             risk_percent=risk_percent,
             features=features.to_dict(),
         )
+        if stage == "EXTENDED_NO_ENTRY":
+            try:                  # shadow record only: would a confirmed news spike have excused the overextension check (see news_spike_exception.py)? The rejection stands either way
+                import news_spike_exception
+                news_spike_exception.observe(Path(self.config.paths.data_dir).parent, str(quote.symbol), quote.direction, now, quote.ltp, features.to_dict(),
+                                             extension_atr, vwap_distance_percent)
+            except Exception:     # noqa: BLE001 - never affects trading
+                pass
 
         reasons = [
             (
@@ -2529,6 +3319,16 @@ class OpeningMomentumScanner:
                         if expiry is not None
                         else self.option_chain.fetch(underlying)
                     )
+                    self._oc_last = {**getattr(self, "_oc_last", {}), str(candidate.symbol): snapshot}      # for the oc_ shadow tags at entry
+                    try:                  # data only: save the chain summary for every candidate a chain was fetched for, not just trades
+                        import options_tags
+                        import signal_snapshots
+                        if getattr(self, "_snap_writer", None) is None:
+                            self._snap_writer = signal_snapshots.SnapshotWriter(Path(self.config.paths.data_dir))
+                        self._snap_writer.chain(datetime.now(), str(candidate.symbol), str(candidate.direction),
+                                                options_tags.chain_tags(snapshot, candidate.direction, getattr(candidate, "ltp", None)))
+                    except Exception:     # noqa: BLE001 - never affects trading
+                        pass
                     selected = self.option_selector.select(
                         snapshot=snapshot,
                         underlying=underlying,
@@ -3000,11 +3800,12 @@ class OpeningMomentumScanner:
         return "SESSION_COMPLETE"
 
     def _new_entries_allowed(self, now: datetime) -> bool:
-        """Allow quality-gated PAPER trade generation for the whole session."""
+        """Allow quality-gated PAPER trade generation until the last-new-entry time."""
+        last_entry = getattr(self.settings, "last_new_entry_time", self.settings.session_stop)
         return (
             self.settings.session_start
             <= now.time()
-            <= self.settings.session_stop
+            <= min(self.settings.session_stop, last_entry)
         )
 
     @staticmethod

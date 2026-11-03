@@ -34,7 +34,8 @@ class OptionSelectionConfig:
     maximum_ltp: float = 250.0
     minimum_oi: int = 5_000
     minimum_volume: int = 500
-    maximum_spread_percent: float = 5.0
+    # 2.0: valid trades with a 2-3% bid-ask spread had profit factor 0.21 (34 trades, -Rs31k).
+    maximum_spread_percent: float = 2.0
     maximum_moneyness_percent: float = 3.0
     target_itm_percent: float = 0.50
 
@@ -401,7 +402,7 @@ class OptionSelector:
         quantity = lot_size * lots
 
         stop_loss = self._round_up(
-            selected.entry - risk_per_unit,
+            selected.entry - self._stop_distance(risk_per_unit, quantity),
             tick_size,
         )
         target1 = self._round_up(
@@ -474,6 +475,19 @@ class OptionSelector:
             selection_score=round(selected.score, 2),
             selection_reason=reason,
         )
+
+    @staticmethod
+    def _stop_distance(risk_per_unit: float, quantity: int) -> float:
+        """Premium distance of the stop. The percentage stop is the ceiling; if APLUS_MAX_LOSS_PER_TRADE_RUPEES
+        is set (> 0) a large position gets a tighter stop so one trade cannot lose more than that amount
+        (stop price only - targets and sizing keep using the percentage risk)."""
+        try:
+            max_loss = float(os.getenv("APLUS_MAX_LOSS_PER_TRADE_RUPEES", "0").strip() or 0)
+        except ValueError:
+            return risk_per_unit
+        if max_loss <= 0 or quantity <= 0:
+            return risk_per_unit
+        return min(risk_per_unit, max_loss / quantity)
 
     @staticmethod
     def _required_side(

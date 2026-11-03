@@ -1,0 +1,362 @@
+
+===== UNDERLYING SECURITY ID REFERENCES =====
+
+  paper_trade_journal.py:69:        "setup_family", "selection_tier", "status", "momentum_score",
+  paper_trade_journal.py:70:        "movement_capture_score", "trend_alignment_score", "clean_trend_score",
+  paper_trade_journal.py:71:        "chase_risk_score", "pivot_state", "recent_move_15m_percent",
+> paper_trade_journal.py:72:        "underlying_entry", "underlying_stop", "underlying_target1",
+  paper_trade_journal.py:73:        "underlying_target2", "underlying_target3", "underlying_risk_percent",
+  paper_trade_journal.py:74:        "option_transaction", "option_type", "option_security_id",
+  paper_trade_journal.py:75:        "trading_symbol", "expiry", "strike", "option_ltp", "bid", "ask",
+  paper_trade_journal.py:76:        "limit_price", "option_stop", "option_target1", "option_target2",
+  paper_trade_journal.py:77:        "option_target3", "lot_size", "lots", "quantity", "total_premium",
+  paper_trade_journal.py:251:            "chase_risk_score": self._number(plan.get("chase_risk_score")),
+  paper_trade_journal.py:252:            "pivot_state": str(plan.get("pivot_state") or candidate.get("pivot_state") or ""),
+  paper_trade_journal.py:253:            "recent_move_15m_percent": self._number(plan.get("recent_move_15m_percent")),
+> paper_trade_journal.py:254:            "underlying_entry": self._number(underlying.get("entry")),
+  paper_trade_journal.py:255:            "underlying_stop": self._number(underlying.get("stop_loss")),
+  paper_trade_journal.py:256:            "underlying_target1": self._number(underlying.get("target1")),
+  paper_trade_journal.py:257:            "underlying_target2": self._number(underlying.get("target2")),
+  paper_trade_journal.py:258:            "underlying_target3": self._number(underlying.get("target3")),
+  paper_trade_journal.py:259:            "underlying_risk_percent": self._number(underlying.get("risk_percent")),
+
+
+
+
+===== SCANNER QUOTE FETCH AND PARSING =====
+
+  opening_momentum_scanner.py:421:            for item in open_paper_positions
+  opening_momentum_scanner.py:422:            if str(item.get("option_security_id") or "")
+  opening_momentum_scanner.py:423:        })
+> opening_momentum_scanner.py:424:        quote_request = {"NSE_EQ": [item.security_id for item in universe]}
+  opening_momentum_scanner.py:425:        if open_option_ids:
+> opening_momentum_scanner.py:426:            quote_request["NSE_FNO"] = open_option_ids
+  opening_momentum_scanner.py:427:        market_context.add_to_request(quote_request)  # NIFTY/BANKNIFTY/VIX ride on this same call
+  opening_momentum_scanner.py:428:        try:
+> opening_momentum_scanner.py:429:            quote_map = self.client.get_market_quotes(quote_request, mode="quote")
+  opening_momentum_scanner.py:430:        except DhanMarketDataAuthorizationError as exc:
+  opening_momentum_scanner.py:431:            self.paper_journal.mark_open_positions_unavailable(
+  opening_momentum_scanner.py:432:                current_time,
+  opening_momentum_scanner.py:433:                error_type=type(exc).__name__,
+  opening_momentum_scanner.py:434:                mark_status="AUTHORIZATION_FAILED",
+  opening_momentum_scanner.py:471:        )
+  opening_momentum_scanner.py:472:        v2_mover_symbols = set(v2_movers.get("symbols", []) or [])
+  opening_momentum_scanner.py:473:
+> opening_momentum_scanner.py:474:        quotes, quote_errors = self._parse_quotes(
+  opening_momentum_scanner.py:475:            universe=universe,
+  opening_momentum_scanner.py:476:            quote_map=quote_map,
+  opening_momentum_scanner.py:477:            now=current_time,
+  opening_momentum_scanner.py:478:            forced_symbols=v2_mover_symbols,
+  opening_momentum_scanner.py:479:        )
+  opening_momentum_scanner.py:499:        )
+  opening_momentum_scanner.py:500:        try:      # SHADOW ONLY: event-day checkpoint log (see event_tags.py); never affects trading
+  opening_momentum_scanner.py:501:            import event_tags
+> opening_momentum_scanner.py:502:            _seg = quote_map.get("NSE_EQ", {}) if isinstance(quote_map, Mapping) else {}
+  opening_momentum_scanner.py:503:            self._event_volumes = {}
+  opening_momentum_scanner.py:504:            for _row in (fno_market_watch or {}).get("rows", []):
+  opening_momentum_scanner.py:505:                _raw = _seg.get(str(_row.get("security_id"))) or _seg.get(_row.get("security_id"))
+  opening_momentum_scanner.py:506:                if isinstance(_raw, Mapping):
+  opening_momentum_scanner.py:507:                    self._event_volumes[_row["symbol"]] = float(_raw.get("volume") or 0)
+  opening_momentum_scanner.py:517:            pass
+  opening_momentum_scanner.py:518:
+  opening_momentum_scanner.py:519:        # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
+> opening_momentum_scanner.py:520:        paper_position_update = self._monitor_paper_positions_from_quote_map(
+  opening_momentum_scanner.py:521:            now=current_time,
+  opening_momentum_scanner.py:522:            quote_map=quote_map,
+  opening_momentum_scanner.py:523:            positions=open_paper_positions,
+  opening_momentum_scanner.py:524:            force_close=False,
+  opening_momentum_scanner.py:525:        )
+  opening_momentum_scanner.py:1179:        self._atomic_json(self.authorization_state_path, payload)
+  opening_momentum_scanner.py:1180:
+  opening_momentum_scanner.py:1181:    # APLUS_SHARED_QUOTE_SCHEDULER_V3_1
+> opening_momentum_scanner.py:1182:    def _monitor_paper_positions_from_quote_map(
+  opening_momentum_scanner.py:1183:        self,
+  opening_momentum_scanner.py:1184:        *,
+  opening_momentum_scanner.py:1185:        now: datetime,
+  opening_momentum_scanner.py:1186:        quote_map: Mapping[str, Any],
+  opening_momentum_scanner.py:1187:        positions: list[Mapping[str, Any]] | None,
+  opening_momentum_scanner.py:1197:        })
+  opening_momentum_scanner.py:1198:        if not ids:
+  opening_momentum_scanner.py:1199:            return {"closed": [], "errors": ["open paper positions have no option security_id"], "quote_source": "SHARED_MAIN_QUOTE"}
+> opening_momentum_scanner.py:1200:        segment = quote_map.get("NSE_FNO", {}) if isinstance(quote_map, Mapping) else {}
+  opening_momentum_scanner.py:1201:        if not isinstance(segment, Mapping):
+  opening_momentum_scanner.py:1202:            segment = {}
+  opening_momentum_scanner.py:1203:        missing = [security_id for security_id in ids if security_id not in segment]
+  opening_momentum_scanner.py:1204:        if missing:
+  opening_momentum_scanner.py:1205:            logger.warning(
+  opening_momentum_scanner.py:1236:        if not ids:
+  opening_momentum_scanner.py:1237:            return {"closed": [], "errors": ["open paper positions have no option security_id"]}
+  opening_momentum_scanner.py:1238:        try:
+> opening_momentum_scanner.py:1239:            quote_map = self.client.get_market_quotes({"NSE_FNO": ids}, mode="quote")
+> opening_momentum_scanner.py:1240:            segment = quote_map.get("NSE_FNO", {})
+  opening_momentum_scanner.py:1241:            if not isinstance(segment, Mapping):
+  opening_momentum_scanner.py:1242:                segment = {}
+  opening_momentum_scanner.py:1243:            closed = self.paper_journal.update_open_positions(
+  opening_momentum_scanner.py:1244:                option_quotes=segment, when=now, force_close=force_close,
+  opening_momentum_scanner.py:1245:                force_close_reason="SESSION_END",
+  opening_momentum_scanner.py:1279:        now: datetime,
+  opening_momentum_scanner.py:1280:    ) -> dict[str, Any]:
+  opening_momentum_scanner.py:1281:        """Build full F&O market watch from the SAME quote batch used by scanner."""
+> opening_momentum_scanner.py:1282:        segment_data = quote_map.get("NSE_EQ", {})
+  opening_momentum_scanner.py:1283:        if not isinstance(segment_data, Mapping):
+  opening_momentum_scanner.py:1284:            segment_data = {}
+  opening_momentum_scanner.py:1285:
+  opening_momentum_scanner.py:1286:        sector_map: dict[str, str] = {}
+  opening_momentum_scanner.py:1287:        sector_file = Path(self.config.paths.data_dir) / "reference" / "fno_sector_map.csv"
+  opening_momentum_scanner.py:1372:        sector_rows.sort(key=lambda x: x["average_from_open_pct"], reverse=True)
+  opening_momentum_scanner.py:1373:        return {"generated_at": now.isoformat(), "count": len(rows), "rows": rows, "sectors": sector_rows}
+  opening_momentum_scanner.py:1374:
+> opening_momentum_scanner.py:1375:    def _parse_quotes(
+  opening_momentum_scanner.py:1376:        self,
+  opening_momentum_scanner.py:1377:        *,
+  opening_momentum_scanner.py:1378:        universe: Sequence[UnderlyingInstrument],
+  opening_momentum_scanner.py:1379:        quote_map: Mapping[str, Any],
+  opening_momentum_scanner.py:1380:        now: datetime,
+  opening_momentum_scanner.py:1381:        forced_symbols: set[str] | None = None,
+  opening_momentum_scanner.py:1382:    ) -> tuple[list[QuoteSnapshot], dict[str, str]]:
+> opening_momentum_scanner.py:1383:        segment_data = quote_map.get("NSE_EQ", {})
+  opening_momentum_scanner.py:1384:        if not isinstance(segment_data, Mapping):
+  opening_momentum_scanner.py:1385:            segment_data = {}
+  opening_momentum_scanner.py:1386:
+  opening_momentum_scanner.py:1387:        quotes: list[QuoteSnapshot] = []
+  opening_momentum_scanner.py:1388:        errors: dict[str, str] = {}
+  opening_momentum_scanner.py:1405:                continue
+  opening_momentum_scanner.py:1406:
+  opening_momentum_scanner.py:1407:            try:
+> opening_momentum_scanner.py:1408:                quote = self._quote_snapshot(
+  opening_momentum_scanner.py:1409:                    underlying.symbol,
+  opening_momentum_scanner.py:1410:                    security_id,
+  opening_momentum_scanner.py:1411:                    raw,
+  opening_momentum_scanner.py:1412:                    now=now,
+  opening_momentum_scanner.py:1413:                )
+  opening_momentum_scanner.py:1447:
+  opening_momentum_scanner.py:1448:        return quotes, errors
+  opening_momentum_scanner.py:1449:
+> opening_momentum_scanner.py:1450:    def _quote_snapshot(
+  opening_momentum_scanner.py:1451:        self,
+  opening_momentum_scanner.py:1452:        symbol: str,
+  opening_momentum_scanner.py:1453:        security_id: str,
+  opening_momentum_scanner.py:1454:        raw: Mapping[str, Any],
+  opening_momentum_scanner.py:1455:        *,
+  opening_momentum_scanner.py:1633:                pool.submit(
+  opening_momentum_scanner.py:1634:                    self.client.get_intraday_candles,
+  opening_momentum_scanner.py:1635:                    security_id=quote.security_id,
+> opening_momentum_scanner.py:1636:                    segment="NSE_EQ",
+  opening_momentum_scanner.py:1637:                    instrument="EQUITY",
+  opening_momentum_scanner.py:1638:                    interval=5,
+  opening_momentum_scanner.py:1639:                    from_datetime=from_dt,
+  opening_momentum_scanner.py:1640:                    to_datetime=to_dt,
+  opening_momentum_scanner.py:1641:                    oi=False,
+
+
+
+
+===== EXISTING STOCK OPTION SHADOW MODULE =====
+
+  stock_option_response_shadow.py:37:        return None
+  stock_option_response_shadow.py:38:    return (now / start - 1.0) * 100.0
+  stock_option_response_shadow.py:39:
+> stock_option_response_shadow.py:40:def evaluate_response(trade: Mapping[str, Any],
+> stock_option_response_shadow.py:41:                      underlying_price: Any,
+> stock_option_response_shadow.py:42:                      option_price: Any,
+  stock_option_response_shadow.py:43:                      quote_time: Any = None,
+  stock_option_response_shadow.py:44:                      day_reference_price: Any = None,
+  stock_option_response_shadow.py:45:                      config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+  stock_option_response_shadow.py:46:    """
+  stock_option_response_shadow.py:47:    Expected trade fields:
+  stock_option_response_shadow.py:48:      paper_trade_id, side ('CE'/'CALL' or 'PE'/'PUT'),
+> stock_option_response_shadow.py:49:      underlying_entry_price, option_entry_price, entry_time,
+  stock_option_response_shadow.py:50:      day_reference_price (optional; e.g. prior close).
+  stock_option_response_shadow.py:51:    quote_time should be ISO-8601. If absent, current UTC time is used.
+  stock_option_response_shadow.py:52:    day_reference_price may be passed explicitly or read from trade.
+  stock_option_response_shadow.py:53:    """
+  stock_option_response_shadow.py:54:    cfg = {
+  stock_option_response_shadow.py:55:        "max_quote_age_seconds": 180,
+> stock_option_response_shadow.py:56:        "milestones_pct": [0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 2.50, 3.00],
+  stock_option_response_shadow.py:57:        "mode": "SHADOW_ONLY",
+  stock_option_response_shadow.py:58:    }
+  stock_option_response_shadow.py:59:    if config:
+  stock_option_response_shadow.py:60:        cfg.update(dict(config))
+  stock_option_response_shadow.py:61:
+  stock_option_response_shadow.py:62:    now = _dt(quote_time) or datetime.now(timezone.utc)
+> stock_option_response_shadow.py:63:    under = _num(underlying_price)
+> stock_option_response_shadow.py:64:    opt = _num(option_price)
+> stock_option_response_shadow.py:65:    u_entry = _num(trade.get("underlying_entry_price", trade.get("underlying_entry")))
+  stock_option_response_shadow.py:66:    o_entry = _num(trade.get("option_entry_price", trade.get("entry_price")))
+  stock_option_response_shadow.py:67:    day_ref = _num(day_reference_price if day_reference_price is not None
+  stock_option_response_shadow.py:68:                   else trade.get("day_reference_price", trade.get("underlying_day_reference")))
+  stock_option_response_shadow.py:69:    entry_time = _dt(trade.get("entry_time"))
+  stock_option_response_shadow.py:70:
+  stock_option_response_shadow.py:73:        "shadow_feature": "stock_option_response",
+  stock_option_response_shadow.py:74:        "paper_trade_id": trade.get("paper_trade_id", trade.get("trade_id")),
+  stock_option_response_shadow.py:75:        "quote_time": now.isoformat(),
+> stock_option_response_shadow.py:76:        "underlying_price": under,
+> stock_option_response_shadow.py:77:        "option_price": opt,
+> stock_option_response_shadow.py:78:        "underlying_entry_price": u_entry,
+  stock_option_response_shadow.py:79:        "option_entry_price": o_entry,
+  stock_option_response_shadow.py:80:        "day_reference_price": day_ref,
+  stock_option_response_shadow.py:81:        "underlying_move_from_entry_pct": _pct(under, u_entry),
+  stock_option_response_shadow.py:82:        "option_change_from_entry_pct": _pct(opt, o_entry),
+  stock_option_response_shadow.py:83:        "option_change_from_entry_rupees": (opt - o_entry) if opt is not None and o_entry is not None else None,
+  stock_option_response_shadow.py:85:        "stock_move_from_day_reference_now_pct": _pct(under, day_ref),
+  stock_option_response_shadow.py:86:        "stock_move_since_entry_percentage_points": None,
+  stock_option_response_shadow.py:87:        "option_response_per_1pct_stock_move": None,
+> stock_option_response_shadow.py:88:        "elapsed_minutes": None,
+  stock_option_response_shadow.py:89:        "quote_age_seconds": 0,
+> stock_option_response_shadow.py:90:        "verdict": "INSUFFICIENT_DATA_SHADOW",
+  stock_option_response_shadow.py:91:        "note": "Missing or invalid entry/quote prices; no inference made.",
+  stock_option_response_shadow.py:92:    }
+  stock_option_response_shadow.py:93:
+  stock_option_response_shadow.py:94:    sm = out["underlying_move_from_entry_pct"]
+  stock_option_response_shadow.py:95:    op = out["option_change_from_entry_pct"]
+  stock_option_response_shadow.py:96:    if sm is not None and abs(sm) > EPS and op is not None:
+  stock_option_response_shadow.py:97:        out["option_response_per_1pct_stock_move"] = op / sm
+  stock_option_response_shadow.py:98:    if entry_time:
+> stock_option_response_shadow.py:99:        out["elapsed_minutes"] = max(0.0, (now - entry_time).total_seconds() / 60.0)
+  stock_option_response_shadow.py:100:    if under is not None and day_ref is not None and u_entry is not None:
+  stock_option_response_shadow.py:101:        at_entry = _pct(u_entry, day_ref)
+  stock_option_response_shadow.py:102:        now_day = _pct(under, day_ref)
+  stock_option_response_shadow.py:103:        if at_entry is not None and now_day is not None:
+  stock_option_response_shadow.py:104:            out["stock_move_since_entry_percentage_points"] = now_day - at_entry
+  stock_option_response_shadow.py:114:        return out
+  stock_option_response_shadow.py:115:
+  stock_option_response_shadow.py:116:    if signed_stock_move >= 0.25 and signed_option_change > 0:
+> stock_option_response_shadow.py:117:        verdict = "FAVORABLE_MOVE_OPTION_RESPONDED_SHADOW"
+  stock_option_response_shadow.py:118:        note = "Underlying moved in the favorable direction and option premium rose."
+  stock_option_response_shadow.py:119:    elif signed_stock_move >= 0.25 and signed_option_change <= 0:
+> stock_option_response_shadow.py:120:        verdict = "FAVORABLE_STOCK_WEAK_OPTION_RESPONSE_SHADOW"
+  stock_option_response_shadow.py:121:        note = "Underlying moved favorably but option premium did not rise; inspect theta, IV, delta, spread and quote freshness."
+  stock_option_response_shadow.py:122:    elif signed_stock_move <= -0.25 and signed_option_change < 0:
+> stock_option_response_shadow.py:123:        verdict = "ADVERSE_MOVE_OPTION_LOSS_SHADOW"
+  stock_option_response_shadow.py:124:        note = "Underlying moved against the position and option premium fell."
+  stock_option_response_shadow.py:125:    elif signed_stock_move <= -0.25 and signed_option_change >= 0:
+> stock_option_response_shadow.py:126:        verdict = "DIVERGENT_RESPONSE_SHADOW"
+  stock_option_response_shadow.py:127:        note = "Underlying moved against the position but option premium did not fall; verify quotes and Greeks."
+  stock_option_response_shadow.py:128:    else:
+> stock_option_response_shadow.py:129:        verdict = "SMALL_MOVE_MONITOR_SHADOW"
+> stock_option_response_shadow.py:130:        note = "Underlying move is small; continue measuring response and elapsed time."
+  stock_option_response_shadow.py:131:
+> stock_option_response_shadow.py:132:    out["verdict"] = verdict
+  stock_option_response_shadow.py:133:    out["note"] = note
+  stock_option_response_shadow.py:134:    out["favorable_underlying_move_pct"] = signed_stock_move
+  stock_option_response_shadow.py:135:    out["option_response_pct"] = signed_option_change
+> stock_option_response_shadow.py:136:    out["milestones"] = []
+> stock_option_response_shadow.py:137:    for milestone in cfg.get("milestones_pct", []):
+  stock_option_response_shadow.py:138:        try:
+> stock_option_response_shadow.py:139:            m = float(milestone)
+  stock_option_response_shadow.py:140:        except (TypeError, ValueError):
+  stock_option_response_shadow.py:141:            continue
+  stock_option_response_shadow.py:142:        if signed_stock_move >= m:
+> stock_option_response_shadow.py:143:            out["milestones"].append({
+  stock_option_response_shadow.py:144:                "favorable_stock_move_pct": m,
+  stock_option_response_shadow.py:145:                "observed_option_change_pct": signed_option_change,
+  stock_option_response_shadow.py:146:                "observed_option_change_rupees": opt - o_entry,
+  stock_option_response_shadow.py:147:                "quote_time": now.isoformat(),
+> stock_option_response_shadow.py:148:                "elapsed_minutes": out["elapsed_minutes"],
+  stock_option_response_shadow.py:149:            })
+  stock_option_response_shadow.py:150:    return out
+
+
+
+
+===== SHADOW MODULE TESTS =====
+
+  test_stock_option_response_shadow.py:1:import unittest
+> test_stock_option_response_shadow.py:2:from stock_option_response_shadow import evaluate_response
+  test_stock_option_response_shadow.py:3:
+  test_stock_option_response_shadow.py:4:class ResponseTests(unittest.TestCase):
+> test_stock_option_response_shadow.py:5:    def test_call_stock_plus_1_5_option_plus_12(self):
+> test_stock_option_response_shadow.py:6:        r = evaluate_response(
+  test_stock_option_response_shadow.py:7:            {"paper_trade_id":"T1","side":"CE","underlying_entry_price":1000,
+  test_stock_option_response_shadow.py:8:             "option_entry_price":100,"entry_time":"2026-10-13T10:00:00+05:30",
+  test_stock_option_response_shadow.py:9:             "day_reference_price":980},
+  test_stock_option_response_shadow.py:10:            1015,112,"2026-10-13T10:30:00+05:30")
+  test_stock_option_response_shadow.py:11:        self.assertAlmostEqual(r["underlying_move_from_entry_pct"], 1.5)
+  test_stock_option_response_shadow.py:14:        self.assertEqual(r["shadow_mode"], "SHADOW_ONLY")
+  test_stock_option_response_shadow.py:15:        self.assertTrue(r["milestones"])
+  test_stock_option_response_shadow.py:16:
+> test_stock_option_response_shadow.py:17:    def test_put_favorable_direction_is_down(self):
+> test_stock_option_response_shadow.py:18:        r = evaluate_response(
+  test_stock_option_response_shadow.py:19:            {"side":"PE","underlying_entry_price":1000,"option_entry_price":100,
+  test_stock_option_response_shadow.py:20:             "entry_time":"2026-10-13T10:00:00+00:00"},
+  test_stock_option_response_shadow.py:21:            985,110,"2026-10-13T10:20:00+00:00")
+  test_stock_option_response_shadow.py:22:        self.assertAlmostEqual(r["favorable_underlying_move_pct"], 1.5)
+  test_stock_option_response_shadow.py:23:        self.assertEqual(r["verdict"], "FAVORABLE_MOVE_OPTION_RESPONDED_SHADOW")
+  test_stock_option_response_shadow.py:24:
+> test_stock_option_response_shadow.py:25:    def test_underlying_favorable_but_option_down(self):
+> test_stock_option_response_shadow.py:26:        r = evaluate_response(
+  test_stock_option_response_shadow.py:27:            {"side":"CE","underlying_entry_price":1000,"option_entry_price":100},
+  test_stock_option_response_shadow.py:28:            1010,96,"2026-10-13T10:20:00+00:00")
+  test_stock_option_response_shadow.py:29:        self.assertEqual(r["verdict"], "FAVORABLE_STOCK_WEAK_OPTION_RESPONSE_SHADOW")
+  test_stock_option_response_shadow.py:30:
+> test_stock_option_response_shadow.py:31:    def test_missing_data_safe(self):
+> test_stock_option_response_shadow.py:32:        r = evaluate_response({"side":"CE"}, 100, 10)
+  test_stock_option_response_shadow.py:33:        self.assertEqual(r["verdict"], "INSUFFICIENT_DATA_SHADOW")
+  test_stock_option_response_shadow.py:34:        self.assertEqual(r["shadow_mode"], "SHADOW_ONLY")
+  test_stock_option_response_shadow.py:35:
+  test_stock_option_response_shadow.py:36:if __name__ == "__main__":
+  test_stock_option_response_shadow.py:37:    unittest.main()
+
+
+
+
+===== JOURNAL TRADE CREATION =====
+
+  paper_trade_journal.py:69:        "setup_family", "selection_tier", "status", "momentum_score",
+  paper_trade_journal.py:70:        "movement_capture_score", "trend_alignment_score", "clean_trend_score",
+  paper_trade_journal.py:71:        "chase_risk_score", "pivot_state", "recent_move_15m_percent",
+> paper_trade_journal.py:72:        "underlying_entry", "underlying_stop", "underlying_target1",
+  paper_trade_journal.py:73:        "underlying_target2", "underlying_target3", "underlying_risk_percent",
+> paper_trade_journal.py:74:        "option_transaction", "option_type", "option_security_id",
+  paper_trade_journal.py:75:        "trading_symbol", "expiry", "strike", "option_ltp", "bid", "ask",
+  paper_trade_journal.py:76:        "limit_price", "option_stop", "option_target1", "option_target2",
+  paper_trade_journal.py:77:        "option_target3", "lot_size", "lots", "quantity", "total_premium",
+  paper_trade_journal.py:78:        "total_risk", "oi", "volume", "iv", "spread_percent",
+  paper_trade_journal.py:79:        "selection_score", "safety_decision", "safety_block_reasons",
+  paper_trade_journal.py:204:        })
+  paper_trade_journal.py:205:        self.lanes[key] = lane
+  paper_trade_journal.py:206:
+> paper_trade_journal.py:207:    def record_trade(
+  paper_trade_journal.py:208:        self,
+  paper_trade_journal.py:209:        *,
+  paper_trade_journal.py:210:        plan: Mapping[str, Any],
+  paper_trade_journal.py:211:        candidate: Mapping[str, Any],
+  paper_trade_journal.py:212:        when: datetime,
+  paper_trade_journal.py:251:            "chase_risk_score": self._number(plan.get("chase_risk_score")),
+  paper_trade_journal.py:252:            "pivot_state": str(plan.get("pivot_state") or candidate.get("pivot_state") or ""),
+  paper_trade_journal.py:253:            "recent_move_15m_percent": self._number(plan.get("recent_move_15m_percent")),
+> paper_trade_journal.py:254:            "underlying_entry": self._number(underlying.get("entry")),
+  paper_trade_journal.py:255:            "underlying_stop": self._number(underlying.get("stop_loss")),
+  paper_trade_journal.py:256:            "underlying_target1": self._number(underlying.get("target1")),
+  paper_trade_journal.py:257:            "underlying_target2": self._number(underlying.get("target2")),
+  paper_trade_journal.py:258:            "underlying_target3": self._number(underlying.get("target3")),
+  paper_trade_journal.py:259:            "underlying_risk_percent": self._number(underlying.get("risk_percent")),
+  paper_trade_journal.py:260:            "option_transaction": str(option.get("transaction") or ""),
+  paper_trade_journal.py:261:            "option_type": str(option.get("option_type") or ""),
+> paper_trade_journal.py:262:            "option_security_id": str(option.get("security_id") or ""),
+  paper_trade_journal.py:263:            "trading_symbol": str(option.get("trading_symbol") or ""),
+  paper_trade_journal.py:264:            "expiry": str(option.get("expiry") or ""),
+  paper_trade_journal.py:265:            "strike": self._number(option.get("strike")),
+  paper_trade_journal.py:266:            "option_ltp": self._number(option.get("ltp")),
+  paper_trade_journal.py:267:            "bid": self._number(option.get("bid")),
+  paper_trade_journal.py:374:                "timestamp": when.isoformat(),
+  paper_trade_journal.py:375:                "trade_id": tid,
+  paper_trade_journal.py:376:                "symbol": trade.get("symbol", ""),
+> paper_trade_journal.py:377:                "option_security_id": trade.get("option_security_id", ""),
+  paper_trade_journal.py:378:                "option_type": trade.get("option_type", ""),
+  paper_trade_journal.py:379:                "strike": trade.get("strike", ""),
+  paper_trade_journal.py:380:                "expiry": trade.get("expiry", ""),
+  paper_trade_journal.py:381:                "price": round(float(price), 4),
+  paper_trade_journal.py:382:                "entry_price": trade.get("entry_price", ""),
+  paper_trade_journal.py:402:            if str(trade.get("status") or "").upper() != "OPEN":
+  paper_trade_journal.py:403:                continue
+  paper_trade_journal.py:404:            trade["last_mark_evaluated_at"] = when.isoformat()
+> paper_trade_journal.py:405:            sid = str(trade.get("option_security_id") or "")
+  paper_trade_journal.py:406:            try:
+  paper_trade_journal.py:407:                raw = option_quotes.get(sid)
+  paper_trade_journal.py:408:                if raw is None:
+  paper_trade_journal.py:409:                    try:
+  paper_trade_journal.py:410:                        raw = option_quotes.get(int(sid))
+
+
+

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from config import AppConfig
 from core.dhan_client import DhanClient
+from core.market_data import build_client
 
 IST=ZoneInfo("Asia/Kolkata")
 ROOT=Path(__file__).resolve().parent
@@ -142,7 +143,7 @@ class Resolver:
 class Engine:
     def __init__(self):
         cfg=AppConfig.from_env(); cfg.ensure_runtime_directories()
-        self.client=DhanClient(cfg.dhan); self.resolver=Resolver(); self.trades=[]; self.last_mark=0.0
+        self.client=build_client(cfg); self.resolver=Resolver(); self.trades=[]; self.last_mark=0.0
         self.load_state()
     def shadow_map(self):
         o=read_json(SHADOW); rows=o.get("rows",[]) if isinstance(o,dict) else []

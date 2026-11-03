@@ -1,0 +1,28 @@
+"""HTML of the Profit-in-Rupees page (see rupee_report.py). Plain JS, no external libraries."""
+
+HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>APlus Profit in Rupees</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><style>
+:root{--bg:#05080f;--panel:#0a111d;--line:#17324a;--text:#e6edf9;--muted:#7d8fab;--g:#27e39a;--r:#ff4d5e;--gold:#ffb454;--c:#22e6ff}
+*{box-sizing:border-box}html,body{background:var(--bg)!important;color:var(--text);margin:0;font:12.5px/1.35 "Segoe UI",Arial,sans-serif}
+#rp{padding:10px 14px 26px;max-width:1500px;margin:0 auto}h1{font-size:15px;letter-spacing:.2em;margin:8px 0 2px;text-transform:uppercase}h2{font-size:12px;letter-spacing:.16em;text-transform:uppercase;margin:16px 0 6px;color:var(--c)}.sub{color:var(--muted);font-size:11.5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:10px 0}.card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px 12px}.card .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}.card .l{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+table{width:100%;border-collapse:collapse}th,td{padding:4px 7px;border-bottom:1px solid #112238;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}th{color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}td:first-child,th:first-child{text-align:left}td:first-child{font-weight:800}
+.g{color:var(--g)}.r{color:var(--r)}.box{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px 10px;margin-bottom:12px;overflow-x:auto}.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}.note{color:var(--muted);font-size:11px;margin-top:10px;max-width:1200px}@media(max-width:1100px){.cols{grid-template-columns:1fr}}
+</style></head><body><div id="rp"><h1>Profit in rupees after entry</h1><div class="sub" id="asof">loading...</div>
+<div class="cards" id="cards"></div>
+<h2>Today, trade by trade</h2><div class="box"><div id="today"></div></div>
+<div class="cols"><div><h2>Every day: what the entries showed at their best vs what we kept</h2><div class="box"><div id="days"></div></div></div>
+<div><h2>If every closed trade had been sold in full at +₹T</h2><div class="box"><div id="targets"></div></div></div></div>
+<div class="note">Peak ₹ = (highest option price after entry - entry price) x quantity: the best profit the position ever showed. Final ₹ = net P&amp;L for a closed trade (costs in), the open profit for an open one. Gave back = peak - final.
+The target table sells a trade in full the moment its peak reached T (feasible: it was still alive then) and keeps the real result when it never did; slippage on the way out is ignored. Updated every 5 seconds from the paper journal.</div></div><script>
+function rs(n){n=Math.round(Number(n));return (n<0?"-":"")+"₹"+Math.abs(n).toLocaleString("en-IN")}function cl(n){return n>0?"g":n<0?"r":""}
+function render(D){var a=document.getElementById("asof");if(!D||!D.ok){a.textContent="loading...";return}
+ var A=D.all,T=D.today_summary;a.textContent="Today "+D.day+" - "+T.n+" trades - "+A.n+" trades in all, "+A.days+" days";
+ document.getElementById("cards").innerHTML=[["Today: best profit the entries showed",rs(T.peaks),""],["Today: realised + open now",rs(T.final),cl(T.final)],["All trades: median best profit",rs(A.peak_median),""],["All trades: reached +₹1,000",A.reached["1000"]+"%",""],
+  ["All closed: banked",rs(A.banked_total||0),cl(A.banked_total||0)],["Of those in profit at some point, closed in a loss",(A.lost_anyway_pct||0)+"%","r"],["Median given back from the peak",rs(A.gave_back_median||0),"r"]].map(function(c){return '<div class="card"><div class="l">'+c[0]+'</div><div class="v '+c[2]+'">'+c[1]+'</div></div>'}).join("");
+ document.getElementById("today").innerHTML=D.today.length?'<table><thead><tr><th>Time</th><th>Stock</th><th>Side</th><th>Entry</th><th>Peak</th><th>Now / exit</th><th>Qty</th><th>Peak ₹</th><th>Mins to peak</th><th>Final ₹</th><th>Gave back</th><th>Status</th></tr></thead><tbody>'+D.today.map(function(r){return '<tr><td>'+r.entry_time.substr(11,5)+'</td><td>'+r.symbol+'</td><td>'+r.side+'</td><td>'+r.entry.toFixed(2)+'</td><td>'+r.peak.toFixed(2)+'</td><td>'+(r.now_or_exit==null?"-":r.now_or_exit.toFixed(2))+'</td><td>'+r.qty+'</td><td class="'+cl(r.peak_rs)+'">'+rs(r.peak_rs)+'</td><td>'+(r.minutes_to_peak==null?"-":r.minutes_to_peak)+'</td><td class="'+cl(r.final_rs)+'">'+rs(r.final_rs)+'</td><td class="r">'+rs(r.gave_back)+'</td><td>'+r.status+(r.exit_reason?' <span class="sub">'+r.exit_reason+'</span>':"")+'</td></tr>'}).join("")+'</tbody></table>':'<div class="sub">no trades today yet</div>';
+ document.getElementById("days").innerHTML='<table><thead><tr><th>Day</th><th>Trades</th><th>Best profit shown</th><th>Kept (final)</th></tr></thead><tbody>'+D.per_day.slice().reverse().map(function(d){return '<tr><td>'+d.day+'</td><td>'+d.n+'</td><td>'+rs(d.peaks)+'</td><td class="'+cl(d.final)+'">'+rs(d.final)+'</td></tr>'}).join("")+'</tbody></table>';
+ document.getElementById("targets").innerHTML=A.targets?'<table><thead><tr><th>Rule</th><th>Total</th><th>Reached target</th></tr></thead><tbody>'+A.targets.map(function(t){return '<tr><td>'+t.label+'</td><td class="'+cl(t.total)+'">'+rs(t.total)+'</td><td>'+(t.target?t.hit:"-")+'</td></tr>'}).join("")+'</tbody></table>':"";}
+function load(){fetch("/api/rupees",{cache:"no-store"}).then(function(r){return r.json()}).then(render).catch(function(){document.getElementById("asof").textContent="connection lost - retrying"})}
+load();setInterval(load,5000);
+</script></body></html>"""

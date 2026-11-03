@@ -62,16 +62,16 @@ class SafetyGateConfig:
 
     fallback_account_capital: float = 500_000.0
     trade_risk_percent: float = 10.0
-    maximum_daily_loss_percent: float = 1.50
-    maximum_open_positions: int = 2
-    maximum_total_premium_percent: float = 20.0
+    maximum_daily_loss_percent: float = 0.0  # 0 = no daily-loss stop; set APLUS_SAFETY_MAX_DAILY_LOSS_PERCENT to enable
+    maximum_open_positions: int = 0  # 0 = unlimited; set APLUS_SAFETY_MAX_OPEN_POSITIONS to cap
+    maximum_total_premium_percent: float = 0.0  # 0 = no cap on total deployed premium; set APLUS_SAFETY_MAX_TOTAL_PREMIUM_PERCENT to enable
     maximum_trades_per_day: int = 0  # 0 = unlimited; quality/risk gates decide
-    maximum_consecutive_losses: int = 2
+    maximum_consecutive_losses: int = 0  # 0 = no cooling-off; set APLUS_SAFETY_MAX_CONSECUTIVE_LOSSES to enable
     available_balance_buffer_percent: float = 5.0
     portfolio_state_max_age_days: int = 0
 
     brokerage_per_executed_order: float = 20.0
-    exchange_transaction_charge_percent: float = 0.003
+    exchange_transaction_charge_percent: float = 0.03503
     sebi_turnover_fee_percent: float = 0.0001
     ipft_other_charge_percent: float = 0.0
     gst_percent: float = 18.0
@@ -157,7 +157,7 @@ class SafetyGateConfig:
             maximum_daily_loss_percent=_env_float(
                 "APLUS_SAFETY_MAX_DAILY_LOSS_PERCENT",
                 defaults.maximum_daily_loss_percent,
-                minimum=0.01,
+                minimum=0.0,
             ),
             maximum_open_positions=_env_int(
                 "APLUS_SAFETY_MAX_OPEN_POSITIONS",
@@ -167,7 +167,7 @@ class SafetyGateConfig:
             maximum_total_premium_percent=_env_float(
                 "APLUS_SAFETY_MAX_TOTAL_PREMIUM_PERCENT",
                 defaults.maximum_total_premium_percent,
-                minimum=0.01,
+                minimum=0.0,
             ),
             maximum_trades_per_day=_env_int(
                 "APLUS_SAFETY_MAX_TRADES_PER_DAY",
@@ -377,6 +377,7 @@ class SafetyGateEngine:
         result.checks.append(
             self._mwpl_check(normalized_symbol, current.date())
         )
+        result.checks.append(self._option_price_check(option_contract))
 
         portfolio_check, portfolio_metrics = self._portfolio_check(
             option_contract=option_contract,
@@ -431,6 +432,24 @@ class SafetyGateEngine:
         else:
             result.decision = "PASS"
         return result
+
+    @staticmethod
+    def _option_price_check(option_contract: Any) -> GateCheck:
+        """Block an entry whose option price is at or above APLUS_BLOCK_OPTION_PRICE (0 or unset = off). 16 Oct 2026: 80, from the loss pattern in the
+        trade history (see gate_shadow.py / the premium-cap report)."""
+        try:
+            cap = float(os.getenv("APLUS_BLOCK_OPTION_PRICE", "0") or 0.0)
+        except ValueError:
+            cap = 0.0
+        if cap <= 0:
+            return GateCheck("OPTION_PRICE_CAP", GateStatus.PASS, "Option price cap is off")
+        price = (_number(_value(option_contract, "limit_price"))
+                 or _number(_value(option_contract, "ask"))
+                 or _number(_value(option_contract, "ltp")))
+        if price >= cap:
+            return GateCheck("OPTION_PRICE_CAP", GateStatus.BLOCK,
+                             f"Option price {price:.2f} is at or above the {cap:g} cap", {"price": price, "cap": cap})
+        return GateCheck("OPTION_PRICE_CAP", GateStatus.PASS, f"Option price {price:.2f} is below the {cap:g} cap", {"price": price, "cap": cap})
 
     def _expiry_check(
         self,
@@ -508,8 +527,13 @@ class SafetyGateEngine:
         symbol: str,
         today: date,
     ) -> GateCheck:
+        if str(os.getenv("APLUS_CORPORATE_EVENT_BLOCK", "1")).strip().lower() in {"0", "false", "no", "off"}:
+            # 17 Oct 2026 (user decision): results / event stocks are the ones that move most, so an event no longer blocks an entry. The event data is still
+            # recorded on the trade (event_tags) and measured nightly (event_reaction_review). The exchange MWPL ban check below is unaffected.
+            return GateCheck("CORPORATE_EVENT", GateStatus.PASS, "Corporate-event block is switched off (APLUS_CORPORATE_EVENT_BLOCK=0)")
         path = self.safety_dir / "corporate_events.csv"
-        rows = _read_csv(path)
+        # Live NSE announcements (written by announcement_feed.py) are merged with the calendar.
+        rows = _read_csv(path) + _read_csv(self.safety_dir / "announcement_events.csv")
         if not rows:
             return self._unknown_or_block(
                 "CORPORATE_EVENT",
@@ -895,15 +919,27 @@ class SafetyGateEngine:
             reasons.append(
                 "Proposed option risk exceeds per-trade capital risk limit"
             )
-        if realized_pnl <= -maximum_daily_loss:
+        if (
+            self.config.maximum_daily_loss_percent > 0
+            and realized_pnl <= -maximum_daily_loss
+        ):
             reasons.append("Maximum daily loss has been reached")
-        if open_positions >= self.config.maximum_open_positions:
+        if (
+            self.config.maximum_open_positions > 0
+            and open_positions >= self.config.maximum_open_positions
+        ):
             reasons.append("Maximum open-position count has been reached")
-        if open_premium + proposed_premium > maximum_total_premium:
+        if (
+            self.config.maximum_total_premium_percent > 0
+            and open_premium + proposed_premium > maximum_total_premium
+        ):
             reasons.append("Total deployed option premium would exceed limit")
         if self.config.maximum_trades_per_day > 0 and trades_today >= self.config.maximum_trades_per_day:
             reasons.append("Maximum trades per day has been reached")
-        if consecutive_losses >= self.config.maximum_consecutive_losses:
+        if (
+            self.config.maximum_consecutive_losses > 0
+            and consecutive_losses >= self.config.maximum_consecutive_losses
+        ):
             reasons.append("Consecutive-loss cooling-off threshold reached")
         if available_balance > 0 and available_balance < required_balance:
             reasons.append("Available balance is insufficient with safety buffer")

@@ -32,6 +32,7 @@ from typing import Any
 
 from config import AppConfig
 from core.dhan_client import DhanClient
+from core.market_data import build_client
 from core.instrument_loader import InstrumentLoader
 
 ROOT = Path(__file__).resolve().parent
@@ -435,7 +436,7 @@ def main() -> int:
         flush=True,
     )
 
-    with DhanClient(cfg.dhan) as client:
+    with build_client(cfg) as client:                  # Upstox first (APLUS_DATA_PROVIDER=UPSTOX), Dhan fallback
         cycle = 0
         while args.cycles == 0 or cycle < args.cycles:
             cycle += 1

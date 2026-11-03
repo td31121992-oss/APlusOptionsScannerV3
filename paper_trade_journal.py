@@ -14,21 +14,118 @@ from __future__ import annotations
 from paper_trade_history_store import sync_history
 
 import csv
+import functools
 import json
 import logging
 import math
 import os
 import tempfile
+import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from telegram_notifier import TelegramPaperTradeNotifier
+from trade_costs import round_trip_costs
 
 
 logger = logging.getLogger(__name__)
+
+
+
+# SHADOW exit variants (never used for real exits). Peak-drop variants: once the option is up `act` from entry, exit when it
+# falls `dd` below its highest price. Names look like peak8_a30 (8% below the peak, active after +30%).
+PEAK_VARIANTS = [(dd, act) for act in (0.20, 0.30) for dd in (0.06, 0.08, 0.10, 0.12)]
+PEAK_NAMES = tuple(f"peak{int(round(dd * 100))}_a{int(round(act * 100))}" for dd, act in PEAK_VARIANTS)
+# Big-peak giveback shadows (rupees, not percent): once the position has shown `act` rupees of profit, leave when the option gives back `gb` of that peak profit.
+# Month study of 175 paper trades (5-minute bars, exit one bar after the trigger): 25-30% giveback once the peak profit was Rs 4,000+ would have kept about Rs 16,000-20,000
+# more gross - chosen after looking at many variants, so it is only evidence to test forward. Name: bigpeak25_r4000 = 25% giveback once peak profit >= Rs 4,000.
+BIGPEAK_VARIANTS = [(act, gb) for act in (3000, 4000) for gb in (0.25, 0.30)]
+BIGPEAK_NAMES = tuple(f"bigpeak{int(round(gb * 100))}_r{act}" for act, gb in BIGPEAK_VARIANTS)
+# "Cash it and leave" shadows: the whole position is sold the moment the option first reaches +X% (limit fill at exactly +X%).
+# Tests the burst-scalping idea (catch a 10-20% option move, then look for the next trade) on real trades, next to the stop-based exits.
+TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
+# "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
+#   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
+#   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
+SHADOW_TAG_PREFIXES = ("sec_", "kl_", "ms_", "nt_", "mtf_", "gk_", "tr_", "smc_", "chop_", "cat_", "oc_", "bu_", "sk_", "gs_", "pv_", "nf_", "fp_", "mb_", "pt_", "sp_", "settle_", "tk_", "orb_", "q_", "mf_", "cn_", "td_", "px_", "bs_", "bp_", "wk_", "cg_", "ev_", "evg_", "nd_", "po_", "rx_", "rs_", "iv_", "fl_", "ml_", "em_", "co_", "bb_", "dl_", "am_", "gw_", "cs_", "mv_", "rgs_", "sf_")      # copied from the candidate onto the trade record as they are
+STOCK_BURST_SHADOWS = {"sbg40": ("giveback", 0.4), "sbg60": ("giveback", 0.6), "sstall10": ("stall", 10.0),
+                       "moverover": ("over", 0.5)}
+STOCK_STRUCTURE_SHADOWS = {"skorb": "sk_orb_level", "sksw": "sk_sw_level", "skvwap": "sk_vwap_level"}      # stock trades beyond its opening-range / 30-min swing level / VWAP (see stock_stops.py)
+STRUCTURE_ARM_RS = {"skvwap": 2000.0}      # skvwap only counts once the option has shown this much profit (Rs); month study of 173 trades: VWAP break after a Rs 2,000+ peak
+SECTOR_FADE_PCT = 0.4         # 'secfade' shadow: the sector index gave back this much from its best level since our entry ...
+SECTOR_SHADOWS = ("secfade",)  # ... while the stock is below our entry price (see sector_tape.py)
+MOVER_OVER_ARM_PCT = 8.0       # option must have been up this much ...
+MOVER_OVER_BACK_PCT = 3.0      # ... and be back at/below this (about cost) ...
+MOVER_OVER_STALL_MIN = 10.0    # ... and the stock gave back 50% of its best move, or is below entry, or made no new best for 10 min
+STOCK_BURST_ARM_PCT = 0.5
+# Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
+# instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
+VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
+
+
+def _first_lock_pct() -> float:
+    """Stop (as % of entry) once the option has reached +5%. Default -15 (Darpan, 14 Oct 2026); 0 would be the old 'stop at entry'."""
+    try:
+        return max(-20.0, min(0.0, float(os.getenv("APLUS_LADDER_FIRST_LOCK_PCT", "-15"))))
+    except ValueError:
+        return -15.0
+
+
+def user_ladder_floor(entry: float, high: float) -> float:
+    """Darpan's exit ladder, driven by the highest price reached (the lock only ever moves up):
+    +5% -> stop tightens to -15% (was -20%; APLUS_LADDER_FIRST_LOCK_PCT) | +10% -> lock +3% | +20% -> lock +13% | +30% -> lock +22%,
+    then +2 points of lock for every further +5% of gain.
+    Returns the stop price, or 0.0 while the option has not yet reached +5%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)               # rounded so exactly +20% is not read as 19.999999
+    if gain >= 30.0:
+        lock = 22.0 + 2.0 * int((gain - 30.0) // 5.0)
+    elif gain >= 20.0:
+        lock = 13.0
+    elif gain >= 10.0:
+        lock = 3.0
+    elif gain >= 5.0:
+        lock = _first_lock_pct()
+    else:
+        return 0.0
+    return entry * (1.0 + lock / 100.0)
+
+def cost5_floor(entry: float, high: float) -> float:
+    """cost5 shadow (28 Oct 2026): YOUR ladder with only its first step changed - once the best price reaches +5% the stop moves to COST (was -15%); +10% -> +3%, +20% -> +13%, +30% -> +22%, +2 per +5%.
+    Why: trades whose best price was only +5% to +10% gave it all back and left at -15% (DMART, POWERGRID on 28 Oct); a tick replay of 65 trades (26-28 Oct) with this first step: -37,107 against -44,464.
+    Returns the stop price, or 0.0 while the option has not yet reached +5%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)
+    if gain >= 30.0:
+        lock = 22.0 + 2.0 * int((gain - 30.0) // 5.0)
+    elif gain >= 20.0:
+        lock = 13.0
+    elif gain >= 10.0:
+        lock = 3.0
+    elif gain >= 5.0:
+        lock = 0.0
+    else:
+        return 0.0
+    return entry * (1.0 + lock / 100.0)
+
+
+def two_step_floor(entry: float, high: float) -> float:
+    """Two-step shadow (Darpan, 16 Oct 2026): +5% -> stop tightens to -15% (was -20%) | +10% -> stop at cost. Nothing else locks (rest is manual).
+    Returns the stop price, or 0.0 while the option has not yet reached +5%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)
+    if gain >= 10.0:
+        return entry
+    if gain >= 5.0:
+        return entry * 0.85
+    return 0.0
 
 
 class PaperTradeJournal:
@@ -53,6 +150,7 @@ class PaperTradeJournal:
         "capital_deployed", "planned_risk_amount", "planned_risk_percent",
         "last_quote_time", "last_option_price", "highest_option_price",
         "lowest_option_price", "mfe_amount", "mae_amount",
+        "highest_option_price_at", "lowest_option_price_at",
         "last_successful_mark_at", "last_mark_evaluated_at", "mark_status",
         "last_mark_error_type", "last_mark_error_status",
         "position_lifecycle_status", "position_status_reason",
@@ -61,6 +159,8 @@ class PaperTradeJournal:
         "runner_mode", "runner_activated_at", "runner_stop",
         "exit_time", "exit_price", "exit_reason", "holding_seconds",
         "gross_pnl", "estimated_costs", "net_pnl", "return_percent", "result",
+        "entry_spread_pct", "entry_slip_pct", "exit_bid", "exit_ask", "exit_bid_qty", "exit_ask_qty", "exit_spread_pct",
+        "exit_quote_time", "exit_slip_amount", "exit_bid_covers_qty", "net_pnl_at_bid",
     )
 
     def __init__(
@@ -83,6 +183,26 @@ class PaperTradeJournal:
         self.lanes: dict[str, dict[str, Any]] = {}
         self.notifier = TelegramPaperTradeNotifier(state_dir=self.state_dir)
         self._load()
+        self._install_lock()
+
+    # Methods the scan loop and the fast position monitor (fast_monitor.py) may call from different threads: each runs under one re-entrant lock.
+    LOCKED_METHODS = ("can_generate", "observe_candidate", "record_trade", "open_positions", "update_open_positions", "mark_open_positions_unavailable", "record_stock_response",
+                      "record_sector_fade", "record_stock_rank", "summary", "flush")
+
+    def _install_lock(self) -> None:
+        self._lock = threading.RLock()
+
+        def locked(fn: Any) -> Any:
+            @functools.wraps(fn)
+            def run(*args: Any, **kwargs: Any) -> Any:
+                with self._lock:
+                    return fn(*args, **kwargs)
+            return run
+
+        for name in self.LOCKED_METHODS:
+            method = getattr(self, name, None)
+            if callable(method):
+                setattr(self, name, locked(method))
 
     def can_generate(
         self,
@@ -200,6 +320,37 @@ class PaperTradeJournal:
             "direction": direction,
             "stage": str(plan.get("stage") or candidate.get("stage") or ""),
             "setup_family": str(plan.get("setup_family") or candidate.get("setup_family") or ""),
+            "ob_shadow": str(candidate.get("ob_shadow") or ""),
+            "ob_zone": str(candidate.get("ob_zone") or ""),
+            "breadth_tag": str(candidate.get("breadth_tag") or ""),
+            "entry_minute": candidate.get("entry_minute", ""), "entry_premium": candidate.get("entry_premium", ""),
+            "f_time_0945": candidate.get("f_time_0945", ""), "f_premium_5": candidate.get("f_premium_5", ""),
+            "f_all": candidate.get("f_all", ""), "day_regime": str(candidate.get("day_regime") or ""),
+            "rule_verdict": str(candidate.get("rule_verdict") or ""), "rule_reasons": str(candidate.get("rule_reasons") or ""),
+            "ctx_done_move_pct": candidate.get("ctx_done_move_pct", ""), "ctx_range_pos": candidate.get("ctx_range_pos", ""),
+            "ctx_mins_since_ext": candidate.get("ctx_mins_since_ext", ""), "ctx_last15_pct": candidate.get("ctx_last15_pct", ""),
+            "ctx_last30_pct": candidate.get("ctx_last30_pct", ""), "ctx_vs_vwap_pct": candidate.get("ctx_vs_vwap_pct", ""),
+            "ctx_at_extreme": candidate.get("ctx_at_extreme", ""), "ctx_fading": candidate.get("ctx_fading", ""),
+            "opt_run15_pct": candidate.get("opt_run15_pct", ""), "opt_run30_pct": candidate.get("opt_run30_pct", ""),
+            "opt_run_from_low_pct": candidate.get("opt_run_from_low_pct", ""), "opt_late_guard30": candidate.get("opt_late_guard30", ""),
+            "opt_late_guard20": candidate.get("opt_late_guard20", ""),
+            "fut_premium_pct": candidate.get("fut_premium_pct", ""), "fut_premium_chg_pct": candidate.get("fut_premium_chg_pct", ""),
+            "fut_oi_chg_day_pct": candidate.get("fut_oi_chg_day_pct", ""), "fut_oi_chg_30m_pct": candidate.get("fut_oi_chg_30m_pct", ""),
+            "fut_price_chg_30m_pct": candidate.get("fut_price_chg_30m_pct", ""), "fut_flow": str(candidate.get("fut_flow") or ""),
+            "fut_confirms": candidate.get("fut_confirms", ""),
+            "ctx_vol30_pct": candidate.get("ctx_vol30_pct", ""), "ctx_vol60_pct": candidate.get("ctx_vol60_pct", ""),
+            "ctx_vol_stop30_pct": candidate.get("ctx_vol_stop30_pct", ""), "ctx_vol_stop60_pct": candidate.get("ctx_vol_stop60_pct", ""),
+            "rrg_sector": str(candidate.get("rrg_sector") or ""), "rrg_index": str(candidate.get("rrg_index") or ""),
+            "rrg_ratio": candidate.get("rrg_ratio", ""), "rrg_momentum": candidate.get("rrg_momentum", ""),
+            "rrg_quadrant": str(candidate.get("rrg_quadrant") or ""), "rrg_aligned": candidate.get("rrg_aligned", ""),
+            "rrg_asof": str(candidate.get("rrg_asof") or ""),
+            "rule_verdict_db": str(candidate.get("rule_verdict_db") or ""), "rule_reasons_db": str(candidate.get("rule_reasons_db") or ""),
+            "rule_nifty_pct_open": candidate.get("rule_nifty_pct_open", ""),
+            "event_like": candidate.get("event_like", ""), "event_gap_pct": candidate.get("event_gap_pct", ""),
+            "event_rvol": candidate.get("event_rvol", ""), "event_move_open_pct": candidate.get("event_move_open_pct", ""),
+            "event_agrees": candidate.get("event_agrees", ""),
+            "breadth_up": candidate.get("breadth_up", ""), "breadth_down": candidate.get("breadth_down", ""),
+            "breadth_pct_with": candidate.get("breadth_pct_with", ""), "breadth_evidence": candidate.get("breadth_evidence", ""),
             "selection_tier": str(plan.get("selection_tier") or candidate.get("selection_tier") or ""),
             "status": "OPEN",
             "momentum_score": self._number(plan.get("momentum_score")),
@@ -238,6 +389,8 @@ class PaperTradeJournal:
             "volume": self._integer(option.get("volume")),
             "iv": self._number(option.get("iv")),
             "spread_percent": self._number(option.get("spread_percent")),
+            "entry_spread_pct": self._entry_spread_pct(option),
+            "entry_slip_pct": self._entry_slip_pct(option),
             "selection_score": self._number(option.get("selection_score")),
             "safety_decision": str(safety.get("decision") or ""),
             "safety_block_reasons": list(safety.get("block_reasons") or []),
@@ -261,6 +414,9 @@ class PaperTradeJournal:
             "net_pnl": 0.0, "return_percent": 0.0, "result": "OPEN",
             "plan": dict(plan),
         }
+        for _key, _val in dict(candidate).items():          # shadow tags added by prefix (sector tape, key level, structure, verdict, ...)
+            if isinstance(_key, str) and _key.startswith(SHADOW_TAG_PREFIXES) and _key not in record:
+                record[_key] = _val
         entry_price = self._number(record.get("entry_price"))
         quantity = self._integer(record.get("quantity"))
         capital = entry_price * quantity
@@ -323,7 +479,8 @@ class PaperTradeJournal:
             tid = str(trade.get("trade_id") or trade.get("paper_trade_id") or "").strip()
             if not tid:
                 return
-            base = self.data_dir.parent / "option_trade_tape" / when.date().isoformat()
+            # (was self.data_dir, which does not exist: the error was swallowed and no tape was ever written)
+            base = self.state_dir.parent / "option_trade_tape" / when.date().isoformat()
             base.mkdir(parents=True, exist_ok=True)
             path = base / f"{tid}.csv"
             exists = path.exists()
@@ -354,6 +511,7 @@ class PaperTradeJournal:
     ) -> list[dict[str, Any]]:
         """Update PAPER positions from real option LTPs; no broker orders."""
         self._ensure_date(when.date())
+        self._apply_manual_commands(when)
         closed_now = []
         for trade in self.trades:
             if str(trade.get("status") or "").upper() != "OPEN":
@@ -369,12 +527,18 @@ class PaperTradeJournal:
                         raw = None
                 price = self._quote_price(raw)
             except Exception as exc:
+                if force_close and self._close_at_last_mark(trade, when, force_close_reason):
+                    closed_now.append(trade)
+                    continue
                 self._mark_unavailable(
                     trade, when, status="MARKET_DATA_ERROR",
                     error_type=type(exc).__name__, force_close=force_close,
                 )
                 continue
             if price <= 0:
+                if force_close and self._close_at_last_mark(trade, when, force_close_reason):
+                    closed_now.append(trade)
+                    continue
                 self._mark_unavailable(
                     trade, when, status="NO_VALID_MARK",
                     error_type="", force_close=force_close,
@@ -404,10 +568,18 @@ class PaperTradeJournal:
             trade["position_status_reason"] = ""
             trade["position_lifecycle_status"] = "OPEN"
             self._append_option_tape(trade, when, price)
-            high = max(self._number(trade.get("highest_option_price")), price)
+            self._record_quote_depth(trade, when, price, raw)
+            prev_high = self._number(trade.get("highest_option_price"))
+            high = max(prev_high, price)
             old_low = self._number(trade.get("lowest_option_price"))
             low = min(old_low if old_low > 0 else price, price)
+            if price > prev_high:                      # time of each NEW extreme (strictly beyond the previous one)
+                trade["highest_option_price_at"] = when.isoformat()
+            if old_low > 0 and price < old_low:
+                trade["lowest_option_price_at"] = when.isoformat()
             trade["highest_option_price"] = round(high, 4)
+            self._watch_alert(trade, entry, high, price)
+            self._giveback_alert(trade, entry, high, price)
             trade["lowest_option_price"] = round(low, 4)
             trade["mfe_amount"] = round((high - entry) * qty, 2)
             trade["mae_amount"] = round((low - entry) * qty, 2)
@@ -423,34 +595,551 @@ class PaperTradeJournal:
 
             original_stop = self._number(trade.get("option_stop"))
             protected_stop = original_stop
-            if trade.get("target1_hit_at"):
-                protected_stop = max(protected_stop, entry)
-            if trade.get("target2_hit_at"):
-                protected_stop = max(protected_stop, entry * 1.08)
-            if trade.get("target3_hit_at"):
-                if not bool(trade.get("runner_mode")):
-                    trade["runner_mode"] = True
-                    trade["runner_activated_at"] = when.isoformat()
-                runner_floor = entry * 1.15
-                gain_trail = entry + max(0.0, high - entry) * 0.70
-                protected_stop = max(protected_stop, runner_floor, gain_trail)
-                trade["runner_stop"] = round(protected_stop, 4)
+            if self._exit_ladder_mode() == "ENFORCE":
+                protected_stop = max(original_stop, user_ladder_floor(entry, high))      # +5% -> -15%, +10% -> +3%, +20% -> +13%, +30% -> +22% ...
+                trade["ladder_stop"] = round(protected_stop, 4)
+            else:
+                if trade.get("target1_hit_at"):
+                    protected_stop = max(protected_stop, entry)
+                if trade.get("target2_hit_at"):
+                    protected_stop = max(protected_stop, entry * 1.08)
+                if trade.get("target3_hit_at"):
+                    if not bool(trade.get("runner_mode")):
+                        trade["runner_mode"] = True
+                        trade["runner_activated_at"] = when.isoformat()
+                    runner_floor = entry * 1.15
+                    gain_trail = entry + max(0.0, high - entry) * 0.70
+                    protected_stop = max(protected_stop, runner_floor, gain_trail)
+                    trade["runner_stop"] = round(protected_stop, 4)
 
+            self._record_stop_shadows(trade, entry, high, price, when, protected_stop)
+
+            manual_stop = self._number(trade.get("manual_stop"))
+            manual_active = manual_stop > 0 and manual_stop > protected_stop            # tighten only: never loosens a stop
+            if manual_active:
+                protected_stop = manual_stop
             reason = ""
-            if protected_stop > 0 and price <= protected_stop:
+            if protected_stop > 0 and price <= protected_stop and manual_active:
+                reason = "MANUAL_STOP_LOSS"
+            elif protected_stop > 0 and price <= protected_stop:
                 reason = (
                     "RUNNER_TRAIL_EXIT" if bool(trade.get("runner_mode"))
                     else ("PROFIT_PROTECTION_EXIT" if protected_stop > original_stop else "OPTION_STOP_LOSS")
                 )
-            elif force_close:
-                trade["position_lifecycle_status"] = "CLOSE_PENDING"
-                trade["position_status_reason"] = (
-                    "Session ended; no automatic exit event or price was created."
-                )
+            else:
+                lock_floor = self._profit_lock_floor(entry, high)
+                if lock_floor > 0 and price <= lock_floor:
+                    mode = self._profit_lock_mode()
+                    if mode == "ENFORCE":
+                        reason = "PROFIT_LOCK_EXIT"
+                    elif mode == "SHADOW" and not trade.get("lock_shadow_exit_at"):
+                        trade["lock_shadow_exit_at"] = when.isoformat()      # what the rule WOULD have done; trade untouched
+                        trade["lock_shadow_exit_price"] = round(price, 4)
+                        trade["lock_shadow_floor"] = round(lock_floor, 4)
+            if not reason and trade.get("confirm5") == "FAILED":
+                c5mode = self._confirm5_mode()
+                if c5mode == "ENFORCE":
+                    reason = "CONFIRM5_EXIT"
+                elif c5mode == "SHADOW" and not trade.get("confirm5_shadow_exit_at"):
+                    trade["confirm5_shadow_exit_at"] = when.isoformat()      # what 'confirm within 5 minutes or leave' WOULD have done; trade untouched
+                    trade["confirm5_shadow_exit_price"] = round(price, 4)
+            if not reason and trade.get("confirm10") == "FAILED" and not trade.get("confirm10_shadow_exit_at"):
+                trade["confirm10_shadow_exit_at"] = when.isoformat()         # SHADOW only: what 'stock must follow through within 10 minutes' WOULD have done; trade untouched
+                trade["confirm10_shadow_exit_price"] = round(price, 4)
+            if not reason and trade.get("manual_exit_requested_at"):
+                reason = "MANUAL_EXIT"
+            if not reason and force_close:
+                # Session end: exit at the last valid mark (this branch is only
+                # reached with a valid positive price), never leave it open.
+                reason = force_close_reason
             if reason:
                 self._close_trade(trade, when, price, reason)
                 closed_now.append(trade)
         return closed_now
+
+    RESPONSE_MILESTONES = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0)
+
+    def record_stock_response(self, stock_prices: Mapping[str, Any], when: datetime, extra: Iterable[dict[str, Any]] = ()) -> int:
+        """SHADOW: for each open trade (plus `extra`, e.g. trades closed this cycle) store how far the STOCK has moved since our
+        entry in our favour, what the OPTION did, the option's gain per 1% stock move, and when the stock first reached each
+        milestone (+0.25%, +0.5% ... +3%) with the option gain at that moment. Never changes a trade's status or exits."""
+        try:
+            from stock_option_response_shadow import evaluate_response
+        except Exception:                                   # noqa: BLE001 - optional module
+            return 0
+        done = 0
+        seen: set[int] = set()
+        candidates = [x for x in self.trades if str(x.get("status") or "").upper() == "OPEN"] + list(extra or [])
+        for trade in candidates:
+            if id(trade) in seen:
+                continue
+            seen.add(id(trade))
+            try:
+                price = self._number(stock_prices.get(str(trade.get("symbol") or "").upper()))
+                u_entry = self._number(trade.get("underlying_entry"))
+                opt_now = self._number(trade.get("last_option_price")) or self._number(trade.get("exit_price"))
+                if price <= 0 or u_entry <= 0 or opt_now <= 0:
+                    continue
+                res = evaluate_response(
+                    {"paper_trade_id": trade.get("paper_trade_id"), "side": trade.get("option_type"),
+                     "underlying_entry_price": u_entry, "option_entry_price": self._number(trade.get("entry_price")),
+                     "entry_time": trade.get("entry_time")},
+                    price, opt_now, when.isoformat())
+                fav = res.get("favorable_underlying_move_pct")
+                gain = res.get("option_change_from_entry_pct")
+                if fav is None or gain is None:
+                    continue
+                trade["stock_last_price"] = round(price, 2)
+                hi_at = trade.get("highest_option_price_at")
+                if hi_at and trade.get("stock_at_high_for") != hi_at:       # the option just made a new peak: note where the stock was
+                    trade["stock_at_high"] = round(price, 2)
+                    trade["stock_at_high_for"] = hi_at
+                prev_max = self._number(trade.get("stock_move_fav_max_pct"))
+                new_max = max(fav, prev_max)
+                if fav > prev_max or not trade.get("stock_fav_max_at"):
+                    trade["stock_fav_max_at"] = when.isoformat()
+                if str(trade.get("status") or "").upper() == "OPEN":
+                    self._record_structure_shadows(trade, price, opt_now, when)
+                    self._hold_check_alert(trade, price, opt_now, when)
+                trade["stock_move_fav_pct"] = round(fav, 3)
+                trade["stock_move_fav_max_pct"] = round(new_max, 3)
+                self._record_confirm5(trade, fav, when)
+                self._record_confirm10(trade, fav, when)
+                if str(trade.get("status") or "").upper() == "OPEN" and new_max >= STOCK_BURST_ARM_PCT:
+                    try:
+                        since = (when - datetime.fromisoformat(str(trade["stock_fav_max_at"]))).total_seconds() / 60.0
+                    except (TypeError, ValueError):
+                        since = 0.0
+                    for sname, (kind, param) in STOCK_BURST_SHADOWS.items():
+                        if trade.get(f"shadow_{sname}_exit_at"):
+                            continue
+                        if kind == "over":
+                            e_px, h_px = self._number(trade.get("entry_price")), self._number(trade.get("highest_option_price"))
+                            if e_px <= 0 or h_px < e_px * (1 + MOVER_OVER_ARM_PCT / 100) or opt_now > e_px * (1 + MOVER_OVER_BACK_PCT / 100):
+                                continue
+                            ended = fav < 0 or (new_max - fav) >= param * new_max or (since >= MOVER_OVER_STALL_MIN and fav < new_max)
+                        else:
+                            ended = ((new_max - fav) >= param * new_max) if kind == "giveback" else (since >= param and fav < new_max)
+                        if ended:
+                            trade[f"shadow_{sname}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                            trade[f"shadow_{sname}_exit_price"] = round(opt_now, 4)
+                            trade[f"shadow_{sname}_stock_best_pct"] = round(new_max, 3)
+                trade["stock_opt_gain_pct"] = round(gain, 2)
+                if abs(fav) >= 0.15:
+                    trade["stock_opt_per_1pct"] = round(gain / fav, 1)        # option % gain per 1% stock move in our favour
+                trade["stock_response_verdict"] = str(res.get("verdict") or "")
+                trade["stock_response_at"] = when.isoformat()
+                for m in self.RESPONSE_MILESTONES:
+                    key = f"stock_ms{int(round(m * 100)):03d}"
+                    if fav >= m and not trade.get(key + "_at"):
+                        trade[key + "_at"] = when.strftime("%H:%M:%S")
+                        trade[key + "_opt_pct"] = round(gain, 2)
+                done += 1
+            except Exception:                               # noqa: BLE001 - shadow only, never breaks the journal
+                continue
+        return done
+
+    @staticmethod
+    def _record_structure_shadows(trade: dict[str, Any], price: float, opt_now: float, when: datetime) -> None:
+        """Shadow exits when the stock trades beyond its opening-range / 30-minute swing level against us on two readings in a row."""
+        try:
+            from stock_stops import breached
+        except Exception:                                   # noqa: BLE001 - optional module
+            return
+        for name, field in STOCK_STRUCTURE_SHADOWS.items():
+            if trade.get(f"shadow_{name}_exit_at"):
+                continue
+            try:
+                level = float(trade.get(field) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if level <= 0:
+                continue
+            arm = STRUCTURE_ARM_RS.get(name)
+            if arm is not None:
+                try:
+                    if (float(trade.get("highest_option_price") or 0) - float(trade.get("entry_price") or 0)) * float(trade.get("quantity") or 0) < arm:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            key = f"shadow_{name}_breaches"
+            if breached(price, level, str(trade.get("option_type") or "")):
+                trade[key] = int(trade.get(key) or 0) + 1
+                if trade[key] >= 2:
+                    trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                    trade[f"shadow_{name}_exit_price"] = round(opt_now, 4)
+                    trade[f"shadow_{name}_floor"] = round(level, 4)
+            else:
+                trade[key] = 0
+
+    HOLD_CHECK_PEAK_PCT, HOLD_CHECK_MINUTES, HOLD_CHECK_STOCK_PCT = 15.0, 30.0, -0.5
+
+    def _hold_check_alert(self, trade: dict[str, Any], stock_price: float, opt_now: float, when: datetime) -> None:
+        """Telegram heads-up (once per option peak) when an option that peaked at +15% or more made that peak 30+ minutes ago, is below it, and the
+        stock has gone 0.5%+ against us since the peak. Past trades: about a third made a new high from there. Alert only - never touches the trade."""
+        try:
+            entry, high = self._number(trade.get("entry_price")), self._number(trade.get("highest_option_price"))
+            peak_at = str(trade.get("highest_option_price_at") or "")
+            s_hi = self._number(trade.get("stock_at_high"))
+            if entry <= 0 or high < entry * (1 + self.HOLD_CHECK_PEAK_PCT / 100) or not peak_at or s_hi <= 0 or stock_price <= 0 or opt_now >= high:
+                return
+            if trade.get("stock_at_high_for") != peak_at or trade.get("hold_check_for") == peak_at:
+                return
+            mins = (when - datetime.fromisoformat(peak_at)).total_seconds() / 60.0
+            put = str(trade.get("option_type") or "").upper().startswith("P")
+            stock_since = (-1 if put else 1) * (stock_price / s_hi - 1) * 100
+            if mins < self.HOLD_CHECK_MINUTES or stock_since > self.HOLD_CHECK_STOCK_PCT:
+                return
+            trade["hold_check_for"] = peak_at
+            trade["hold_check_at"] = when.isoformat()
+            trade["hold_check_stock_since_pct"] = round(stock_since, 2)
+            notify = getattr(self.notifier, "notify_hold_check", None)
+            if notify:
+                notify(trade, mins, stock_since, opt_now)
+        except Exception:                                  # noqa: BLE001 - an alert must never break the journal
+            pass
+
+    WATCH_LEVELS = (5.0, 10.0, 20.0, 30.0, 50.0, 100.0)       # "in profit" Telegram alerts, once per level on the peak gain (alert only; widened from 10 / 20 on 29 Oct 2026)
+    GIVEBACK_LEVELS = (0.40, 0.70)          # share of the peak gain handed back that triggers a "giving back" alert (once each)
+
+    def _fire(self, fn: Any, *args: Any) -> None:
+        """Run a notification. The live scanner sets async_alerts so a slow Telegram call can never hold up the position monitor; tests call it directly."""
+        def run() -> None:
+            try:
+                fn(*args)
+            except Exception:                              # noqa: BLE001 - an alert must never break anything
+                pass
+        if getattr(self, "async_alerts", False):
+            threading.Thread(target=run, name="telegram-alert", daemon=True).start()
+        else:
+            run()
+
+    def _stop_levels(self, trade: dict[str, Any], entry: float, high: float) -> tuple[float, float]:
+        """(the stop in force, your ladder's stop) as option prices for the alerts; 0.0 when there is none. Same rules the exit uses: with the ladder ENFORCED its floor
+        (or the initial stop, whichever is higher), otherwise the old T1/T2/T3 rules; a manual stop only ever tightens."""
+        initial = self._number(trade.get("option_stop"))
+        ladder = user_ladder_floor(entry, high)
+        if self._exit_ladder_mode() == "ENFORCE":
+            real = max(initial, ladder)
+        else:
+            seen = dict(trade)                             # the targets are marked "hit" later in the same price check: read them from the peak so the alert is never one check behind
+            for flag, field in (("target1_hit_at", "option_target1"), ("target2_hit_at", "option_target2"), ("target3_hit_at", "option_target3")):
+                target = self._number(trade.get(field))
+                if not seen.get(flag) and target > 0 and high >= target:
+                    seen[flag] = "now"
+            real = self._stop_shadow_floors(seen, entry, high).get("old_rules", initial)
+        manual = self._number(trade.get("manual_stop"))
+        return (max(real, manual) if manual > 0 else real), ladder
+
+    def _watch_alert(self, trade: dict[str, Any], entry: float, high: float, price: float) -> None:
+        """Telegram heads-up (once per level) when an open option is up 10% / 20% from entry, so it can be watched for a reversal and
+        cut by hand. It now also says where the stop is. Alert only - never touches the trade."""
+        try:
+            if entry <= 0:
+                return
+            gain = (high / entry - 1.0) * 100.0
+            for level in self.WATCH_LEVELS:
+                key = f"watch{int(level)}_at"
+                if gain >= level and not trade.get(key):
+                    trade[key] = datetime.now().isoformat()
+                    notify = getattr(self.notifier, "notify_watch", None)
+                    if notify:
+                        trade["alert_stop_price"], trade["alert_ladder_price"] = self._stop_levels(trade, entry, high)
+                        self._fire(notify, dict(trade), level, price)
+        except Exception:                                  # noqa: BLE001 - an alert must never break the journal
+            pass
+
+    def _giveback_alert(self, trade: dict[str, Any], entry: float, high: float, price: float) -> None:
+        """Telegram warning (once per level) when a trade that reached +10% hands back 40% / 70% of its peak gain and is still open, with the stop in force.
+        Alert only. APLUS_GIVEBACK_ALERT=OFF disables it."""
+        try:
+            if os.getenv("APLUS_GIVEBACK_ALERT", "ON").strip().upper() in {"OFF", "0", "NO", "FALSE"}:
+                return
+            if entry <= 0 or high < entry * 1.10 or price >= high:
+                return
+            frac = (high - price) / (high - entry)
+            stop, ladder = self._stop_levels(trade, entry, high)
+            if stop > 0 and price <= stop:
+                return                                     # the exit itself is about to fire and says so
+            hit = [lvl for lvl in self.GIVEBACK_LEVELS if frac >= lvl and not trade.get(f"giveback{int(lvl * 100)}_at")]
+            if not hit:
+                return
+            for lvl in hit:
+                trade[f"giveback{int(lvl * 100)}_at"] = datetime.now().isoformat()
+            notify = getattr(self.notifier, "notify_giveback", None)
+            if notify:
+                trade["alert_stop_price"], trade["alert_ladder_price"] = stop, ladder
+                self._fire(notify, dict(trade), max(hit), price)
+        except Exception:                                  # noqa: BLE001
+            pass
+
+    def record_sector_fade(self, sector_ltps: Mapping[str, Any], when: datetime) -> int:
+        """SHADOW: for each open trade that carries a sector index (sec_idx, sec_entry_ltp), track the sector's best level since
+        entry in our direction and note the first time it gave back SECTOR_FADE_PCT while the stock is below our entry.
+        Never changes a trade."""
+        done = 0
+        for trade in self.trades:
+            try:
+                idx = trade.get("sec_idx")
+                if str(trade.get("status") or "").upper() != "OPEN" or not idx or trade.get("shadow_secfade_exit_at"):
+                    continue
+                now = self._number(sector_ltps.get(idx))
+                start = self._number(trade.get("sec_entry_ltp"))
+                if now <= 0 or start <= 0:
+                    continue
+                bull = str(trade.get("direction") or "").upper() == "BULLISH"
+                best = self._number(trade.get("sec_best_ltp")) or start
+                best = max(best, now) if bull else min(best, now)
+                trade["sec_best_ltp"] = round(best, 2)
+                fade = ((best - now) / best * 100.0) if bull else ((now - best) / best * 100.0)
+                trade["sec_fade_pct"] = round(fade, 3)
+                done += 1
+                opt = self._number(trade.get("last_option_price"))
+                if fade >= SECTOR_FADE_PCT and self._number(trade.get("stock_move_fav_pct")) < 0 and opt > 0:
+                    trade["shadow_secfade_exit_at"] = when.isoformat()
+                    trade["shadow_secfade_exit_price"] = round(opt, 4)
+                    trade["shadow_secfade_sector_fade_pct"] = round(fade, 3)
+            except Exception:                              # noqa: BLE001 - shadow only
+                continue
+        return done
+
+    def record_stock_rank(self, ranks: Mapping[str, Any], when: datetime, extra: Iterable[dict[str, Any]] = ()) -> int:
+        """Display only: the stock's rank among all F&O stocks by move from the open, judged on the trade's own side (call -> top gainers, put -> top losers).
+        Stores rank_entry (first look after entry), rank_now, rank_best, rank_worst, rank_close (the look when the trade closed) and rank_path (changes only)."""
+        done = 0
+        seen: set[int] = set()
+        for trade in [x for x in self.trades if str(x.get("status") or "").upper() == "OPEN"] + list(extra or []):
+            if id(trade) in seen:
+                continue
+            seen.add(id(trade))
+            try:
+                info = ranks.get(str(trade.get("symbol") or "").upper())
+                if not info:
+                    continue
+                bull = str(trade.get("direction") or "").upper() == "BULLISH"
+                r = int(info["gain" if bull else "loss"])
+                closed = str(trade.get("status") or "").upper() == "CLOSED"
+                trade["rank_side"] = "GAINERS" if bull else "LOSERS"
+                trade["rank_n"] = int(info.get("n") or 0)
+                if not trade.get("rank_entry"):
+                    trade["rank_entry"] = r
+                trade["rank_now"] = r
+                trade["rank_best"] = min(r, int(trade.get("rank_best") or r))
+                trade["rank_worst"] = max(r, int(trade.get("rank_worst") or r))
+                path = list(trade.get("rank_path") or [])
+                if not path or path[-1][1] != r:
+                    path.append([when.strftime("%H:%M"), r])
+                    trade["rank_path"] = path[-60:]
+                if closed and not trade.get("rank_close"):
+                    trade["rank_close"] = r
+                done += 1
+            except Exception:                               # noqa: BLE001 - display only, never breaks the journal
+                continue
+        return done
+
+    def _record_confirm5(self, trade: dict[str, Any], fav: float, when: datetime) -> None:
+        """SHADOW quality filter: did the stock keep going our way once 5 minutes had passed since entry (HELD) or not (FAILED)?
+        Also stores the day's entry order so the review can show 'first 5 confirmed entries of the day'. Never touches the trade."""
+        try:
+            if not trade.get("day_entry_rank"):
+                day = str(trade.get("entry_time") or "")[:10]
+                earlier = [x for x in self.trades if x is not trade and str(x.get("entry_time") or "")[:10] == day
+                           and str(x.get("entry_time") or "") <= str(trade.get("entry_time") or "")]
+                trade["day_entry_rank"] = len(earlier) + 1
+            if "gs_day_cap_over" not in trade:
+                import gate_shadow
+                cap = gate_shadow.over_cap(trade.get("day_entry_rank"))
+                if cap is not None:
+                    trade["gs_day_cap_over"] = cap                  # shadow gate: the 6th or later entry of the day
+                    if "gs_q_block" in trade:
+                        trade["gs_q_block"] = int(trade["gs_q_block"]) + int(cap)
+                        trade["gs_q_pass"] = bool(trade["gs_q_block"] == 0)
+                    if "gs_why" in trade:
+                        trade.update(gate_shadow.why(trade))        # shadow: refresh the list of gates that apply now that the day cap is known
+            if trade.get("confirm5"):
+                return
+            mins = (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds() / 60.0
+            low = min(fav, self._number(trade.get("confirm5_min_pct")) if trade.get("confirm5_min_pct") not in (None, "") else fav)
+            trade["confirm5_min_pct"] = round(low, 3)
+            if mins >= 5.0:
+                trade["confirm5_pct"] = round(fav, 3)
+                trade["confirm5"] = "HELD" if fav > 0 else "FAILED"
+                trade["confirm5_at"] = when.isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    def _apply_manual_commands(self, when: datetime) -> None:
+        """Read data/manual_orders/<date>.jsonl (written by the dashboard) and put the latest stop / exit wish on each open trade.
+        Idempotent; a missing or unreadable file changes nothing."""
+        try:
+            import manual_orders
+            if not manual_orders.enabled():
+                return
+            root = getattr(self, "manual_root", None) or self.state_dir.parent.parent
+            manual_orders.heartbeat(root, when)
+            state = manual_orders.desired_state(manual_orders.read(root, when.date().isoformat()))
+            for trade in self.trades:
+                if str(trade.get("status") or "").upper() != "OPEN":
+                    continue
+                want = state.get(str(trade.get("paper_trade_id") or ""))
+                if not want:
+                    continue
+                if want["stop"]:
+                    trade["manual_stop"] = want["stop"]
+                    trade["manual_stop_set_at"] = want["stop_at"]
+                elif trade.get("manual_stop"):
+                    trade.pop("manual_stop", None)
+                    trade["manual_stop_cleared_at"] = want["stop_at"]
+                if want["exit_at"] and not trade.get("manual_exit_requested_at"):
+                    trade["manual_exit_requested_at"] = want["exit_at"]
+        except Exception:                                    # noqa: BLE001 - manual controls must never break the monitor
+            return
+
+    @staticmethod
+    def _exit_ladder_mode() -> str:
+        """APLUS_EXIT_LADDER_MODE: SHADOW (default: recorded on every trade, real exits unchanged) or ENFORCE (the ladder IS the exit rule)."""
+        mode = str(os.getenv("APLUS_EXIT_LADDER_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"SHADOW", "ENFORCE"} else "SHADOW"
+
+    @staticmethod
+    def _stop_shadow_floors(trade: dict[str, Any], entry: float, high: float) -> dict[str, float]:
+        """Stop floors of two SHADOW variants (never used for real exits), given the targets reached so far.
+        ladder:  T1 -> entry, T2 -> target 1 price, T3 -> target 2 price (each step locks the previous target).
+        trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
+        t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
+        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high), "two_step": two_step_floor(entry, high), "cost5": cost5_floor(entry, high)}
+        for (dd, act), name in zip(PEAK_VARIANTS, PEAK_NAMES):
+            out[name] = high * (1.0 - dd) if high >= entry * (1.0 + act) else 0.0
+        qty = float(trade.get("quantity") or 0)
+        for (act_rs, gb), name in zip(BIGPEAK_VARIANTS, BIGPEAK_NAMES):
+            out[name] = entry + (high - entry) * (1.0 - gb) if qty > 0 and (high - entry) * qty >= act_rs else 0.0
+        old = float(trade.get("option_stop") or 0)                      # old_rules: the pre-ladder live rules (initial stop, T1 -> entry, T2 -> +8%, T3 -> runner floor +15% / 70% trail),
+        if t1:                                                          # kept as a shadow so they can still be compared once the user ladder is ENFORCED
+            old = max(old, entry)
+        if t2:
+            old = max(old, entry * 1.08)
+        if t3:
+            old = max(old, entry * 1.15, entry + 0.70 * max(0.0, high - entry))
+        out["old_rules"] = old
+        if t1:
+            out["ladder"] = out["trail60"] = entry
+        if t2:
+            out["ladder"] = max(out["ladder"], float(trade.get("option_target1") or 0))
+            out["trail60"] = max(out["trail60"], entry + 0.6 * max(0.0, high - entry))
+        if t3:
+            out["ladder"] = max(out["ladder"], float(trade.get("option_target2") or 0))
+        return out
+
+    def _record_half10_shadow(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime) -> None:
+        """Shadow: book half the position at +10% (limit fill at exactly +10%), stop the rest at entry, then trail it at
+        60% of the peak gain once target 2 is reached. Records the booking and the exit of the remaining half."""
+        if entry <= 0 or trade.get("shadow_half10_exit_at"):
+            return
+        if not trade.get("shadow_half10_book_at"):
+            if high >= entry * 1.10:
+                trade["shadow_half10_book_at"] = when.isoformat()
+                trade["shadow_half10_book_price"] = round(entry * 1.10, 4)
+            else:
+                return
+        floor = entry
+        if trade.get("target2_hit_at"):
+            floor = max(floor, entry + 0.6 * max(0.0, high - entry))
+        if price <= floor:
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+
+    def _record_stop_shadows(self, trade: dict[str, Any], entry: float, high: float, price: float, when: datetime,
+                             protected_stop: float = 0.0) -> None:
+        try:
+            floors = self._stop_shadow_floors(trade, entry, high)
+        except (TypeError, ValueError):
+            return
+        for name, field in VOL_STOP_SHADOWS.items():                 # tighter first stop where the stock has been quiet; real locks still apply
+            pct = self._number(trade.get(field))
+            if entry > 0 and 0 < pct < 20.0:
+                floors[name] = max(entry * (1.0 - pct / 100.0), float(protected_stop or 0.0))
+        self._record_half10_shadow(trade, entry, high, price, when)
+        for name, pct in TARGET_SHADOWS.items():
+            if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()
+                trade[f"shadow_{name}_exit_price"] = round(entry * (1.0 + pct), 4)
+                trade[f"shadow_{name}_floor"] = round(entry * (1.0 + pct), 4)
+        for name, floor in floors.items():
+            if floor > 0 and price <= floor and not trade.get(f"shadow_{name}_exit_at"):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()          # what the rule WOULD have done; trade untouched
+                trade[f"shadow_{name}_exit_price"] = round(price, 4)
+                trade[f"shadow_{name}_floor"] = round(floor, 4)
+
+    @staticmethod
+    def _finish_stop_shadows(trade: dict[str, Any], when: datetime, price: float) -> None:
+        """The real trade is closing: a shadow that never triggered exits at the same price (never better than reality)."""
+        if not trade.get("shadow_half10_exit_at"):
+            trade["shadow_half10_exit_at"] = when.isoformat()
+            trade["shadow_half10_exit_price"] = round(price, 4)
+            trade["shadow_half10_at_real_exit"] = True
+        for name in STOP_SHADOW_NAMES:
+            if not trade.get(f"shadow_{name}_exit_at"):
+                trade[f"shadow_{name}_exit_at"] = when.isoformat()
+                trade[f"shadow_{name}_exit_price"] = round(price, 4)
+                trade[f"shadow_{name}_at_real_exit"] = True
+
+    @staticmethod
+    def _record_confirm10(trade: dict[str, Any], fav: float, when: datetime) -> None:
+        """SHADOW only, like confirm5 but at 10 minutes: HELD when the stock is above our entry on the first update 10+ minutes after entry, else FAILED. Decided once; never touches the trade's exit."""
+        try:
+            if trade.get("confirm10"):
+                return
+            mins = (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds() / 60.0
+            if mins >= 10.0:
+                trade["confirm10_pct"] = round(fav, 3)
+                trade["confirm10"] = "HELD" if fav > 0 else "FAILED"
+                trade["confirm10_at"] = when.isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    @staticmethod
+    def _confirm5_mode() -> str:
+        mode = str(os.getenv("APLUS_CONFIRM5_EXIT_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"OFF", "SHADOW", "ENFORCE"} else "SHADOW"
+
+    @staticmethod
+    def _profit_lock_mode() -> str:
+        mode = str(os.getenv("APLUS_PROFIT_LOCK_MODE", "SHADOW")).strip().upper()
+        return mode if mode in {"OFF", "SHADOW", "ENFORCE"} else "SHADOW"
+
+    @staticmethod
+    def _profit_lock_floor(entry: float, high: float) -> float:
+        """Once the option has been up `trigger` (default 10%), never let the trade close below entry+lock
+        (default +2%); beyond that the floor trails `gap` (default 8 points) under the peak gain."""
+        if entry <= 0 or high <= 0:
+            return 0.0
+        try:
+            trigger = float(os.getenv("APLUS_PROFIT_LOCK_TRIGGER", "0.10"))
+            lock = float(os.getenv("APLUS_PROFIT_LOCK_PROFIT", "0.02"))
+            gap = float(os.getenv("APLUS_PROFIT_LOCK_TRAIL_GAP", "0.08"))
+        except ValueError:
+            return 0.0
+        gain = high / entry - 1.0
+        if trigger <= 0 or gain < trigger:
+            return 0.0
+        return entry * (1.0 + max(lock, gain - gap))
+
+    def _close_at_last_mark(self, trade: dict[str, Any], when: datetime, reason: str) -> bool:
+        """Session end with no fresh quote (e.g. the feed answers 401 after the close): close at the
+        last real mark if it is at most 15 minutes old. Nothing is invented; stale marks stay open."""
+        price = self._number(trade.get("last_option_price"))
+        marked = self._parse_time(trade.get("last_successful_mark_at"))
+        if price <= 0 or marked is None:
+            return False
+        try:
+            age = (when - marked).total_seconds()
+        except TypeError:
+            return False
+        if age < 0 or age > 900:
+            return False
+        trade["mark_status"] = "LAST_MARK_AT_SESSION_END"
+        self._close_trade(trade, when, price, f"{reason}_LAST_MARK")
+        return True
 
     @staticmethod
     def _mark_unavailable(
@@ -476,13 +1165,16 @@ class PaperTradeJournal:
         trade["last_mark_evaluated_at"] = when.isoformat()
 
     def _close_trade(self, trade: dict[str, Any], when: datetime, exit_price: float, reason: str) -> None:
+        self._finish_stop_shadows(trade, when, exit_price)
         entry = self._number(trade.get("entry_price"))
         qty = self._integer(trade.get("quantity"))
         gross = (exit_price - entry) * qty
         capital = self._number(trade.get("capital_deployed"))
         entered = self._parse_time(trade.get("entry_time"))
         holding = max(0, int((when - entered).total_seconds())) if entered else 0
-        costs = 0.0  # no fabricated brokerage model
+        costs = round_trip_costs(
+            entry, exit_price, qty, self._number(trade.get("spread_percent")),
+        )["total"]
         net = gross - costs
         trade.update({
             "status": "CLOSED", "exit_time": when.isoformat(),
@@ -497,7 +1189,76 @@ class PaperTradeJournal:
             "last_mark_evaluated_at": when.isoformat(),
             "position_lifecycle_status": "CLOSED", "position_status_reason": "",
         })
+        self._record_exit_quote(trade, entry, qty, exit_price)
         self.notifier.notify_exit(trade)
+
+    @classmethod
+    def _entry_spread_pct(cls, option: Mapping[str, Any]) -> float | str:
+        bid, ask = cls._number(option.get("bid")), cls._number(option.get("ask"))
+        return round((ask - bid) / ask * 100.0, 2) if bid > 0 and ask >= bid else ""
+
+    @classmethod
+    def _entry_slip_pct(cls, option: Mapping[str, Any]) -> float | str:
+        """How far the paper entry price sits above the last traded price (the cost of buying at the ask / limit)."""
+        ltp, entry = cls._number(option.get("ltp")), cls._entry_price(option)
+        return round((entry / ltp - 1.0) * 100.0, 2) if ltp > 0 and entry > 0 else ""
+
+    @classmethod
+    def _best_quote(cls, raw: Any) -> tuple[float, int, float, int]:
+        """(best bid, bid quantity, best ask, ask quantity) from a quote's 5-level depth, or its top-level bid / ask fields; zeros when absent."""
+        if not isinstance(raw, Mapping):
+            return 0.0, 0, 0.0, 0
+        depth = raw.get("depth") if isinstance(raw.get("depth"), Mapping) else {}
+
+        def top(side: str, price_key: str, qty_key: str) -> tuple[float, int]:
+            levels = depth.get(side) or []
+            first = levels[0] if levels and isinstance(levels[0], Mapping) else {}
+            price = cls._number(first.get("price")) or cls._number(raw.get(price_key))
+            qty = cls._integer(first.get("quantity")) or cls._integer(raw.get(qty_key))
+            return price, qty
+
+        bid, bq = top("buy", "bid", "bid_qty")
+        ask, aq = top("sell", "ask", "ask_qty")
+        return bid, bq, ask, aq
+
+    def _record_quote_depth(self, trade: dict[str, Any], when: datetime, price: float, raw: Any) -> None:
+        """Keep the latest real bid / ask of an open position on the trade and append it to the day's quote tape. Zero extra API calls; never affects the trade."""
+        try:
+            bid, bq, ask, aq = self._best_quote(raw)
+            trade["last_bid"], trade["last_bid_qty"], trade["last_ask"], trade["last_ask_qty"] = bid, bq, ask, aq
+            import csv as _csv
+            tid = str(trade.get("paper_trade_id") or trade.get("trade_id") or "").strip()
+            if not tid:
+                return
+            base = self.state_dir.parent / "option_quote_tape"
+            base.mkdir(parents=True, exist_ok=True)
+            path = base / f"{when.date().isoformat()}.csv"
+            exists = path.exists()
+            row = {"timestamp": when.isoformat(), "trade_id": tid, "symbol": trade.get("symbol", ""), "option_security_id": trade.get("option_security_id", ""),
+                   "price": round(float(price), 4), "bid": bid or "", "bid_qty": bq or "", "ask": ask or "", "ask_qty": aq or ""}
+            with path.open("a", encoding="utf-8-sig", newline="") as handle:
+                writer = _csv.DictWriter(handle, fieldnames=list(row.keys()))
+                if not exists:
+                    writer.writeheader()
+                writer.writerow(row)
+        except Exception:                                  # noqa: BLE001 - a record must never affect the trade
+            return
+
+    def _record_exit_quote(self, trade: dict[str, Any], entry: float, qty: int, exit_price: float) -> None:
+        """Facts about what a real sell would have met at the exit: the bid, the spread, whether the bid covers our quantity, and the P&L had we sold at the bid.
+        The journal's own net P&L (sold at the last traded price less a spread-based impact estimate) is left unchanged."""
+        try:
+            bid, bq, ask = self._number(trade.get("last_bid")), self._integer(trade.get("last_bid_qty")), self._number(trade.get("last_ask"))
+            aq = self._integer(trade.get("last_ask_qty"))
+            if bid <= 0:
+                return
+            at_bid = round((bid - entry) * qty - round_trip_costs(entry, bid, qty, 0.0)["total"], 2)
+            trade.update({"exit_bid": bid, "exit_ask": ask or "", "exit_bid_qty": bq or "", "exit_ask_qty": aq or "",
+                          "exit_spread_pct": round((ask - bid) / ask * 100.0, 2) if ask >= bid > 0 else "",
+                          "exit_quote_time": trade.get("last_quote_time") or "", "exit_slip_amount": round((exit_price - bid) * qty, 2),
+                          "exit_bid_covers_qty": int(bq >= qty) if bq > 0 else "", "net_pnl_at_bid": at_bid})
+        except Exception:                                  # noqa: BLE001
+            return
 
     @classmethod
     def _entry_price(cls, option: Mapping[str, Any]) -> float:
@@ -535,6 +1296,8 @@ class PaperTradeJournal:
         self._ensure_date(when.date())
         for trade in self.trades:
             if str(trade.get("status") or "").upper() == "OPEN":
+                if force_close and self._close_at_last_mark(trade, when, "SESSION_END"):
+                    continue                      # session end and the price request failed: close at the last real mark
                 self._mark_unavailable(
                     trade, when, status=mark_status,
                     error_type=error_type, force_close=force_close,
@@ -658,9 +1421,41 @@ class PaperTradeJournal:
     def _ensure_date(self, value: date) -> None:
         key = value.isoformat()
         if self.trading_date != key:
+            self._close_unresolved_prior_trades()
             self.trading_date = key
             self.trades = []
             self.lanes = {}
+
+    def _close_unresolved_prior_trades(self) -> None:
+        """Never silently drop OPEN trades when the trading date changes.
+
+        Each is closed at its last recorded option price (no new price is
+        invented) with reason PRIOR_SESSION_UNRESOLVED at 15:30 of its session,
+        then persisted to the history so the P&L is not lost.
+        """
+        if not self.trading_date or not self.trades:
+            return
+        try:
+            session_day = date.fromisoformat(self.trading_date)
+        except ValueError:
+            return
+        from zoneinfo import ZoneInfo
+        when = datetime(session_day.year, session_day.month, session_day.day, 15, 30,
+                        tzinfo=ZoneInfo("Asia/Kolkata"))
+        changed = False
+        for trade in self.trades:
+            if str(trade.get("status") or "").upper() != "OPEN":
+                continue
+            last = self._number(trade.get("last_option_price")) or self._number(trade.get("entry_price"))
+            if last <= 0:
+                continue
+            self._close_trade(trade, when, last, "PRIOR_SESSION_UNRESOLVED")
+            changed = True
+        if changed:
+            try:
+                sync_history(self.report_dir, self.trades)
+            except Exception as exc:  # never block the scanner on persistence
+                logger.warning("History sync after prior-session close failed: %s: %s", type(exc).__name__, exc)
 
     def _load(self) -> None:
         if not self.state_path.exists():

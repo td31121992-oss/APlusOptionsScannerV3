@@ -36,6 +36,44 @@ class TelegramPaperTradeNotifier:
 
     def notify_entry(self,t): return self._send(f"{t.get('paper_trade_id')}|ENTRY",self._entry(t))
     def notify_exit(self,t): return self._send(f"{t.get('paper_trade_id')}|EXIT",self._exit(t))
+    def notify_watch(self,t,level,now_price=None):
+        e=self._num(t.get('entry_price')); p=self._num(now_price) or self._num(t.get('last_option_price'))
+        now=((p/e-1)*100) if e>0 else 0.0
+        stock=t.get('stock_move_fav_pct')
+        text="\n".join([f"\U0001F440 APlus WATCH: {t.get('symbol','')} {t.get('option_type','')} is +{level:g}% in your favour","",
+          f"Entry {self._money(e)} | now {self._money(p)} ({now:+.1f}%) | peak {self._money(t.get('highest_option_price'))}",
+          (f"Stock since entry: {self._num(stock):+.2f}%" if stock not in (None,"") else "Stock since entry: n/a"),
+          *self._stop_lines(t,e),
+          "Keep an eye on it for a reversal; cut by hand from the dashboard (Manage) if it turns.",
+          f"Trade ID: {t.get('paper_trade_id','-')}"])
+        return self._send(f"{t.get('paper_trade_id')}|WATCH{int(level)}",text)
+    def _stop_lines(self,t,e):
+        """Where the stop is: the one in force now, and what the ladder locks (only when the journal supplied them)."""
+        stop=self._num(t.get('alert_stop_price')); lad=self._num(t.get('alert_ladder_price')); out=[]
+        if e>0 and stop>0: out.append(f"Stop now {self._money(stop)} ({(stop/e-1)*100:+.1f}% vs entry)")
+        if e>0 and lad>0: out.append(f"Your ladder locks {self._money(lad)} ({(lad/e-1)*100:+.1f}% vs entry)")
+        return out
+    def notify_giveback(self,t,level,now_price=None):
+        e=self._num(t.get('entry_price')); p=self._num(now_price) or self._num(t.get('last_option_price')); h=self._num(t.get('highest_option_price'))
+        now=((p/e-1)*100) if e>0 else 0.0; peak=((h/e-1)*100) if e>0 else 0.0; gone=((h-p)/(h-e)*100) if h>e else 0.0
+        stop=self._num(t.get('alert_stop_price')); gap=((p-stop)/p*100) if (stop>0 and p>0) else None
+        text="\n".join([f"\u26A0\uFE0F APlus GIVING BACK: {t.get('symbol','')} {t.get('option_type','')} has handed back {gone:.0f}% of its peak gain","",
+          f"Entry {self._money(e)} | peak {self._money(h)} ({peak:+.1f}%) | now {self._money(p)} ({now:+.1f}%)",
+          *self._stop_lines(t,e),
+          (f"The stop is {gap:.1f}% below the price: another fall of that size and it exits." if gap is not None else "No profit-protection stop is set yet."),
+          "Take the profit by hand (Manage on the dashboard) or let the stop do it.",
+          f"Trade ID: {t.get('paper_trade_id','-')}"])
+        return self._send(f"{t.get('paper_trade_id')}|GIVEBACK{int(level*100)}",text)
+    def notify_hold_check(self,t,mins,stock_since,now_price=None):
+        e=self._num(t.get('entry_price')); p=self._num(now_price) or self._num(t.get('last_option_price')); h=self._num(t.get('highest_option_price'))
+        now=((p/e-1)*100) if e>0 else 0.0; peak=((h/e-1)*100) if e>0 else 0.0
+        text="\n".join([f"⏳ APlus HOLD CHECK: {t.get('symbol','')} {t.get('option_type','')} - is more waiting worth it?","",
+          f"Peak {self._money(h)} ({peak:+.1f}%) was {int(mins)} min ago | now {self._money(p)} ({now:+.1f}%) | entry {self._money(e)}",
+          f"Stock since the option's peak: {stock_since:+.2f}% (against you)",
+          "In past trades only about a third made a new high once the stock was 0.3%+ against it; with the stock back at its level it was about three quarters.",
+          "A heads-up, not a signal: decide by hand (Manage on the dashboard) if you want out.",
+          f"Trade ID: {t.get('paper_trade_id','-')}"])
+        return self._send(f"{t.get('paper_trade_id')}|HOLD|{t.get('highest_option_price_at','')}",text)
 
     def _send(self,event,text):
         if event in self.sent: return False
@@ -95,6 +133,14 @@ class TelegramPaperTradeNotifier:
         result=str(t.get("result") or "CLOSED").upper()
         icon="✅" if result=="WIN" else ("🔴" if result=="LOSS" else "⚪")
         sec=max(0,int(cls._num(t.get("holding_seconds")))); m,s=divmod(sec,60)
+        entry=cls._num(t.get("entry_price"))
+        quantity=max(0,int(cls._num(t.get("quantity"))))
+        capital=cls._num(t.get("capital_deployed"))
+        if capital<=0 and entry>0 and quantity>0:
+            capital=entry*quantity
+        mfe=cls._num(t.get("mfe_amount")); mae=cls._num(t.get("mae_amount"))
+        mfe_pct=f"{mfe/capital*100:+.2f}%" if capital>0 else "n/a"
+        mae_pct=f"{mae/capital*100:+.2f}%" if capital>0 else "n/a"
         return "\n".join([
           f"{icon} APlus PAPER TRADE CLOSED — {result}","",
           f"{t.get('symbol','')} | {cls._num(t.get('strike')):g} {t.get('option_type','')}",
@@ -103,5 +149,6 @@ class TelegramPaperTradeNotifier:
           f"Exit Reason: {t.get('exit_reason') or '-'}",
           f"Net P&L: {cls._money(t.get('net_pnl'))}",
           f"Return: {cls._num(t.get('return_percent')):+.2f}%",
-          f"MFE: {cls._money(t.get('mfe_amount'))} | MAE: {cls._money(t.get('mae_amount'))}",
+          f"MFE: {cls._money(mfe)} ({mfe_pct}) | MAE: {cls._money(mae)} ({mae_pct})",
+          f"Capital used (entry premium): {cls._money(capital)}",
           f"Holding: {m}m {s}s",f"Trade ID: {t.get('paper_trade_id','-')}"])

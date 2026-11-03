@@ -115,7 +115,23 @@ class InstrumentLoader:
             return None
         return (time.time() - path.stat().st_mtime) / 3600.0
 
+    def _build_master_from_upstox(self) -> bool:
+        """Dhan plan expired (3 Nov 2026): build the same CSV from Upstox's instrument file (same security ids, see core/upstox_master.py)."""
+        try:
+            from core.upstox_client import UpstoxClient
+            from core.upstox_master import write_master_csv
+
+            write_master_csv(UpstoxClient()._load_master(), self.config.paths.instrument_master_file)
+            return True
+        except Exception as exc:  # noqa: BLE001 - the stale-cache rules below decide whether the run can go on
+            logger.warning("Instrument master build from Upstox failed (%s): %s", type(exc).__name__, exc)
+            return False
+
     def _download_instrument_master(self) -> bool:
+        from core import market_data
+
+        if market_data.upstox_only():
+            return self._build_master_from_upstox()
         url = self.config.dhan.instrument_master_url
         logger.info("Downloading instrument master from %s ...", url)
 

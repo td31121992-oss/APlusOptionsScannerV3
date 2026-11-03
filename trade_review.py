@@ -1,0 +1,352 @@
+"""End-of-day trade review: one row per paper trade with its high, low, drawdown and what was captured.
+
+    python trade_review.py [--day YYYY-MM-DD]
+
+Writes data/trade_review/<day>/trade_review.md and trade_review.csv. Read-only on trading data.
+Open trades are valued at their last real mark (flagged OPEN); nothing is invented.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from collections import defaultdict
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from trade_costs import round_trip_costs
+
+ROOT = Path(__file__).resolve().parent
+OUT_ROOT = ROOT / "data" / "trade_review"
+JOURNAL = ROOT / "data" / "intraday_movement" / "paper_trade_journal.json"
+
+
+# Money-flow and big-player tags recorded at entry (shadow); kept in the review so they can be scored over many days.
+_FLOW_FIELDS = ("mf_sector", "mf_aligned", "mf_sec_flow_dir", "mf_sec_flow15_dir", "mf_sec_net_cr", "mf_stock_flow_dir",
+                "bp_ok", "bp_align", "bp_reason", "bp_net15_dir_cr", "bp_net_dir_cr", "bp_n15", "bp_conf")
+
+
+def _f(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+        return out if out == out else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _hm(value: Any) -> str:
+    text = str(value or "")
+    return text[11:16] if len(text) >= 16 else ""
+
+
+def load_day_trades(day: str, root: Path = ROOT) -> list[dict]:
+    journal = root / "data" / "intraday_movement" / "paper_trade_journal.json"
+    try:
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        trades = [t for t in data.get("trades", []) if str(t.get("paper_trade_id", ""))[3:11] == day.replace("-", "")]
+        if trades:
+            return trades
+    except (OSError, ValueError):
+        pass
+    try:
+        from evaluate_rules import load_trades
+        return [t for t in load_trades(root) if str(t.get("paper_trade_id", ""))[3:11] == day.replace("-", "")]
+    except Exception:
+        return []
+
+
+def review_row(t: dict) -> dict[str, Any]:
+    entry, qty = _f(t.get("entry_price")), int(_f(t.get("quantity")))
+    closed = str(t.get("status", "")).upper() == "CLOSED"
+    exit_price = _f(t.get("exit_price")) if closed else _f(t.get("last_option_price"))
+    high = max(_f(t.get("highest_option_price")), entry)
+    low = _f(t.get("lowest_option_price"))
+    low = min(low, entry) if low > 0 else entry
+    gross = (exit_price - entry) * qty if entry > 0 and exit_price > 0 else 0.0
+    costs = _f(t.get("estimated_costs")) if closed and _f(t.get("estimated_costs")) > 0 else (
+        round_trip_costs(entry, exit_price, qty, _f(t.get("spread_percent")))["total"] if exit_price > 0 else 0.0)
+    pct = lambda p: (p / entry - 1) * 100 if entry > 0 else 0.0
+    peak_gain = high - entry
+    stop = _f(t.get("option_stop"))
+    return {
+        "symbol": t.get("symbol"), "direction": t.get("direction"), "setup": t.get("setup_family") or "",
+        "entry_time": _hm(t.get("entry_time")), "entry_price": entry,
+        "high": high, "high_time": _hm(t.get("highest_option_price_at")),
+        "low": low, "low_time": _hm(t.get("lowest_option_price_at")),
+        "exit_price": exit_price, "exit_time": _hm(t.get("exit_time")) if closed else "",
+        "status": "CLOSED" if closed else "OPEN", "exit_reason": t.get("exit_reason") or "",
+        "stop_pct": round((1 - stop / entry) * 100, 1) if entry > 0 and stop > 0 else 0.0,
+        "mfe_pct": round(pct(high), 1), "mae_pct": round(pct(low), 1), "return_pct": round(pct(exit_price), 1),
+        "captured_pct": round((exit_price - entry) / peak_gain * 100) if peak_gain > 0 else 0,
+        "capital": round(_f(t.get("capital_deployed"))), "spread_pct": _f(t.get("spread_percent")),
+        "gross": round(gross), "costs": round(costs), "net": round(gross - costs),
+        "ob": str(t.get("ob_shadow") or ""),
+        "lock_shadow": (f"{_f(t.get('lock_shadow_exit_price')):.2f} {_hm(t.get('lock_shadow_exit_at'))}"
+                        if t.get("lock_shadow_exit_at") else ""),
+        "half10_shadow": _half10(t, exit_price),
+        "nt_verdict": str(t.get("nt_verdict") or ""), "tr_all_aligned": str(t.get("tr_all_aligned") or ""), "smc_ob_state": str(t.get("smc_ob_state") or ""), "chop_state": str(t.get("chop_state") or ""),
+        "cat_dir": str(t.get("cat_dir") or ""), "cat_aligned": str(t.get("cat_aligned") or ""), "cat_against": str(t.get("cat_against") or ""),
+        "tr_scans_names": str(t.get("tr_scans_names") or ""), "ms_aligned": str(t.get("ms_aligned") or ""),
+        "confirm5": str(t.get("confirm5") or ""), "confirm5_pct": t.get("confirm5_pct", ""),
+        "confirm10": str(t.get("confirm10") or ""), "confirm10_pct": t.get("confirm10_pct", ""),
+        "c10_shadow_delta": (round((_f(t.get("confirm10_shadow_exit_price")) - exit_price) * _f(t.get("quantity")))
+                             if t.get("confirm10_shadow_exit_at") and exit_price > 0 else ""),
+        "day_entry_rank": int(_f(t.get("day_entry_rank"))),
+        **{k: str(t.get(k) if t.get(k) is not None else "") for k in _FLOW_FIELDS},
+        "premium_pct": round(entry / _f(t.get("underlying_entry")) * 100, 2) if entry > 0 and _f(t.get("underlying_entry")) > 0 else "",
+        "oc_k_premium_pct": str(t.get("oc_k_premium_pct") if t.get("oc_k_premium_pct") is not None else ""),
+        **{k: str(t.get(k) if t.get(k) is not None else "") for k in ("pre_new_ext", "pre_run10_pct", "pre_run10_age_min", "mv_gap_dir_pct", "mv_gap_bucket", "mv_pre_vol_x", "mv_pre_abs_chg1", "mv_in_play")},
+        **_shadow_deltas(t, exit_price),
+        "breadth": (f"{t.get('breadth_tag')} ({t.get('breadth_pct_with')}% with, ev {t.get('breadth_evidence')})" if t.get("breadth_tag") else ""),
+        "ladder_shadow": _shadow(t, "ladder", exit_price), "trail60_shadow": _shadow(t, "trail60", exit_price),
+    }
+
+
+def _shadow(t: dict, name: str, real_exit: float) -> str:
+    if not t.get(f"shadow_{name}_exit_at"):
+        return ""
+    px = _f(t.get(f"shadow_{name}_exit_price"))
+    return f"{px:.2f} ({(px - real_exit) * _f(t.get('quantity')):+,.0f})"
+
+
+def _half10(t: dict, real_exit: float) -> str:
+    """Half booked at +10%, rest exits at the shadow price: blended exit and rupees versus the real exit."""
+    if not t.get("shadow_half10_exit_at"):
+        return ""
+    entry, qty = _f(t.get("entry_price")), _f(t.get("quantity"))
+    rest = _f(t.get("shadow_half10_exit_price"))
+    booked = bool(t.get("shadow_half10_book_at"))
+    blended = 0.5 * _f(t.get("shadow_half10_book_price")) + 0.5 * rest if booked else rest
+    return f"{'booked ' if booked else 'not reached '}{blended:.2f} ({(blended - real_exit) * qty:+,.0f})"
+
+
+def _shadow_names() -> tuple[str, ...]:
+    try:
+        from paper_trade_journal import STOP_SHADOW_NAMES
+        return tuple(STOP_SHADOW_NAMES)
+    except Exception:                                      # noqa: BLE001
+        return ("ladder", "trail60")
+
+
+def _shadow_deltas(t: dict, real_exit: float) -> dict[str, Any]:
+    """Rupees each shadow exit rule would have made versus the real exit (0 when it never triggered before the real exit)."""
+    qty, out = _f(t.get("quantity")), {}
+    for name in _shadow_names():
+        px = _f(t.get(f"shadow_{name}_exit_price"))
+        hit = bool(t.get(f"shadow_{name}_exit_at")) and not t.get(f"shadow_{name}_at_real_exit")
+        out[f"d_{name}"] = round((px - real_exit) * qty) if t.get(f"shadow_{name}_exit_at") else 0
+        out[f"hit_{name}"] = int(hit)
+    entry = _f(t.get("entry_price"))
+    if t.get("shadow_half10_exit_at") and entry > 0:
+        rest = _f(t.get("shadow_half10_exit_price"))
+        booked = bool(t.get("shadow_half10_book_at"))
+        blended = 0.5 * _f(t.get("shadow_half10_book_price")) + 0.5 * rest if booked else rest
+        out["d_half10"], out["hit_half10"] = round((blended - real_exit) * qty), int(booked)
+    else:
+        out["d_half10"], out["hit_half10"] = 0, 0
+    return out
+
+
+def summarize(rows: list[dict], key: str) -> list[tuple[str, int, int, int]]:
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        groups[str(r[key])].append(r)
+    return [(k, len(v), sum(1 for x in v if x["net"] > 0), sum(x["net"] for x in v))
+            for k, v in sorted(groups.items(), key=lambda kv: -sum(x["net"] for x in kv[1]))]
+
+
+def quality_split(rows: list[dict], cap: int = 5) -> tuple[list[dict], list[dict], list[dict]]:
+    """(taken, skipped_failed, skipped_over_cap): the quality filter = stock still in our favour 5 min after entry,
+    and only the first `cap` such entries of the day."""
+    taken, failed, over = [], [], []
+    for r in sorted(rows, key=lambda x: x.get("entry_time") or ""):
+        c = r.get("confirm5")
+        if c == "HELD":
+            (taken if len(taken) < cap else over).append(r)
+        elif c == "FAILED":
+            failed.append(r)
+    return taken, failed, over
+
+
+def verdict_section(rows: list[dict]) -> list[str]:
+    """Shadow comparison: how trades did under each no-trade-day verdict and whether market structure agreed with the trade."""
+    if not any(r.get("nt_verdict") or r.get("ms_aligned") or r.get("tr_all_aligned") or r.get("smc_ob_state") or r.get("chop_state") or r.get("cat_dir") for r in rows):
+        return []
+    out = ["", "**No-trade verdict and market structure (shadow, nothing traded)**", "",
+           "| Group | Trades | Winners | Net Rs |", "|---|---|---|---|"]
+    def line(label, g):
+        out.append(f"| {label} | {len(g)} | {sum(1 for r in g if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in g):+,.0f} |")
+    for v in ("TRADE", "CAUTION", "NO_TRADE"):
+        g = [r for r in rows if r.get("nt_verdict") == v]
+        if g:
+            line(f"Verdict {v.replace('_', ' ')}", g)
+    for lab, key in (("Trend gauge: 5M and 15M agree with the trade", "True"), ("Trend gauge: 5M/15M do not both agree", "False")):
+        g = [r for r in rows if str(r.get("tr_all_aligned")) == key]
+        if g:
+            line(lab, g)
+    for lab, pred in (("News catalyst agreed with the trade", lambda r: str(r.get("cat_aligned")) == "True"),
+                      ("News catalyst was AGAINST the trade", lambda r: str(r.get("cat_against")) == "True"),
+                      ("No fresh news catalyst", lambda r: str(r.get("cat_dir")) == "NONE")):
+        g = [r for r in rows if pred(r)]
+        if g:
+            line(lab, g)
+    for lab, key in (("Entered while the stock was trending", "TRENDING"), ("Entered while mixed", "MIXED"), ("Entered while choppy", "CHOPPY")):
+        g = [r for r in rows if str(r.get("chop_state")) == key]
+        if g:
+            line(lab, g)
+    for lab, key in (("Entered inside a fresh order block", "IN_FRESH_OB"), ("Entered above/below an untested order block", "ABOVE_OB"),
+                     ("Entered with no fresh order block", "NONE")):
+        g = [r for r in rows if str(r.get("smc_ob_state")) == key or (key == "ABOVE_OB" and str(r.get("smc_ob_state")) == "BELOW_OB")]
+        if g:
+            line(lab, g)
+    for lab, key in (("Structure agrees with the trade", "True"), ("Structure does not agree", "False")):
+        g = [r for r in rows if str(r.get("ms_aligned")) == key]
+        if g:
+            line(lab, g)
+    return out
+
+
+def scans_section(rows: list[dict]) -> list[str]:
+    """Shadow table: for every intraday scan that was true at entry, how many of the day's trades had it, how many won, net rupees."""
+    have = [r for r in rows if r.get("tr_scans_names")]
+    if not have:
+        return []
+    by: dict[str, list[dict]] = {}
+    for r in have:
+        for name in str(r["tr_scans_names"]).split("|"):
+            if name:
+                by.setdefault(name, []).append(r)
+    out = ["", "**Intraday scans true at entry (shadow, nothing traded)**", "",
+           "| Scan at entry | Trades | Winners | Net Rs |", "|---|---|---|---|"]
+    for name, g in sorted(by.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        out.append(f"| {name} | {len(g)} | {sum(1 for r in g if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in g):+,.0f} |")
+    none = [r for r in rows if r.get("tr_scans_names") == "" and r.get("tr_all_aligned") != ""]
+    if none:
+        out.append(f"| (no scan for the trade) | {len(none)} | {sum(1 for r in none if _f(r.get('net')) > 0)} | {sum(_f(r.get('net')) for r in none):+,.0f} |")
+    return out
+
+
+def quality_section(rows: list[dict]) -> list[str]:
+    taken, failed, over = quality_split(rows)
+    if not (taken or failed or over):
+        return []
+    def tot(g, k="net"):
+        return sum(_f(r.get(k)) for r in g)
+    out = ["", "**Quality filter (shadow, nothing traded)**: keep a trade only if the stock is still in our favour 5 minutes after entry, "
+           "and only the first 5 such trades of the day. Optional second line = one lot booked at +10%, one lot runs (the half-at-+10% rule).", "",
+           "| Group | Trades | Real net Rs | With half booked at +10% (net + delta) |", "|---|---|---|---|"]
+    for lab, g in (("Kept (held 5 min, first 5)", taken), ("Skipped: stock failed to follow through", failed), ("Skipped: over the daily cap", over)):
+        if g:
+            out.append(f"| {lab}: " + ", ".join(r["symbol"] for r in g) + f" | {len(g)} | {tot(g):+,.0f} | {tot(g) + tot(g, 'd_half10'):+,.0f} |")
+    unknown = [r for r in rows if not r.get("confirm5")]
+    if unknown:
+        out.append(f"| Not yet 5 minutes old / not recorded | {len(unknown)} | {tot(unknown):+,.0f} | - |")
+    return out
+
+
+def render(day: str, rows: list[dict], health: str = "") -> str:
+    if not rows:
+        return f"# Trade review {day}\n\n" + (health + "\n\n" if health else "") + "No paper trades.\n"
+    net, gross, costs = sum(r["net"] for r in rows), sum(r["gross"] for r in rows), sum(r["costs"] for r in rows)
+    wins = sum(1 for r in rows if r["net"] > 0)
+    out = [f"# Trade review {day}", ""] + ([health, ""] if health else []) + [
+           f"{len(rows)} trades ({sum(1 for r in rows if r['status'] == 'OPEN')} still open, valued at last mark) | "
+           f"winners {wins} | gross {gross:+,} | costs {costs:,} | **net {net:+,}**", "",
+           "| Symbol | Dir | Setup | In | Entry | High (time) | Low (time) | Exit | MFE% | MAE% | Ret% | Kept of peak | Stop% | Capital | Gross | Costs | Net | Order block | Profit-lock rule would exit | Ladder (T2 locks T1) exit (vs real Rs) | Trail60 exit (vs real Rs) | Half at +10% (rest trail60) |  Breadth gate |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in rows:
+        ex = f"{r['exit_price']:.2f} {r['exit_time']} {r['exit_reason']}".strip() if r["status"] == "CLOSED" else f"{r['exit_price']:.2f} OPEN"
+        out.append(f"| {r['symbol']} | {str(r['direction'])[:4]} | {r['setup']} | {r['entry_time']} | {r['entry_price']:.2f} | "
+                   f"{r['high']:.2f} ({r['high_time'] or '-'}) | {r['low']:.2f} ({r['low_time'] or '-'}) | {ex} | "
+                   f"{r['mfe_pct']:+.0f} | {r['mae_pct']:+.0f} | {r['return_pct']:+.0f} | {r['captured_pct']}% | {r['stop_pct']:.0f} | "
+                   f"{r['capital']:,} | {r['gross']:+,} | {r['costs']:,} | {r['net']:+,} | {r['ob'] or '-'} | {r['lock_shadow'] or '-'} | {r['ladder_shadow'] or '-'} | {r['trail60_shadow'] or '-'} | {r['half10_shadow'] or '-'} | {r['breadth'] or '-'} |")
+    for title, key in (("By setup", "setup"), ("By direction", "direction"), ("By entry hour", "hour")):
+        data = rows if key != "hour" else [{**r, "hour": (r["entry_time"] or "??")[:2] + ":00"} for r in rows]
+        out += ["", f"**{title}**", "", "| Group | Trades | Winners | Net |", "|---|---|---|---|"]
+        out += [f"| {k} | {n} | {w} | {v:+,} |" for k, n, w, v in summarize(data, key)]
+    names = [n for n in _shadow_names()] + ["half10"]
+    if any(f"d_{n}" in rows[0] for n in names):
+        labels = {"skorb": "Stock-structure exit: stock trades beyond the opening-range level against us (2 readings)",
+                  "sksw": "Stock-structure exit: stock trades beyond its 30-minute swing level against us (2 readings)", "two_step":"Two-step: +5% stop -15%, +10% stop at cost, nothing else", "cost5": "Your ladder with +5% -> stop at cost (instead of -15%)", "old_rules": "OLD live rules: initial stop, T1 -> cost, T2 -> +8%, T3 -> runner (floor +15%, 70% trail)", "user_ladder": "YOUR ladder:+5% stop -15%, +10% lock 3%, +20% lock 13%, +30% lock 22%, +2 per +5%", "ladder": "Ladder: T2 locks T1, T3 locks T2", "trail60": "Trail at 60% of peak gain after T2", "half10": "Half booked at +10%, rest trail60",
+                  "sbg40": "Stock burst over: stock gave back 40% of its best move (after +0.5%)", "sbg60": "Stock burst over: stock gave back 60% of its best move (after +0.5%)",
+                  "sstall10": "Stock burst over: no new best for 10 min (after +0.5%)",
+                  "secfade": "Sector fade: sector index gave back 0.4% from its best since entry while the stock is below entry",
+                  "moverover": "Movement over: option was up 8%+, is back near cost (<= +3%) and the stock gave back half its move / fell below entry / stalled 10 min",
+                  "volstop30": "Volatility-sized first stop (2 x last-30-min stock range x 23, 8-20%)", "volstop60": "Volatility-sized first stop (2 x last-60-min stock range x 23, 8-20%)",
+                  "cash10": "Cash everything at +10% and leave", "cash15": "Cash everything at +15% and leave", "cash20": "Cash everything at +20% and leave"}
+        out += ["", "**Exit-rule comparison (shadow, nothing traded)** - rupees versus the real exits above, summed over today's trades", "",
+                "| Rule | Trades where it acted | Extra Rs vs real |", "|---|---|---|"]
+        for n in names:
+            if f"d_{n}" not in rows[0]:
+                continue
+            lab = labels.get(n) or (f"Exit {n.split('_')[0][4:]}% below the peak, after +{n.split('_a')[1]}% reached" if n.startswith("peak") else n)
+            out.append(f"| {lab} | {sum(r.get('hit_' + n, 0) for r in rows)} of {len(rows)} | {sum(r.get('d_' + n, 0) for r in rows):+,} |")
+    out += quality_section(rows)
+    out += verdict_section(rows)
+    out += scans_section(rows)
+    gave_back = [r for r in rows if r["mfe_pct"] >= 15 and r["return_pct"] <= 5]
+    if gave_back:
+        out += ["", "**Gave back a gain** (peak at least +15%, ended at +5% or less): "
+                + ", ".join(f"{r['symbol']} (peak {r['mfe_pct']:+.0f}%, ended {r['return_pct']:+.0f}%)" for r in gave_back)]
+    deep = [r for r in rows if r["mae_pct"] <= -15]
+    if deep:
+        out += ["", "**Deep drawdown** (fell 15% or more below entry at some point): "
+                + ", ".join(f"{r['symbol']} (low {r['mae_pct']:+.0f}%, ended {r['return_pct']:+.0f}%)" for r in deep)]
+    return "\n".join(out) + "\n"
+
+
+def _extra_tags(t: dict, taken: set) -> dict[str, str]:
+    """Every shadow tag recorded on the trade that the review does not already show (the journal keeps 300+ of them: money flow, auction, chop, catalyst, premium flow, gap / volume ...), so any of them
+    can be scored against the trade result without opening the journal."""
+    try:
+        from paper_trade_journal import SHADOW_TAG_PREFIXES
+    except Exception:                                    # noqa: BLE001 - the review must still be written
+        return {}
+    out = {}
+    for k in sorted(t):
+        if isinstance(k, str) and k.startswith(SHADOW_TAG_PREFIXES) and k not in taken:
+            v = t[k]
+            out[k] = "" if v is None else (json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v))
+    return out
+
+
+def write(day: str, root: Path = ROOT, out_root: Path | None = None) -> Path | None:
+    trades = load_day_trades(day, root)
+    rows = []
+    for t in trades:
+        row = review_row(t)
+        row.update(_extra_tags(t, set(row)))
+        rows.append(row)
+    if not rows:
+        return None
+    fields: list[str] = []
+    for r in rows:                                       # trades carry different tags: the columns are the union, in first-seen order
+        fields.extend(k for k in r if k not in fields)
+    folder = (out_root or root / "data" / "trade_review") / day
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        import scanner_health
+        health = scanner_health.line(scanner_health.day_health(day, root))
+    except Exception:                                    # noqa: BLE001 - the review must still be written
+        health = ""
+    (folder / "trade_review.md").write_text(render(day, rows, health), encoding="utf-8")
+    with (folder / "trade_review.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, restval="")
+        writer.writeheader()
+        writer.writerows(rows)
+    return folder
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--day", default=date.today().isoformat())
+    args = ap.parse_args()
+    folder = write(args.day)
+    print(f"{args.day}: {'no trades' if folder is None else folder}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

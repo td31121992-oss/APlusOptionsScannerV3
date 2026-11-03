@@ -6,26 +6,166 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import csv
 import json
+import os
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query
 from stock_analysis_tab import STOCK_ANALYSIS_HTML, analysis_payload, option_chain_payload
 from stock_alerts_tab import STOCK_ALERTS_HTML, stock_alerts_payload
+import dashboard_access
+import dashboard_login
+import trading_mode
+from positions_panel import POSITIONS_HTML
+import decision_desk
+import live_scanner
+import money_flow
+import sector_analysis
+import trade_journal
+import mobile_app
+import voice_commands
+import trade_chart
+import company_profiles
+import market_mood
+import index_strip
+import sector_rrg
+import why_moving
+import stock_chart
+try:  # the control room must never stop the main dashboard from starting
+    from dashboard_intel import control_room_payload
+    from dashboard_control_room_page import CONTROL_ROOM_HTML
+except Exception:  # noqa: BLE001
+    control_room_payload = None
+    CONTROL_ROOM_HTML = ""
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "data" / "reports"
+try:  # high/low-time tracking must never stop the dashboard from starting
+    from high_low_tracker import HighLowTracker
+    _HL = HighLowTracker(ROOT / "data" / "dashboard_state" / "high_low_times.json")
+except Exception:  # noqa: BLE001
+    _HL = None
+
+
+def _hl_fields(t):
+    """High/low option price of a trade with the time each occurred (see high_low_tracker)."""
+    try:
+        if _HL is not None:
+            r = _HL.update(t, datetime.now(ZoneInfo("Asia/Kolkata")))
+            return {"high": r["high"], "high_time": r["high_time"], "low": r["low"], "low_time": r["low_time"]}
+    except Exception:  # noqa: BLE001
+        pass
+    return {"high": _num(t.get("highest_option_price")), "high_time": "", "low": _num(t.get("lowest_option_price")), "low_time": ""}
+_RRG_STATE = {"thread": None, "tried": 0.0}
+
+
+def _rrg_payload():
+    """Cached sector RRG; if it was not generated today, refresh it once in the background (at most every 10 minutes)."""
+    import threading
+    import time as _t
+    data = sector_rrg.load_cache(ROOT / "data" / "cache" / "sector_rrg.json")
+    today = datetime.now(IST).date().isoformat()
+    fresh = bool(data) and str(data.get("generated_at", ""))[:10] == today
+    th = _RRG_STATE["thread"]
+    if not fresh and (th is None or not th.is_alive()) and _t.time() - _RRG_STATE["tried"] > 600:
+        _RRG_STATE["tried"] = _t.time()
+        _RRG_STATE["thread"] = threading.Thread(target=lambda: sector_rrg.refresh(ROOT), daemon=True)
+        _RRG_STATE["thread"].start()
+    if not data:
+        return {"ok": False, "error": "loading", "rows": []}
+    data["refreshing"] = (not fresh)
+    return data
+
+
+def _since_high(t, hl, now=None):
+    """How long ago the option made its high, how far it is below it, and what the STOCK has done since that moment.
+    Tells a stalled/melting option (stock flat, premium decaying) from a stock that has turned against us."""
+    out = {"high_age_min": None, "from_high_pct": None, "stock_since_high_pct": None, "high_state": ""}
+    try:
+        high = float(hl.get("high") or 0)
+        closed = str(t.get("status") or "").upper() == "CLOSED"
+        last = float((t.get("exit_price") if closed else t.get("last_option_price")) or t.get("last_option_price") or 0)
+        if high > 0 and last > 0:
+            out["from_high_pct"] = round((last / high - 1) * 100, 1)
+        ht = str(hl.get("high_time") or "")
+        if len(ht) >= 4 and ":" in ht:
+            hh, mm = int(ht.split(":")[0]), int(ht.split(":")[1][:2])
+            day = str(t.get("entry_time") or "")[:10]
+            high_dt = datetime.fromisoformat(day + "T00:00:00").replace(hour=hh, minute=mm, tzinfo=ZoneInfo("Asia/Kolkata"))
+            if closed and t.get("exit_time"):
+                end = datetime.fromisoformat(str(t.get("exit_time")))
+                end = end if end.tzinfo else end.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            else:
+                end = now or datetime.now(ZoneInfo("Asia/Kolkata"))
+            out["high_age_min"] = max(0, int((end - high_dt).total_seconds() // 60))
+        s_hi, s_now = float(t.get("stock_at_high") or 0), float(t.get("stock_last_price") or 0)
+        if s_hi > 0 and s_now > 0:
+            put = str(t.get("option_type") or "").upper().startswith("P") or str(t.get("direction") or "").upper() == "BEARISH"
+            out["stock_since_high_pct"] = round((-1 if put else 1) * (s_now / s_hi - 1) * 100, 2)
+        if not closed and out["from_high_pct"] is not None and out["from_high_pct"] <= -5 and out["stock_since_high_pct"] is not None:
+            out["high_state"] = "MELTING" if out["stock_since_high_pct"] >= -0.15 else "STOCK_REVERSING"
+    except Exception:  # noqa: BLE001 - display only
+        pass
+    return out
+
+
 HOST = "0.0.0.0"
-PORT = 8765
+PORT = int(os.environ.get("APLUS_DASHBOARD_PORT", "8765") or 8765)
 
 MAIN_MOBILE_CSS = '\n<style id="aplus-mobile-css">\n<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n@media(max-width:760px){\n  body{font-size:14px!important;overflow-x:hidden}\n  #aplus-main-nav{position:sticky!important;top:0!important;z-index:9999!important;padding:8px!important;gap:6px!important;overflow-x:auto!important;flex-wrap:nowrap!important;-webkit-overflow-scrolling:touch}\n  #aplus-main-nav a{flex:0 0 auto!important;padding:9px 11px!important;font-size:11px!important;white-space:nowrap!important}\n  .header{padding:12px 14px!important;gap:10px!important;align-items:flex-start!important}\n  .brandrow{gap:8px!important}.aplus-logo{width:38px!important;height:38px!important}\n  .title{font-size:18px!important}.sub{font-size:10px!important}\n  .grid,.cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important;padding:10px!important}\n  .card{padding:10px!important;border-radius:10px!important}\n  .label{font-size:10px!important}.value{font-size:18px!important}\n  .filterbar,.toolbar,.tabs{padding:0 10px 10px!important;gap:6px!important;overflow-x:auto!important;white-space:nowrap!important;flex-wrap:nowrap!important}\n  .tradefilter,.toolbar button,.toolbar select,.tab{padding:8px 10px!important;font-size:11px!important;flex:0 0 auto!important}\n  .tablewrap{padding:0 8px 12px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}\n  table{min-width:980px!important}\n  th,td{padding:8px!important;font-size:11px!important}\n  .grid{grid-template-columns:1fr!important}\n  .crisp-footer{grid-template-columns:1fr!important;padding:14px!important;gap:10px!important;text-align:center!important}\n  .cf-copy{text-align:center!important}.cf-title{font-size:17px!important}\n  .watermark{font-size:34px!important}\n}\n</style>\n'
 
+
+MODE_BAR_HTML = """
+<div id="aplus-mode-bar" style="position:fixed;right:12px;bottom:12px;z-index:9999;background:#121a2d;border:1px solid #27334d;border-radius:12px;padding:8px 12px;font:600 13px system-ui,sans-serif;color:#e7eefc;box-shadow:0 4px 18px rgba(0,0,0,.45);max-width:340px">
+<span id="aplus-mode-pill" style="padding:3px 10px;border-radius:999px;background:#1b6b3a">PAPER MODE</span>
+<button id="aplus-mode-btn" style="margin-left:8px;padding:5px 10px;border-radius:8px;border:1px solid #27334d;background:#0b1020;color:#e7eefc;cursor:pointer;font-weight:700">Switch to LIVE</button>
+<div id="aplus-mode-msg" style="margin-top:5px;font-weight:500;font-size:12px;color:#8ea0bd"></div></div>
+<script>(function(){var pill=document.getElementById('aplus-mode-pill'),btn=document.getElementById('aplus-mode-btn'),msg=document.getElementById('aplus-mode-msg'),cur='PAPER';
+function render(s){if(!s)return;cur=s.mode;if(s.mode==='LIVE'){pill.textContent='LIVE armed - order routing OFF';pill.style.background='#8a2b2b';btn.textContent='Back to PAPER';}else{pill.textContent='PAPER MODE';pill.style.background='#1b6b3a';btn.textContent='Switch to LIVE';}
+if(s.broker&&s.broker.connected&&s.mode==='LIVE'){msg.textContent='Broker connected ('+s.broker.client+')'+(s.broker.available_balance!=null?' - balance '+s.broker.available_balance:'');}}
+function load(){fetch('/api/mode',{cache:'no-store'}).then(function(r){return r.json()}).then(render).catch(function(){});}
+btn.onclick=function(){var body;if(cur==='LIVE'){body={mode:'PAPER'};}else{var c=prompt('This runs a read-only broker connection check and arms LIVE for today only.\\nNo real orders are sent - order routing is not built yet.\\nType LIVE to continue:');if(c===null)return;body={mode:'LIVE',confirm:c};}
+fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(j){msg.textContent=j.message||'';render(j.state);}).catch(function(){msg.textContent='Request failed.';});};
+load();setInterval(load,20000);})();</script>
+"""
 
 def _mobileize_html(html, host=None):
     if not isinstance(html, str):
         return html
     out = html
+    if control_room_payload is not None and "/control-room" not in out:
+        link = ('<a href="/control-room" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTROL ROOM</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', link + '<a href="/fno-market-watch"', 1)
+    if 'href="/decision-desk"' not in out:
+        dd_link = ('<a href="/decision-desk" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">DECISION DESK</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', dd_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/live-scanner"' not in out:
+        ls_link = ('<a href="/live-scanner" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">LIVE SCANNER</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', ls_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/journal"' not in out:
+        j_link = ('<a href="/journal" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                  'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">JOURNAL</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', j_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/money-flow"' not in out:
+        mf_link = ('<a href="/money-flow" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">MONEY FLOW</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', mf_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/sector-analysis"' not in out:
+        sa_link = ('<a href="/sector-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                   'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTORS</a>'+chr(10))
+        out = out.replace('<a href="/fno-market-watch"', sa_link + '<a href="/fno-market-watch"', 1)
+    if 'href="/positions"' not in out:
+        pos_link = ('<a href="/positions" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;'
+                    'color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">POSITIONS</a>\n')
+        out = out.replace('<a href="/fno-market-watch"', pos_link + '<a href="/fno-market-watch"', 1)
     if 'id="aplus-mobile-css"' not in out:
         out = out.replace("</head>", MAIN_MOBILE_CSS + "</head>", 1)
+    if 'id="aplus-mood"' not in out and "</body>" in out:
+        out = out.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1)
+    if 'id="aplus-mode-bar"' not in out and "</body>" in out:
+        out = out.replace("</body>", MODE_BAR_HTML + "</body>", 1)
     if host:
         out = out.replace("http://127.0.0.1:8766", f"http://{host}:8766")
     return out
@@ -37,6 +177,54 @@ def _num(v, default=0.0):
         return float(v)
     except Exception:
         return default
+
+def _stop_fields(t):
+    """start / current stop-loss and why it moved (see stop_view.py); empty when the trade lacks the fields."""
+    try:
+        import stop_view
+        return {**stop_view.stop_state(t), **stop_view.stock_needs(t)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _trade_scan(t):
+    """Entry-time scan facts for an OPEN trade, shown under the trade row so hold / exit can be judged from the reason it was taken."""
+    if _status(t) != "OPEN":
+        return None
+    def g(k):
+        v = t.get(k)
+        return None if v in (None, "") else v
+    keys = ("entry_reason", "setup_family", "selection_tier", "pivot_state", "tr_scans_names", "tr_scans_against_names", "tr_aligned_5m", "tr_aligned_15m",
+            "tr_aligned_daily", "tr_all_aligned", "ms_trend", "ms_bos", "ms_choch", "chop_state", "kl_level", "ctx_done_move_pct", "ctx_range_pos", "ctx_last15_pct",
+            "ctx_vs_vwap_pct", "ctx_fading", "underlying_entry", "underlying_stop", "underlying_target1", "confirm5", "confirm5_pct", "day_entry_rank", "oc_k_spread_pct",
+            "oc_iv_rank", "oc_k_move_for_10", "sp_frac", "sp_sector", "breadth_tag", "nt_verdict", "rule_nifty_pct_open")
+    out = {k: g(k) for k in keys if g(k) is not None}
+    if isinstance(out.get("entry_reason"), str):
+        out["entry_reason"] = out["entry_reason"][:400]
+    return out
+
+
+def _trade_rank(t):
+    """Rank among all F&O stocks by move from the open on the trade's own side (call: gainers, put: losers) at entry, now, best, and at close."""
+    if t.get("rank_entry") in (None, ""):
+        return None
+    def i(k):
+        v = t.get(k)
+        try:
+            return int(float(v)) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    path = t.get("rank_path")
+    return {"side": str(t.get("rank_side") or ""), "entry": i("rank_entry"), "now": i("rank_now"), "best": i("rank_best"), "worst": i("rank_worst"),
+            "close": i("rank_close"), "n": i("rank_n"), "path": path if isinstance(path, list) else []}
+
+
+def _entries_state():
+    import entry_pause
+    today = datetime.now().date()
+    pnl = entry_pause.day_pnl(_load_trades(), today.isoformat())
+    return entry_pause.status(ROOT, pnl, entry_pause.account_capital(), today)
+
 
 def _load_trades():
     p_json = REPORTS / "paper_trades_latest.json"
@@ -171,6 +359,25 @@ IST = ZoneInfo("Asia/Kolkata")
 FNO_MARKET_WATCH_MAX_AGE_SECONDS = 180
 
 
+def _enrich_market_watch(payload):
+    try:
+        import market_watch_extremes
+        payload = market_watch_extremes.enrich(payload)
+    except Exception:  # noqa: BLE001 - the market-watch page must still load without high/low times
+        pass
+    try:
+        import stock_trend
+        stock_trend.attach_scans(payload.get("rows") or [], ROOT)
+    except Exception:  # noqa: BLE001 - the scans column is an extra
+        pass
+    try:
+        import catalyst
+        catalyst.attach(payload.get("rows") or [], ROOT)
+    except Exception:  # noqa: BLE001 - the catalyst column is an extra
+        pass
+    return payload
+
+
 def _load_fno_market_watch():
     path = REPORTS / "fno_market_watch_latest.json"
     empty = {
@@ -240,7 +447,7 @@ def _load_fno_market_watch():
         return empty
 
 
-FNO_MARKET_WATCH_HTML = '<!doctype html><html><head><meta charset="utf-8"><title>APlus F&O Market Watch</title>\n<style>:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.title{font-size:24px;font-weight:750}.sub{color:var(--muted);font-size:12px;margin-top:4px}.toolbar{padding:14px 24px;display:flex;gap:8px;flex-wrap:wrap}.toolbar button,.toolbar select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:600}.toolbar button{cursor:pointer}.active{border-color:var(--green)!important;background:#173527!important;color:#9ff0bd!important}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:750;margin-top:5px}.tablewrap{padding:0 24px 26px;overflow:auto}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{color:var(--muted);background:#0f1729;position:sticky;top:0}.right{text-align:right}.up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}a{color:#7dd3fc;text-decoration:none}.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}}</style></head><body>\n<div class="header"><div><div class="title">APlus F&O Market Watch</div><div class="sub">Full F&O universe • 09:15 Open → Now • Previous Close • High/Low • Gap • Sector</div></div><div style="text-align:right"><a href="/">← Live Trading Terminal</a><div id="updated" class="sub">Waiting for scanner data...</div></div></div>\n<div style="padding:12px 24px;display:flex;gap:8px">\n  <a href="/fno-market-watch" style="padding:8px 14px;border-radius:9px;border:1px solid #22d3ee;color:#9ffcff;background:#0f2730;font-weight:700;text-decoration:none">Market Watch</a>\n  <a href="/sector-performance" style="padding:8px 14px;border-radius:9px;border:1px solid #27334d;color:#e7eefc;background:#121a2d;font-weight:700;text-decoration:none">Sector Performance</a>\n</div>\n<div class="cards"><div class="card"><div class="label">F&O Stocks</div><div class="value" id="count">-</div></div><div class="card"><div class="label">Advancing from Open</div><div class="value up" id="adv">-</div></div><div class="card"><div class="label">Declining from Open</div><div class="value down" id="dec">-</div></div><div class="card"><div class="label">Top From Open</div><div class="value up" id="topup">-</div></div><div class="card"><div class="label">Bottom From Open</div><div class="value down" id="topdown">-</div></div></div>\n<div class="toolbar"><button id="bALL" class="active" onclick="setMode(\'ALL\')">All</button><button id="bGAIN" onclick="setMode(\'GAIN\')">Top Gainers</button><button id="bLOSS" onclick="setMode(\'LOSS\')">Top Losers</button><button id="bUP" onclick="setMode(\'UP\')">Strong Up ≥1%</button><button id="bDOWN" onclick="setMode(\'DOWN\')">Strong Down ≤−1%</button><select id="sector" onchange="render()"><option value="ALL">All Sectors</option></select><select id="basis" onchange="render()"><option value="from_open_pct">Sort: From 09:15 Open %</option><option value="from_prev_close_pct">Sort: From Prev Close %</option><option value="gap_pct">Sort: Gap %</option></select><span class="sub" id="shown"></span></div>\n<div class="tablewrap"><table><thead><tr><th>Symbol</th><th>Sector</th><th class="right">9:15 Open</th><th class="right">LTP</th><th class="right">Prev Close</th><th class="right">Gap %</th><th class="right">From Open %</th><th class="right">From Prev Close %</th><th class="right">Day High</th><th class="right">Day Low</th><th class="right">Range Pos %</th><th>Direction</th></tr></thead><tbody id="rows"></tbody></table></div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>let data=[],mode=\'ALL\';const money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});const pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';function setMode(m){mode=m;document.querySelectorAll(\'.toolbar button\').forEach(x=>x.classList.remove(\'active\'));document.getElementById(\'b\'+m).classList.add(\'active\');render()}function render(){let a=[...data],sec=sector.value,b=basis.value;if(sec!==\'ALL\')a=a.filter(x=>x.sector===sec);if(mode===\'GAIN\')a=a.filter(x=>x[b]>0).sort((x,y)=>y[b]-x[b]).slice(0,30);else if(mode===\'LOSS\')a=a.filter(x=>x[b]<0).sort((x,y)=>x[b]-y[b]).slice(0,30);else if(mode===\'UP\')a=a.filter(x=>x.from_open_pct>=1).sort((x,y)=>y.from_open_pct-x.from_open_pct);else if(mode===\'DOWN\')a=a.filter(x=>x.from_open_pct<=-1).sort((x,y)=>x.from_open_pct-y.from_open_pct);else a.sort((x,y)=>y[b]-x[b]);shown.textContent=\'Showing \'+a.length+\' of \'+data.length+\' stocks\';rows.innerHTML=a.map(x=>`<tr><td><a href=\"/stock-analysis?symbol=${encodeURIComponent(x.symbol)}\" style=\"font-weight:800;color:#e7eefc\">${x.symbol}</a></td><td>${x.sector||\'UNCLASSIFIED\'}</td><td class="right">${money(x.open_0915)}</td><td class="right">${money(x.ltp)}</td><td class="right">${money(x.previous_close)}</td><td class="right ${x.gap_pct>=0?\'up\':\'down\'}">${pct(x.gap_pct)}</td><td class="right ${x.from_open_pct>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td><td class="right ${x.from_prev_close_pct>=0?\'up\':\'down\'}">${pct(x.from_prev_close_pct)}</td><td class="right">${money(x.day_high)}</td><td class="right">${money(x.day_low)}</td><td class="right">${Number(x.range_position_pct||0).toFixed(1)}</td><td class="${x.direction===\'UP\'?\'up\':x.direction===\'DOWN\'?\'down\':\'\'}">${x.direction===\'UP\'?\'▲\':x.direction===\'DOWN\'?\'▼\':\'•\'} ${x.direction}</td></tr>`).join(\'\')}async function load(){const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];count.textContent=data.length;adv.textContent=data.filter(x=>x.from_open_pct>0).length;dec.textContent=data.filter(x=>x.from_open_pct<0).length;if(data.length){let u=[...data].sort((a,b)=>b.from_open_pct-a.from_open_pct)[0],dn=[...data].sort((a,b)=>a.from_open_pct-b.from_open_pct)[0];topup.textContent=u.symbol+\' \'+pct(u.from_open_pct);topdown.textContent=dn.symbol+\' \'+pct(dn.from_open_pct)}updated.textContent=d.stale?(d.generated_at?\'⚠ STALE — Last scanner update \'+String(d.generated_at).replace("T"," ").slice(0,19):\'⚠ NO SCANNER DATA\'):(d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting for scanner data...\');const old=sector.value;const secs=[...new Set(data.map(x=>x.sector||\'UNCLASSIFIED\'))].sort();sector.innerHTML=\'<option value="ALL">All Sectors</option>\'+secs.map(x=>`<option value="${x}">${x}</option>`).join(\'\');if(old===\'ALL\'||secs.includes(old))sector.value=old;render()}load();setInterval(load,5000)</script><a href="/fno-market-watch" style="position:fixed;right:22px;bottom:22px;z-index:999;background:#17c964;color:#04130a;text-decoration:none;font-weight:800;padding:11px 16px;border-radius:12px;box-shadow:0 5px 24px #0008">F&amp;O MARKET WATCH</a><a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;z-index:9998;background:#0f2730;color:#9ffcff;text-decoration:none;font-weight:800;padding:10px 14px;border:1px solid #22d3ee;border-radius:10px">OPENING STRUCTURE</a></body></html>'
+FNO_MARKET_WATCH_HTML = '<!doctype html><html><head><meta charset="utf-8"><title>APlus F&O Market Watch</title>\n<style>:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.title{font-size:24px;font-weight:750}.sub{color:var(--muted);font-size:12px;margin-top:4px}.toolbar{padding:14px 24px;display:flex;gap:8px;flex-wrap:wrap}.toolbar button,.toolbar select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:600}.toolbar button{cursor:pointer}.active{border-color:var(--green)!important;background:#173527!important;color:#9ff0bd!important}.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:750;margin-top:5px}.tablewrap{padding:0 24px 26px;overflow:auto}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{color:var(--muted);background:#0f1729;position:sticky;top:0}.right{text-align:right}.up{color:var(--green);font-weight:700}.down{color:var(--red);font-weight:700}a{color:#7dd3fc;text-decoration:none}.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}}</style></head><body>\n<div class="header"><div><div class="title">APlus F&O Market Watch</div><div class="sub">Full F&O universe • 09:15 Open → Now • Previous Close • High/Low • Gap • Sector</div></div><div style="text-align:right"><a href="/">← Live Trading Terminal</a><div id="updated" class="sub">Waiting for scanner data...</div></div></div>\n<div style="padding:12px 24px;display:flex;gap:8px">\n  <a href="/fno-market-watch" style="padding:8px 14px;border-radius:9px;border:1px solid #22d3ee;color:#9ffcff;background:#0f2730;font-weight:700;text-decoration:none">Market Watch</a>\n  <a href="/sector-performance" style="padding:8px 14px;border-radius:9px;border:1px solid #27334d;color:#e7eefc;background:#121a2d;font-weight:700;text-decoration:none">Sector Performance</a>\n</div>\n<div class="cards"><div class="card"><div class="label">F&O Stocks</div><div class="value" id="count">-</div></div><div class="card"><div class="label">Advancing from Open</div><div class="value up" id="adv">-</div></div><div class="card"><div class="label">Declining from Open</div><div class="value down" id="dec">-</div></div><div class="card"><div class="label">Top From Open</div><div class="value up" id="topup">-</div></div><div class="card"><div class="label">Bottom From Open</div><div class="value down" id="topdown">-</div></div></div>\n<div class="toolbar"><button id="bALL" class="active" onclick="setMode(\'ALL\')">All</button><button id="bGAIN" onclick="setMode(\'GAIN\')">Top Gainers</button><button id="bLOSS" onclick="setMode(\'LOSS\')">Top Losers</button><button id="bUP" onclick="setMode(\'UP\')">Strong Up ≥1%</button><button id="bDOWN" onclick="setMode(\'DOWN\')">Strong Down ≤−1%</button><select id="sector" onchange="render()"><option value="ALL">All Sectors</option></select><select id="scanflt" onchange="render()"><option value="ALL">All scans</option><option>Above yesterday\'s high</option><option>Open = Low</option><option>5 Days Breakout</option><option>10 Days Breakout</option><option>30 Days Breakout</option><option>20 EMA Breakout 1D</option><option>50 DMA Breakout 1D</option><option>100 DMA Breakout 1D</option><option>200 DMA Breakout 1D</option><option>Below yesterday\'s low</option><option>Open = High</option><option>5 Days Breakdown</option><option>Gap up</option></select><select id="basis" onchange="render()"><option value="from_open_pct">Sort: From 09:15 Open %</option><option value="from_prev_close_pct">Sort: From Prev Close %</option><option value="gap_pct">Sort: Gap %</option></select><span class="sub" id="shown"></span></div>\n<div class="tablewrap"><table><thead><tr><th>Symbol</th><th>Sector</th><th class="right">9:15 Open</th><th class="right">LTP</th><th class="right">Prev Close</th><th class="right">Gap %</th><th class="right">From Open %</th><th class="right">From Prev Close %</th><th class="right">Day High (time, % from open)</th><th class="right">Day Low (time, % from open)</th><th class="right">Range Pos %</th><th>Direction</th><th>Catalyst</th><th>Intraday scans</th></tr></thead><tbody id="rows"></tbody></table></div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>let data=[],mode=\'ALL\';const money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});const pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';function setMode(m){mode=m;document.querySelectorAll(\'.toolbar button\').forEach(x=>x.classList.remove(\'active\'));document.getElementById(\'b\'+m).classList.add(\'active\');render()}function render(){let a=[...data],sec=sector.value,b=basis.value;if(sec!==\'ALL\')a=a.filter(x=>x.sector===sec);const sf=document.getElementById(\'scanflt\').value;if(sf!==\'ALL\')a=a.filter(x=>(x.scans||[]).some(s=>s.text.indexOf(sf)===0));if(mode===\'GAIN\')a=a.filter(x=>x[b]>0).sort((x,y)=>y[b]-x[b]).slice(0,30);else if(mode===\'LOSS\')a=a.filter(x=>x[b]<0).sort((x,y)=>x[b]-y[b]).slice(0,30);else if(mode===\'UP\')a=a.filter(x=>x.from_open_pct>=1).sort((x,y)=>y.from_open_pct-x.from_open_pct);else if(mode===\'DOWN\')a=a.filter(x=>x.from_open_pct<=-1).sort((x,y)=>x.from_open_pct-y.from_open_pct);else a.sort((x,y)=>y[b]-x[b]);shown.textContent=\'Showing \'+a.length+\' of \'+data.length+\' stocks\';rows.innerHTML=a.map(x=>`<tr><td><a href=\"/stock-analysis?symbol=${encodeURIComponent(x.symbol)}\" style=\"font-weight:800;color:#e7eefc\">${x.symbol}</a></td><td>${x.sector||\'UNCLASSIFIED\'}</td><td class="right">${money(x.open_0915)}</td><td class="right">${money(x.ltp)}</td><td class="right">${money(x.previous_close)}</td><td class="right ${x.gap_pct>=0?\'up\':\'down\'}">${pct(x.gap_pct)}</td><td class="right ${x.from_open_pct>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td><td class="right ${x.from_prev_close_pct>=0?\'up\':\'down\'}">${pct(x.from_prev_close_pct)}</td><td class="right">${money(x.day_high)}<span class="sub" style="margin-left:8px">${x.high_time||""} ${x.high_from_open_pct==null?"":pct(x.high_from_open_pct)}</span></td><td class="right">${money(x.day_low)}<span class="sub" style="margin-left:8px">${x.low_time||""} ${x.low_from_open_pct==null?"":pct(x.low_from_open_pct)}</span></td><td class="right">${Number(x.range_position_pct||0).toFixed(1)}</td><td class="${x.direction===\'UP\'?\'up\':x.direction===\'DOWN\'?\'down\':\'\'}">${x.direction===\'UP\'?\'▲\':x.direction===\'DOWN\'?\'▼\':\'•\'} ${x.direction}</td><td style="white-space:normal;min-width:130px">${x.catalyst?`<span title="${(x.catalyst.confidence||"")+" confidence, "+(x.catalyst.age_h==null?"":x.catalyst.age_h+"h old")}" style="display:inline-block;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:700;background:${x.catalyst.direction==="BULLISH"?"#12351f":x.catalyst.direction==="BEARISH"?"#3a1620":"#232b3f"};color:${x.catalyst.direction==="BULLISH"?"#b9f5cf":x.catalyst.direction==="BEARISH"?"#ffb9c8":"#c8d3e8"}">${x.catalyst.direction==="BULLISH"?"▲":x.catalyst.direction==="BEARISH"?"▼":"●"} ${String(x.catalyst.type||"event").replace(/_/g," ").toLowerCase()}${x.catalyst.event_risk?" ⚠":""}</span>`:""}</td><td style="white-space:normal;min-width:260px">${(x.scans||[]).map(s=>`<span style="display:inline-block;margin:1px 3px 1px 0;padding:2px 7px;border-radius:6px;font-size:11px;font-weight:700;background:${s.tone===\'bull\'?\'#12351f\':\'#3a1620\'};color:${s.tone===\'bull\'?\'#b9f5cf\':\'#ffb9c8\'}">${s.text}${s.time?\' @ \'+s.time:\'\'}</span>`).join(\'\')}</td></tr>`).join(\'\')}async function load(){const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];count.textContent=data.length;adv.textContent=data.filter(x=>x.from_open_pct>0).length;dec.textContent=data.filter(x=>x.from_open_pct<0).length;if(data.length){let u=[...data].sort((a,b)=>b.from_open_pct-a.from_open_pct)[0],dn=[...data].sort((a,b)=>a.from_open_pct-b.from_open_pct)[0];topup.textContent=u.symbol+\' \'+pct(u.from_open_pct);topdown.textContent=dn.symbol+\' \'+pct(dn.from_open_pct)}updated.textContent=d.stale?(d.generated_at?\'⚠ STALE — Last scanner update \'+String(d.generated_at).replace("T"," ").slice(0,19):\'⚠ NO SCANNER DATA\'):(d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting for scanner data...\');const old=sector.value;const secs=[...new Set(data.map(x=>x.sector||\'UNCLASSIFIED\'))].sort();sector.innerHTML=\'<option value="ALL">All Sectors</option>\'+secs.map(x=>`<option value="${x}">${x}</option>`).join(\'\');if(old===\'ALL\'||secs.includes(old))sector.value=old;render()}load();setInterval(load,5000)</script><a href="/fno-market-watch" style="position:fixed;right:22px;bottom:22px;z-index:999;background:#17c964;color:#04130a;text-decoration:none;font-weight:800;padding:11px 16px;border-radius:12px;box-shadow:0 5px 24px #0008">F&amp;O MARKET WATCH</a><a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;z-index:9998;background:#0f2730;color:#9ffcff;text-decoration:none;font-weight:800;padding:10px 14px;border:1px solid #22d3ee;border-radius:10px">OPENING STRUCTURE</a></body></html>'
 
 # APLUS_SAFE_GLOBAL_SEARCH_V1_2
 # Runtime transformation AFTER the original giant HTML literal is complete.
@@ -261,10 +468,34 @@ FNO_MARKET_WATCH_HTML = FNO_MARKET_WATCH_HTML.replace(
     "if(q)a=a.filter(x=>String(x.symbol||``).toUpperCase().includes(q)||String(x.sector||``).toUpperCase().includes(q));",
     1,
 )
+FNO_MARKET_WATCH_HTML = FNO_MARKET_WATCH_HTML.replace(
+    '<a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;',
+    '<a href="/opening-leaders" style="position:fixed;left:22px;bottom:68px;z-index:9998;background:#173527;color:#9ff0bd;text-decoration:none;font-weight:800;padding:10px 14px;border:1px solid #17c964;border-radius:10px">OPENING MOVE LEADERS</a>'
+    '<a href="/opening-structure" style="position:fixed;left:22px;bottom:22px;',
+    1,
+)
 
 SECTOR_PERFORMANCE_HTML = '<!doctype html>\n<html><head><meta charset="utf-8"><title>APlus Sector Performance</title>\n<style>\n:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d;--cyan:#22d3ee}\n*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}\n.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}\n.title{font-size:24px;font-weight:750}.sub{color:var(--muted);font-size:12px;margin-top:4px}\n.tabs{padding:12px 24px;display:flex;gap:8px}.tab{padding:8px 14px;border-radius:9px;border:1px solid var(--line);color:var(--text);background:var(--panel);font-weight:700;text-decoration:none}.tab.active{border-color:var(--cyan);color:#9ffcff;background:#0f2730}\n.cards{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:750;margin-top:5px}\n.grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(500px,.85fr);gap:14px;padding:0 24px 20px}\n.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.boxtitle{font-size:18px;font-weight:750;margin-bottom:10px}\n.chart{height:520px;overflow:auto;padding-right:8px}.barrow{display:grid;grid-template-columns:180px 1fr 72px;align-items:center;gap:10px;margin:7px 0;cursor:pointer}.barlabel{font-size:12px;text-align:right}.track{height:13px;background:#0f1729;border-radius:4px;position:relative;overflow:hidden}.fill{height:100%;border-radius:4px}.fill.up{background:rgba(23,201,100,.75)}.fill.down{background:rgba(243,18,96,.75)}.barval{font-size:12px;font-weight:700}.up{color:var(--green)}.down{color:var(--red)}\n.tablewrap{max-height:520px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:9px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{position:sticky;top:0;background:#0f1729;color:var(--muted);text-align:left}.right{text-align:right}.ltp{font-weight:850;color:#eaffff;text-shadow:0 0 8px rgba(34,211,238,.7)}\n.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}\n@media(max-width:1200px){.grid{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,1fr)}}\n</style></head><body>\n<div class="header"><div><div class="title">APlus F&O Market Watch</div><div class="sub">Sector Performance • all % calculations from 09:15 Open only</div></div><div style="text-align:right"><a href="/" style="color:#7dd3fc;text-decoration:none">← Live Trading Terminal</a><div id="updated" class="sub">Waiting...</div></div></div>\n<div class="cards">\n<div class="card"><div class="label">F&O Stocks</div><div id="cnt" class="value">-</div></div>\n<div class="card"><div class="label">Advancing from 09:15 Open</div><div id="adv" class="value up">-</div></div>\n<div class="card"><div class="label">Declining from 09:15 Open</div><div id="dec" class="value down">-</div></div>\n<div class="card"><div class="label">Top from 09:15 Open</div><div id="topup" class="value up">-</div></div>\n<div class="card"><div class="label">Bottom from 09:15 Open</div><div id="topdn" class="value down">-</div></div>\n</div>\n<div class="tabs"><a class="tab" href="/fno-market-watch">Market Watch</a><a class="tab active" href="/sector-performance">Sector Performance</a></div>\n<div class="grid">\n  <div class="box">\n    <div class="boxtitle">Sector Performance - from 09:15 Open</div>\n    <div class="sub">Sector % = average move of its F&O stocks from each stock\'s own 09:15 open.</div>\n    <div class="tablewrap" style="max-height:520px">\n      <table>\n        <thead><tr>\n          <th>Sector</th><th class="right">% from 09:15</th><th class="right">Stocks</th>\n          <th class="right">Adv</th><th class="right">Dec</th><th>Top Stock</th><th>Bottom Stock</th>\n        </tr></thead>\n        <tbody id="sectorSummary"></tbody>\n      </table>\n    </div>\n    <div class="sub">Click any sector row to view all constituent stocks.</div>\n  </div>\n  <div class="box">\n    <div class="boxtitle" id="stockTitle">Sector Stocks</div>\n    <div class="tablewrap"><table><thead><tr>\n      <th>Symbol</th><th>Sector</th><th class="right">% from 09:15 Open</th><th class="right">LTP</th><th class="right">09:15 Open</th><th class="right">High</th><th class="right">Low</th>\n    </tr></thead><tbody id="sectorStocks"></tbody></table></div>\n  </div>\n</div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>\nlet data=[],selectedSector=null;\nconst money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});\nconst pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';\n\nfunction aggregateSectors(){\n const m={};\n data.forEach(x=>{\n   const s=x.sector||\'Other/Industrial\';\n   if(!m[s])m[s]={sector:s,sum:0,count:0,adv:0,dec:0,stocks:[]};\n   const mv=Number(x.from_open_pct||0);\n   m[s].sum+=mv;m[s].count++;\n   if(mv>0)m[s].adv++; else if(mv<0)m[s].dec++;\n   m[s].stocks.push(x);\n });\n return Object.values(m).map(x=>{\n   x.stocks.sort((a,b)=>Number(b.from_open_pct||0)-Number(a.from_open_pct||0));\n   return {sector:x.sector,move:x.count?x.sum/x.count:0,count:x.count,adv:x.adv,dec:x.dec,\n           top:x.stocks[0]||null,bottom:x.stocks[x.stocks.length-1]||null};\n }).sort((a,b)=>b.move-a.move);\n}\nfunction renderBars(){\n const a=aggregateSectors();\n sectorSummary.innerHTML=a.map(x=>`<tr data-sector="${x.sector.replace(/"/g,\'&quot;\')}" style="cursor:pointer">\n   <td><b>${x.sector}</b></td>\n   <td class="right ${x.move>=0?\'up\':\'down\'}"><b>${pct(x.move)}</b></td>\n   <td class="right">${x.count}</td>\n   <td class="right up">${x.adv}</td>\n   <td class="right down">${x.dec}</td>\n   <td class="${x.top&&Number(x.top.from_open_pct)>=0?\'up\':\'down\'}">${x.top?x.top.symbol+\' \'+pct(x.top.from_open_pct):\'-\'}</td>\n   <td class="${x.bottom&&Number(x.bottom.from_open_pct)>=0?\'up\':\'down\'}">${x.bottom?x.bottom.symbol+\' \'+pct(x.bottom.from_open_pct):\'-\'}</td>\n </tr>`).join(\'\');\n document.querySelectorAll(\'#sectorSummary tr\').forEach(el=>el.onclick=()=>selectSector(el.dataset.sector));\n if(!selectedSector && a.length)selectSector(a[0].sector);\n}\nfunction selectSector(s){selectedSector=s;renderStocks();}\nfunction renderStocks(){\n stockTitle.textContent=(selectedSector||\'Sector\')+\' Stocks\';\n const a=data.filter(x=>(x.sector||\'Other/Industrial\')===selectedSector).sort((x,y)=>y.from_open_pct-x.from_open_pct);\n sectorStocks.innerHTML=a.map(x=>`<tr>\n <td><b>${x.symbol}</b></td><td>${x.sector||\'Other/Industrial\'}</td>\n <td class="right ${x.from_open_pct>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td>\n <td class="right ltp">${money(x.ltp)}</td><td class="right">${money(x.open_0915)}</td>\n <td class="right">${money(x.day_high)}</td><td class="right">${money(x.day_low)}</td></tr>`).join(\'\');\n}\nasync function load(){\n const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];\n cnt.textContent=data.length;adv.textContent=data.filter(x=>x.from_open_pct>0).length;dec.textContent=data.filter(x=>x.from_open_pct<0).length;\n if(data.length){const u=[...data].sort((a,b)=>b.from_open_pct-a.from_open_pct)[0],dn=[...data].sort((a,b)=>a.from_open_pct-b.from_open_pct)[0];topup.textContent=u.symbol+\' \'+pct(u.from_open_pct);topdn.textContent=dn.symbol+\' \'+pct(dn.from_open_pct);}\n updated.textContent=d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting...\';\n renderBars();if(selectedSector)renderStocks();\n}\nload();setInterval(load,5000);\n</script></body></html>'
 
 OPENING_STRUCTURE_HTML = '<!doctype html>\n<html><head><meta charset="utf-8"><title>APlus Opening Structure</title>\n<style>\n:root{--bg:#0b1020;--panel:#121a2d;--muted:#8ea0bd;--text:#e7eefc;--green:#17c964;--red:#f31260;--line:#27334d;--cyan:#22d3ee}\n*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}\n.header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}\n.title{font-size:24px;font-weight:800}.sub{color:var(--muted);font-size:12px;margin-top:4px}\n.tabs{padding:12px 24px;display:flex;gap:8px;flex-wrap:wrap}.tab{padding:8px 14px;border-radius:9px;border:1px solid var(--line);color:var(--text);background:var(--panel);font-weight:700;text-decoration:none}.tab.active{border-color:var(--cyan);color:#9ffcff;background:#0f2730}\n.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:0 24px 14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}.label{font-size:11px;color:var(--muted)}.value{font-size:20px;font-weight:800;margin-top:5px}\n.toolbar{padding:0 24px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}\nbutton,select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:700}\nbutton{cursor:pointer}.activeBtn{border-color:var(--green);background:#173527;color:#9ff0bd}\n.tablewrap{padding:0 24px 24px;overflow:auto}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}\nth,td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}th{color:var(--muted);background:#0f1729;position:sticky;top:0}.right{text-align:right}\n.up{color:var(--green);font-weight:750}.down{color:var(--red);font-weight:750}.neutral{color:var(--muted)}\n.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-weight:800}.bull{background:#173527;color:#9ff0bd}.bear{background:#3c1724;color:#ff9bbb}.watch{background:#243049;color:#bdd0ef}\n.ltp{font-weight:900;color:#eaffff;text-shadow:0 0 8px rgba(34,211,238,.72)}\n.footer{padding:18px;text-align:center;color:var(--muted);border-top:1px solid var(--line)}\n@media(max-width:1200px){.cards{grid-template-columns:repeat(3,1fr)}}\n</style></head><body>\n<div class="header">\n <div><div class="title">APlus Opening Structure Scanner</div>\n <div class="sub">Open≈Low / Open≈High • confirmation from 09:15 movement + sector alignment • PAPER / RESEARCH ONLY</div></div>\n <div style="text-align:right"><a href="/" style="color:#7dd3fc;text-decoration:none">← Live Trading Terminal</a><div id="updated" class="sub">Waiting...</div></div>\n</div>\n<div class="cards">\n <div class="card"><div class="label">F&O Stocks</div><div id="cnt" class="value">-</div></div>\n <div class="card"><div class="label">Open≈Low</div><div id="ol" class="value up">-</div></div>\n <div class="card"><div class="label">Open≈High</div><div id="oh" class="value down">-</div></div>\n <div class="card"><div class="label">Open≈Low Confirmed</div><div id="olc" class="value up">-</div></div>\n <div class="card"><div class="label">Open≈High Confirmed</div><div id="ohc" class="value down">-</div></div>\n <div class="card"><div class="label">Qualified CE / PE</div><div id="qp" class="value">-</div></div>\n</div>\n<div class="tabs">\n <a class="tab" href="/fno-market-watch">Market Watch</a>\n <a class="tab" href="/sector-performance">Sector Performance</a>\n <a class="tab active" href="/opening-structure">Opening Structure</a>\n</div>\n<div class="toolbar">\n <button id="bALL" class="activeBtn" onclick="setMode(\'ALL\')">All</button>\n <button id="bOL" onclick="setMode(\'OL\')">Open≈Low</button>\n <button id="bOH" onclick="setMode(\'OH\')">Open≈High</button>\n <button id="bOLC" onclick="setMode(\'OLC\')">Open≈Low Confirmed</button>\n <button id="bOHC" onclick="setMode(\'OHC\')">Open≈High Confirmed</button>\n <select id="sectorFilter" onchange="render()"><option value="ALL">All Sectors</option></select>\n <span class="sub">Tolerance: max ₹0.05 or 0.05% of Open</span>\n <span class="sub" id="shown"></span>\n</div>\n<div class="tablewrap"><table>\n<thead><tr>\n <th>Symbol</th><th>Sector</th><th>Structure</th><th class="right">Open</th><th class="right">LTP</th>\n <th class="right">High</th><th class="right">Low</th><th class="right">Open→Low Dist %</th>\n <th class="right">Open→High Dist %</th><th class="right">% from 09:15</th><th class="right">Sector %</th>\n <th>Confirmation</th><th>Bias</th>\n</tr></thead><tbody id="rows"></tbody></table></div>\n<div class="footer">APlus Live Trading Terminal — Developed by Darpan Bobhate</div>\n<script>\nlet data=[],mode=\'ALL\',sectorPerf={};\nconst money=n=>\'₹\'+Number(n||0).toLocaleString(\'en-IN\',{maximumFractionDigits:2});\nconst pct=n=>(Number(n)>=0?\'+\':\'\')+Number(n||0).toFixed(2)+\'%\';\n\nfunction buildSectorPerf(){\n const m={};data.forEach(x=>{const s=x.sector||\'Other/Industrial\';if(!m[s])m[s]={sum:0,n:0};m[s].sum+=Number(x.from_open_pct||0);m[s].n++;});\n sectorPerf={};Object.entries(m).forEach(([s,v])=>sectorPerf[s]=v.n?v.sum/v.n:0);\n}\nfunction classify(x){\n const o=Number(x.open_0915||0),h=Number(x.day_high||0),l=Number(x.day_low||0),m=Number(x.from_open_pct||0);\n const s=x.sector||\'Other/Industrial\',sp=Number(sectorPerf[s]||0);\n const tol=Math.max(0.05,o*0.0005);\n const dLow=Math.abs(o-l),dHigh=Math.abs(h-o);\n const ol=dLow<=tol,oh=dHigh<=tol;\n let structure=ol?\'OPEN≈LOW\':oh?\'OPEN≈HIGH\':\'-\';\n let confirm=\'WATCH\',bias=\'NONE\';\n if(ol && m>=0.35 && sp>=0){confirm=\'CONFIRMED\';bias=\'CE\';}\n if(oh && m<=-0.35 && sp<=0){confirm=\'CONFIRMED\';bias=\'PE\';}\n return {...x,_structure:structure,_ol:ol,_oh:oh,_confirm:confirm,_bias:bias,_sectorPct:sp,\n   _dLowPct:o?dLow/o*100:0,_dHighPct:o?dHigh/o*100:0};\n}\nfunction setMode(m){mode=m;document.querySelectorAll(\'.toolbar button\').forEach(x=>x.classList.remove(\'activeBtn\'));document.getElementById(\'b\'+m).classList.add(\'activeBtn\');render();}\nfunction render(){\n buildSectorPerf();\n let a=data.map(classify),sec=sectorFilter.value;\n if(sec!==\'ALL\')a=a.filter(x=>(x.sector||\'Other/Industrial\')===sec);\n if(mode===\'OL\')a=a.filter(x=>x._ol);\n else if(mode===\'OH\')a=a.filter(x=>x._oh);\n else if(mode===\'OLC\')a=a.filter(x=>x._ol&&x._confirm===\'CONFIRMED\');\n else if(mode===\'OHC\')a=a.filter(x=>x._oh&&x._confirm===\'CONFIRMED\');\n\n a.sort((x,y)=>{\n   const xc=(x._confirm===\'CONFIRMED\'?1:0),yc=(y._confirm===\'CONFIRMED\'?1:0);\n   if(xc!==yc)return yc-xc;\n   return Math.abs(Number(y.from_open_pct||0))-Math.abs(Number(x.from_open_pct||0));\n });\n shown.textContent=\'Showing \'+a.length+\' of \'+data.length+\' stocks\';\n rows.innerHTML=a.map(x=>`<tr>\n  <td><b>${x.symbol}</b></td><td>${x.sector||\'Other/Industrial\'}</td>\n  <td>${x._structure===\'OPEN≈LOW\'?\'<span class="badge bull">OPEN≈LOW</span>\':x._structure===\'OPEN≈HIGH\'?\'<span class="badge bear">OPEN≈HIGH</span>\':\'-\'}</td>\n  <td class="right">${money(x.open_0915)}</td><td class="right ltp">${money(x.ltp)}</td>\n  <td class="right">${money(x.day_high)}</td><td class="right">${money(x.day_low)}</td>\n  <td class="right">${x._dLowPct.toFixed(3)}%</td><td class="right">${x._dHighPct.toFixed(3)}%</td>\n  <td class="right ${Number(x.from_open_pct)>=0?\'up\':\'down\'}">${pct(x.from_open_pct)}</td>\n  <td class="right ${x._sectorPct>=0?\'up\':\'down\'}">${pct(x._sectorPct)}</td>\n  <td>${x._confirm===\'CONFIRMED\'?\'<span class="badge \'+(x._bias===\'CE\'?\'bull\':\'bear\')+\'">CONFIRMED</span>\':\'<span class="badge watch">WATCH</span>\'}</td>\n  <td>${x._bias===\'CE\'?\'<span class="badge bull">CE</span>\':x._bias===\'PE\'?\'<span class="badge bear">PE</span>\':\'-\'}</td>\n </tr>`).join(\'\');\n\n const all=data.map(classify);\n cnt.textContent=data.length;ol.textContent=all.filter(x=>x._ol).length;oh.textContent=all.filter(x=>x._oh).length;\n olc.textContent=all.filter(x=>x._ol&&x._confirm===\'CONFIRMED\').length;ohc.textContent=all.filter(x=>x._oh&&x._confirm===\'CONFIRMED\').length;\n qp.textContent=all.filter(x=>x._bias===\'CE\').length+\' / \'+all.filter(x=>x._bias===\'PE\').length;\n}\nasync function load(){\n const r=await fetch(\'/api/fno-market-watch?ts=\'+Date.now());const d=await r.json();data=d.rows||[];\n updated.textContent=d.generated_at?\'Updated \'+String(d.generated_at).slice(11,19):\'Waiting...\';\n const old=sectorFilter.value;const secs=[...new Set(data.map(x=>x.sector||\'Other/Industrial\'))].sort();\n sectorFilter.innerHTML=\'<option value="ALL">All Sectors</option>\'+secs.map(s=>`<option value="${s}">${s}</option>`).join(\'\');\n if(old===\'ALL\'||secs.includes(old))sectorFilter.value=old;\n render();\n}\nload();setInterval(load,5000);\n</script></body></html>'
+
+_SECTOR_CACHE = {"t": 0.0, "map": {}}
+
+
+def _sector_map():
+    """symbol -> sector from the F&O market-watch report (refreshed at most once a minute)."""
+    import time as _t
+    if _t.time() - _SECTOR_CACHE["t"] < 60 and _SECTOR_CACHE["map"]:
+        return _SECTOR_CACHE["map"]
+    try:
+        rows = (_load_fno_market_watch() or {}).get("rows", [])
+        mapping = {str(r.get("symbol") or "").upper(): str(r.get("sector") or "") for r in rows if r.get("symbol")}
+        if mapping:
+            _SECTOR_CACHE["map"], _SECTOR_CACHE["t"] = mapping, _t.time()
+    except Exception:  # noqa: BLE001 - the trade table must load without sectors
+        pass
+    return _SECTOR_CACHE["map"]
+
 
 def snapshot():
     trades = _load_trades()
@@ -283,8 +514,17 @@ def snapshot():
         rows.append({
             "id": str(t.get("paper_trade_id") or t.get("trade_id") or ""),
             "symbol": str(t.get("symbol") or "-"),
+            "sector": _sector_map().get(str(t.get("symbol") or "").upper(), "-") or "-",
             "side": (str(t.get("direction") or "") + " " + str(t.get("option_type") or t.get("side") or "")).strip(),
             "strike": _num(t.get("strike")),
+            "qty": int(_num(t.get("quantity"))),
+            "expiry": str(t.get("expiry") or ""),
+            "sl": _num(t.get("option_stop")),
+            "manual_stop": _num(t.get("manual_stop")),
+            "ladder_stop": _num(t.get("ladder_stop")),
+            "manual_exit_pending": bool(t.get("manual_exit_requested_at")) and _status(t) == "OPEN",
+            "tp": _num(t.get("option_target1")),
+            "exit_price": _num(t.get("exit_price")),
             "trade_date": str(t.get("entry_time") or "")[:10],
             "entry_time": _time(t.get("entry_time")),
             "exit_time": _time(t.get("exit_time")),
@@ -303,9 +543,14 @@ def snapshot():
             "setup": str(t.get("setup_family") or "-"),
             "quality": _num(t.get("momentum_score") or t.get("trade_quality_score")),
             "clean": _num(t.get("clean_trend_score")),
+            **(lambda hl: {**hl, **_since_high(t, hl)})(_hl_fields(t)),
+            **_stop_fields(t),
+            "scan": _trade_scan(t),
+            "rank": _trade_rank(t),
         })
 
     return {
+        "manual_ready": (lambda m: m.enabled() and m.scanner_ready(ROOT))(__import__("manual_orders")),
         "updated_at": datetime.now().strftime("%H:%M:%S"),
         "trading_date": datetime.now().strftime("%d-%b-%Y"),
         "trading_day": datetime.now().strftime("%A"),
@@ -351,7 +596,13 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 .exact-footer{padding:0!important;margin:12px 0 0!important;border-top:1px solid var(--line);background:#0b1020;display:block!important;width:100%;overflow:hidden}.exact-footer img{display:block;width:100%;height:auto;max-height:none;object-fit:contain}.crisp-footer{margin-top:14px;border-top:1px solid #1e6091;border-bottom:1px solid #1e6091;background:linear-gradient(90deg,#071426,#0b1b35,#071426);padding:16px 22px;display:grid;grid-template-columns:1.25fr 1.7fr 1.35fr .65fr;gap:22px;align-items:center;position:relative;z-index:2}.cf-quote{font-size:13px;line-height:1.45;color:#e7eefc}.cf-brand{display:flex;align-items:center;justify-content:center;gap:12px}.cf-logo{width:54px;height:54px}.cf-title{font-size:20px;font-weight:800;white-space:nowrap}.cf-title .live{color:#17c964}.cf-dev{font-size:12px;color:#d7e3f5;margin-top:4px;text-align:center}.cf-flow{font-size:11px;font-weight:700;white-space:nowrap}.cf-flow .dot{color:#17c964;padding:0 7px}.cf-safe{font-size:11px;color:#d7e3f5;margin-top:8px;white-space:nowrap}.cf-copy{text-align:right;font-size:11px;color:#d7e3f5;line-height:1.7}.cf-flag{font-size:18px}@media(max-width:1100px){.crisp-footer{grid-template-columns:1fr 1fr}.cf-copy{text-align:left}}</style></head><body><div id="aplus-main-nav" style="padding:12px 20px;display:flex;gap:10px;flex-wrap:wrap;border-bottom:1px solid #27334d;background:#0b1020">
 <a href="/" style="padding:9px 14px;border:1px solid #22d3ee;border-radius:9px;color:#9ffcff;text-decoration:none;font-weight:800;background:#0f2730">LIVE TRADING</a>
 <a href="/fno-market-watch" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">F&amp;O MARKET WATCH</a>
-<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
+<a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>
+<a href="/chart-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CHART LAB</a>
+<a href="/contract-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTRACT LAB</a>
+<a href="/greeks-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">GREEKS LAB</a>
+<a href="/strategy-builder" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STRATEGY BUILDER</a>
+<a href="/manual-paper" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">MANUAL PAPER</a>
+<a href="/view3d" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">3D VIEW</a>\n<a href="/alerts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ALERTS</a>
 <a href="/sector-performance" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">SECTOR PERFORMANCE</a>
 <a href="/opening-structure" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">OPENING STRUCTURE</a>
 <a href="http://127.0.0.1:8766" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">TECHNICAL ALERTS</a><a href="/stock-charts" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK CHARTS</a>
@@ -364,11 +615,11 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 <div class="card"><div class="label">Closed P&L</div><div id="closed_pnl" class="value">-</div></div>
 <div class="card"><div class="label">Trades</div><div id="trade_count" class="value">-</div></div>
 <div class="card"><div class="label">Open / Closed</div><div id="open_closed" class="value">-</div></div>
-<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>
+<div class="card"><div class="label">Win Rate</div><div id="win_rate" class="value">-</div></div>\n<div class="card"><div class="label">Avg Duration</div><div id="avg_duration" class="value">-</div></div>\n<div class="card"><div class="label">Longest Trade</div><div id="longest_duration" class="value">-</div></div>\n<div class="card"><div class="label">Capital Deployed (open)</div><div id="cap_deployed" class="value">-</div></div>\n<div class="card"><div class="label">Open Return on Capital</div><div id="open_return" class="value">-</div></div>\n<div class="card"><div class="label">Day Return on Capital</div><div id="day_return" class="value">-</div></div>
 </div>
 <div class="filterbar"><button class="tradefilter active" onclick="setFilter('ALL',this)">All Trades</button><button class="tradefilter" onclick="setFilter('OPEN',this)">Open</button><button class="tradefilter" onclick="setFilter('WIN',this)">Winners</button><button class="tradefilter" onclick="setFilter('LOSS',this)">Losers</button><span class="sub" id="shown_count"></span></div>
 <div class="tablewrap"><table><thead><tr>
-<th>Symbol</th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status</th><th class="right">Entry ₹</th><th class="right">Last/Exit ₹</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th>
+<th>Symbol</th><th>Sector <select id="sectorflt" onchange="setSectorFilter(this.value)" style="background:#0e1527;color:#e7eefc;border:1px solid #27334d;border-radius:6px;padding:2px 4px;font-size:12px;max-width:120px"><option value="ALL">All</option></select></th><th>Side</th><th>Strike</th><th>Date</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Status <select id="statusflt" onchange="setStatusFilter(this.value)" style="background:#0e1527;color:#e7eefc;border:1px solid #27334d;border-radius:6px;padding:2px 4px;font-size:12px"><option value="ALL">All</option><option value="OPEN">Open</option><option value="CLOSED">Closed</option></select></th><th class="right">Low ₹ (time)</th><th class="right">Entry ₹</th><th class="right" title="Where the stop started, where it is now and why it moved">Stop-loss (start → now)</th><th class="right">Current / Exit ₹</th><th class="right">High ₹ (time)</th><th class="right">P&L</th><th class="right">Return</th><th class="right">Capital</th><th>Setup</th><th>Exit Reason</th><th class="right">Q</th><th class="right">Clean</th><th>Manage</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 const fmt=n=>"₹"+Number(n||0).toLocaleString("en-IN",{maximumFractionDigits:2});
@@ -377,7 +628,35 @@ const formatDuration=sec=>{sec=Math.max(0,Math.floor(Number(sec)||0));const d=Ma
 const cls=n=>Number(n)>=0?"green":"red";
 const prettyDate=x=>{if(!x)return "-";const p=x.split("-");if(p.length!==3)return x;const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return p[2]+"-"+m[Number(p[1])-1]+"-"+p[0];};
 let currentFilter="ALL",lastData=null;
-function selectedRows(d){const rr=d.rows||[];return currentFilter==="ALL"?rr:rr.filter(x=>x.result===currentFilter);}
+var statusFilter="ALL",sectorFilter="ALL";
+function vpct(v,e){v=Number(v);e=Number(e);if(!(v>0)||!(e>0))return "";var p=(v/e-1)*100;return '<small style="color:'+(p>=0?"#17c964":"#f31260")+'">('+(p>=0?"+":"")+p.toFixed(1)+'%)</small>';}
+function fmtAge(m){m=Number(m);return m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m"}
+function highAge(x){if(x.high_age_min==null||!x.high)return "";var m=Number(x.high_age_min),c=x.status!=="OPEN"?"#8ea0bd":(m>=30?"#f31260":m>=15?"#ffb454":"#8ea0bd");
+ return '<br><small style="color:'+c+'" title="Time since the option made its high">'+fmtAge(m)+' since high</small>'}
+function needLine(x){if(!x||x.status!=="OPEN"||x.need10==null)return "";
+ return '<br><small style="color:#8ea0bd" title="How far the stock must move in our favour for the option to gain 10 / 20 / 30% (time decay ignored)">stock needs +'+x.need10+'% / +'+x.need20+'% / +'+x.need30+'% for option +10 / 20 / 30%</small>'}
+function slCell(x){if(!x||!x.cur_sl)return "-";var moved=Number(x.cur_sl)>Number(x.start_sl)+0.004;
+ var col=Number(x.sl_vs_entry_pct)>=0?"#17c964":(moved?"#ffb454":"#8ea0bd");
+ var gap=(x.status==="OPEN"&&Number(x.last)>0)?" &middot; "+(((Number(x.last)-Number(x.cur_sl))/Number(x.last))*100).toFixed(1)+"% below":"";
+ return '<span style="color:#8ea0bd">'+fmt(x.start_sl)+'</span> &rarr; <b style="color:'+col+'">'+fmt(x.cur_sl)+'</b><br><small style="color:'+col+'">'+(x.sl_label||"")
+  +(Number(x.sl_vs_entry_pct)!==0?" ("+(x.sl_vs_entry_pct>0?"+":"")+x.sl_vs_entry_pct+"%)":"")+gap+'</small>'
+  +((x.status==="OPEN"&&x.sl_next)?'<br><small style="color:#8ea0bd">next: '+x.sl_next+'</small>':"")+needLine(x)}
+function watchPeak(x){if(!x||x.status!=="OPEN"||!(Number(x.entry)>0)||!(Number(x.high)>0))return 0;var p=(Number(x.high)/Number(x.entry)-1)*100;return p>=10?p:0}
+function watchRow(x){return watchPeak(x)?' style="background:#33290a;box-shadow:inset 3px 0 0 #ffb454"':""}
+function watchBadge(x){var p=watchPeak(x);if(!p)return "";var now=(Number(x.last)/Number(x.entry)-1)*100;return ' <span style="background:#ffb454;color:#1a1200;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:800" title="Option reached +'+p.toFixed(0)+'% - watch for reversal">WATCH +'+p.toFixed(0)+'% \u2192 now '+(now>=0?"+":"")+now.toFixed(0)+'%</span>'}
+function gapInfo(x){var h=Number(x.high),l=Number(x.last),e=Number(x.entry),q=Number(x.qty)||0;
+ if(!(h>0)||!(l>0)||!(e>0)||l>=h)return null;
+ var g=h-l;return{g:g,pct:g/h*100,rs:g*q,pts:g/e*100}}
+function gapText(x){var i=gapInfo(x);if(!i)return "";
+ return 'gap <b>&#8377;'+i.g.toFixed(2)+'</b> ('+i.pct.toFixed(1)+'% of high) &middot; <b>&#8377;'+Math.round(i.rs).toLocaleString("en-IN")+'</b> given back &middot; '+i.pts.toFixed(1)+' pts of return'}
+function fromHigh(x){if(x.from_high_pct==null||x.status!=="OPEN")return "";var p=Number(x.from_high_pct);if(p>-0.05)return '<br><small style="color:#17c964">at the high</small>';
+ var tag=x.high_state==="MELTING"?' &middot; <b style="color:#ffb454">stock flat - option melting</b>':(x.high_state==="STOCK_REVERSING"?' &middot; <b style="color:#f31260">stock moved against</b>':'');
+ var st=x.stock_since_high_pct==null?"":' &middot; stock '+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+'% since high';
+ var gt=gapText(x);return '<br><small style="color:'+(p<=-10?"#f31260":"#8ea0bd")+'">'+(gt?gt:p.toFixed(1)+'% from high')+st+tag+'</small>'}
+function setSectorFilter(v){sectorFilter=v;if(lastData){renderSummary(lastData);renderRows(lastData);}}
+function fillSectors(d){const el=document.getElementById("sectorflt");if(!el)return;const m={};(d.rows||[]).forEach(x=>{const k=x.sector||"-";m[k]=(m[k]||0)+1});const ks=Object.keys(m).sort();const sig=ks.map(k=>k+m[k]).join("|");if(el.dataset.sig===sig)return;el.dataset.sig=sig;el.innerHTML=`<option value="ALL">All</option>`+ks.map(k=>`<option value="${k}">${k} (${m[k]})</option>`).join("");if(sectorFilter!=="ALL"&&!m[sectorFilter])sectorFilter="ALL";el.value=sectorFilter}
+function setStatusFilter(v){statusFilter=v;if(lastData){renderSummary(lastData);renderRows(lastData);}}
+function selectedRows(d){let rr=d.rows||[];fillSectors(d);if(sectorFilter!=="ALL")rr=rr.filter(x=>(x.sector||"-")===sectorFilter);if(statusFilter!=="ALL")rr=rr.filter(x=>x.status===statusFilter);return currentFilter==="ALL"?rr:rr.filter(x=>x.result===currentFilter);}
 function setFilter(f,b){currentFilter=f;document.querySelectorAll(".tradefilter").forEach(x=>x.classList.remove("active"));b.classList.add("active");if(lastData){renderSummary(lastData);renderRows(lastData);}}
 function renderSummary(d){
  const rr=selectedRows(d),closed=rr.filter(x=>x.status==="CLOSED"),open=rr.filter(x=>x.status==="OPEN"),wins=closed.filter(x=>x.result==="WIN");
@@ -385,20 +664,145 @@ function renderSummary(d){
  const wr=closed.length?wins.length/closed.length*100:0;
  for(const [id,v] of [["total_pnl",total],["open_pnl",op],["closed_pnl",cp]]){const e=document.getElementById(id);e.textContent=fmt(v);e.className="value "+cls(v);}
  trade_count.textContent=rr.length;open_closed.textContent=open.length+" / "+closed.length;win_rate.textContent=pct(wr);
+ const capOpen=open.reduce((a,x)=>a+Number(x.capital||0),0),capAll=rr.reduce((a,x)=>a+Number(x.capital||0),0);
+ cap_deployed.textContent=fmt(capOpen);
+ {const v=capOpen?op/capOpen*100:0;open_return.textContent=capOpen?pct(v):"-";open_return.className="value "+(capOpen?cls(v):"");}
+ {const v=capAll?total/capAll*100:0;day_return.textContent=capAll?pct(v):"-";day_return.className="value "+(capAll?cls(v):"");}
  const avg=rr.length?rr.reduce((a,x)=>a+Number(x.duration_seconds||0),0)/rr.length:0;
  const longest=rr.reduce((a,x)=>Math.max(a,Number(x.duration_seconds||0)),0);
  avg_duration.textContent=formatDuration(avg);longest_duration.textContent=formatDuration(longest);
 }
 function renderRows(d){
  const rr=selectedRows(d);shown_count.textContent="Showing "+rr.length+" of "+(d.rows||[]).length+" trades";
- rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr><td><b>${x.symbol}</b></td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${fmt(x.entry)}</td><td class="right">${fmt(x.last)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td></tr>`}).join("");
+ rows.innerHTML=rr.map(x=>{const pnlc=Number(x.pnl)>=0?"win":"loss",st=x.status==="OPEN"?"open":"closed";return `<tr${watchRow(x)}><td><b><a href="/trade?id=${x.id}" target="_blank" style="color:inherit;text-decoration:underline dotted" title="Open stock and option charts">${x.symbol}</a></b>${watchBadge(x)}${rankLine(x)}</td><td>${x.sector||"-"}</td><td>${x.side}</td><td>${x.strike}</td><td>${prettyDate(x.trade_date)}</td><td>${x.entry_time}</td><td>${x.exit_time}</td><td>${x.duration}</td><td><span class="pill ${st}">${x.status}</span></td><td class="right">${x.low?fmt(x.low):"-"} ${vpct(x.low,x.entry)} <small style="color:#8ea0bd">${x.low_time||""}</small></td><td class="right">${fmt(x.entry)}</td><td class="right">${slCell(x)}</td><td class="right">${fmt(x.last)} ${vpct(x.last,x.entry)}${fromHigh(x)}</td><td class="right">${x.high?fmt(x.high):"-"} ${vpct(x.high,x.entry)} <small style="color:#8ea0bd">${x.high_time||""}</small>${highAge(x)}</td><td class="right ${pnlc}"><b>${fmt(x.pnl)}</b></td><td class="right ${pnlc}">${pct(x.return_pct)}</td><td class="right">${fmt(x.capital)}</td><td>${x.setup}</td><td>${x.exit_reason}</td><td class="right">${Number(x.quality||0).toFixed(1)}</td><td class="right">${Number(x.clean||0).toFixed(1)}</td><td>${x.status==="OPEN"?'<button class="mgbtn" onclick="mgOpen(this.dataset.id)" data-id="'+x.id+'">Manage</button>'+(x.manual_exit_pending?' <small style="color:#ffb454">exit pending</small>':'')+(x.manual_stop?' <small style="color:#ffb454">SL '+Number(x.manual_stop).toFixed(2)+'</small>':''):''}</td></tr>`+scanRow(x)}).join("");
 }
 async function load(){const r=await fetch('/api/snapshot?ts='+Date.now());const d=await r.json();lastData=d;updated.textContent=d.updated_at;trading_date.textContent=d.trading_date;trading_day.textContent=d.trading_day;renderSummary(d);renderRows(d);}
 load();setInterval(load,5000);
+</script>
+<style>
+.mgbtn{background:#1c4e80;color:#fff;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer}
+#mgback{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:10000}
+#mgbox{background:#121a2d;border:1px solid #27334d;border-radius:14px;padding:18px;width:min(440px,94vw);color:#e7eefc;font-family:Segoe UI,Arial,sans-serif}
+#mgbox h3{margin:0 0 4px;font-size:18px}#mgbox .mgrow{display:flex;gap:8px;align-items:center;margin-top:9px;flex-wrap:wrap}
+#mgbox .mgkv{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:#8ea0bd}#mgbox .mgkv b{color:#e7eefc}
+#mgbox input,#mgbox select{background:#0e1527;border:1px solid #27334d;color:#e7eefc;border-radius:9px;padding:9px 10px;font-size:15px}
+#mgbox input{width:110px}#mgbox button{border:0;border-radius:9px;padding:9px 12px;font-weight:800;cursor:pointer;color:#fff;background:#4c8dff}
+#mgbox button.grey{background:#2a3350;color:#cdd7ee}#mgbox button.red{background:#c23b3b}#mgbox .mgmsg{font-size:12.5px;margin-top:9px;color:#8ea0bd}
+#mgprev{font-size:13px;margin-top:9px;color:#8ea0bd}
+</style>
+<div id="mgback"><div id="mgbox">
+ <h3 id="mgtitle">Manage trade</h3><div class="mgkv" id="mginfo"></div>
+ <div id="mgwarn" style="margin-top:9px;font-size:13px"></div>
+ <div class="mgrow"><input id="mgpct" type="number" step="0.5" min="0" placeholder="Stop %"><select id="mgdir"><option value="below">% below entry</option><option value="above">% above entry (lock profit)</option></select></div>
+ <div class="mgrow"><button class="grey mgchip" data-d="below" data-p="5">5% below</button><button class="grey mgchip" data-d="below" data-p="10">10% below</button><button class="grey mgchip" data-d="below" data-p="15">15% below</button><button class="grey mgchip" data-d="above" data-p="0">At entry</button><button class="grey mgchip" data-d="above" data-p="3">+3%</button></div>
+ <div id="mgprev">Type a % to see the stop price for this trade.</div>
+ <div class="mgrow"><button id="mgset">Set stop</button><button class="grey" id="mgclr">Clear my stop</button><button class="red" id="mgexit">Exit now at market</button><button class="grey" id="mgclose">Close</button></div>
+ <div class="mgmsg" id="mgmsg">A manual stop can only tighten risk (above the current stop, below the last price). Paper trade.</div>
+</div></div>
+<script>
+function rankText(x){var r=x.rank;if(!r||r.entry==null)return "";var side=r.side==="GAINERS"?"gainer":"loser";
+ var t="Top "+side+" #"+r.entry+" at entry";if(r.now!=null&&x.status==="OPEN")t+=" &rarr; #"+r.now+" now";if(r.best!=null&&r.best!==r.entry)t+=" (best #"+r.best+")";if(r.close!=null)t+=" &rarr; #"+r.close+" at close";
+ return t}
+function rankLine(x){var t=rankText(x);if(!t)return "";var r=x.rank,col=(r.now!=null&&r.entry!=null&&r.now<r.entry)?"#17c964":((r.now!=null&&r.entry!=null&&r.now>r.entry)?"#ffb454":"#8ea0bd");
+ var path=(r.path||[]).map(function(p){return "#"+p[1]}).join(" &rarr; ");return '<br><small style="color:'+col+'" title="'+(path?"Rank path: "+path:"")+'">'+t+'</small>'}
+var mw={};
+function loadMW(){fetch('/api/fno-market-watch?ts='+Date.now()).then(function(r){return r.json()}).then(function(d){mw={};(d.rows||[]).forEach(function(r){mw[r.symbol]=r});if(lastData)renderRows(lastData)}).catch(function(){})}
+function chip(t,c){return '<span style="display:inline-block;margin:2px 5px 2px 0;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;background:'+(c==="g"?"#12351f":c==="r"?"#3a1620":c==="y"?"#3a2f12":"#232b3f")+';color:'+(c==="g"?"#b9f5cf":c==="r"?"#ffb9c8":c==="y"?"#ffe2a8":"#c8d3e8")+'">'+t+'</span>'}
+function sgn(v){v=Number(v);return (v>=0?"+":"")+v.toFixed(2)+"%"}
+function scanRow(x){
+ if(x.status!=="OPEN"||!x.scan)return "";
+ var s=x.scan,m=mw[x.symbol],bull=String(x.side).indexOf("BULLISH")===0,dirn=bull?1:-1,h="";
+ if(m){var fo=dirn*Number(m.from_open_pct||0);
+  h+=chip("Stock now "+Number(m.ltp||0).toFixed(2)+" &middot; "+sgn(m.from_open_pct)+" from open",fo>=0?"g":"r");
+  h+=chip("Day range position "+Number(m.range_position_pct||0).toFixed(0)+"%","n");
+  (m.scans||[]).forEach(function(c){h+=chip(c.text+(c.time?" @ "+c.time:""),c.tone==="bull"?"g":"r")});
+  if(m.catalyst)h+=chip("News: "+String(m.catalyst.type||"event").split("_").join(" ")+(m.catalyst.event_risk?" &#9888;":""),m.catalyst.direction==="BULLISH"?"g":(m.catalyst.direction==="BEARISH"?"r":"n"))}
+ var e="";
+ if(s.confirm5)e+=chip("5-min check: "+s.confirm5+(s.confirm5_pct!=null?" ("+sgn(s.confirm5_pct)+")":""),s.confirm5==="HELD"?"g":"r");
+ if(s.setup_family)e+=chip(String(s.setup_family).split("_").join(" ")+(s.selection_tier?" / "+String(s.selection_tier).split("_").join(" "):""),"n");
+ if(s.pivot_state)e+=chip("Pivot "+String(s.pivot_state).split("_").join(" "),"n");
+ if(s.day_entry_rank!=null)e+=chip("Entry #"+s.day_entry_rank+" of the day","n");
+ if(s.tr_all_aligned!=null)e+=chip("5m/15m/daily "+(String(s.tr_all_aligned).toLowerCase()==="true"?"aligned":"not all aligned"),String(s.tr_all_aligned).toLowerCase()==="true"?"g":"y");
+ if(s.tr_scans_names)e+=chip("Scans for: "+s.tr_scans_names,"g");
+ if(s.tr_scans_against_names)e+=chip("Scans against: "+s.tr_scans_against_names,"r");
+ if(s.ms_trend)e+=chip("Structure "+s.ms_trend+(s.ms_bos?" / BOS "+s.ms_bos:"")+(s.ms_choch?" / CHoCH "+s.ms_choch:""),"n");
+ if(s.chop_state)e+=chip("Tape "+String(s.chop_state).toLowerCase(),s.chop_state==="TRENDING"?"g":"y");
+ if(s.ctx_done_move_pct!=null)e+=chip("Already "+sgn(s.ctx_done_move_pct)+" at entry, range pos "+Math.round(Number(s.ctx_range_pos||0)*100)+"%"+(String(s.ctx_fading).toLowerCase()==="true"?" &middot; fading":""),String(s.ctx_fading).toLowerCase()==="true"?"y":"n");
+ if(s.ctx_vs_vwap_pct!=null)e+=chip("VWAP "+sgn(s.ctx_vs_vwap_pct)+(s.ctx_last15_pct!=null?" &middot; 15m "+sgn(s.ctx_last15_pct):""),"n");
+ if(s.sp_frac!=null)e+=chip("Sector "+Math.round(Number(s.sp_frac)*100)+"% moving our way","n");
+ if(s.rule_nifty_pct_open!=null)e+=chip("Nifty "+sgn(s.rule_nifty_pct_open)+" at entry","n");
+ if(s.underlying_entry!=null)e+=chip("Stock entry "+Number(s.underlying_entry).toFixed(2)+(s.underlying_stop!=null?" &middot; stop "+Number(s.underlying_stop).toFixed(2):"")+(s.underlying_target1!=null?" &middot; T1 "+Number(s.underlying_target1).toFixed(2):""),"n");
+ if(s.oc_k_move_for_10!=null)e+=chip("Stock must move "+Number(s.oc_k_move_for_10).toFixed(2)+"% for +10% option","n");
+ var rk=rankText(x);if(rk)e=chip(rk,"n")+e;
+ var hint=holdHint(x),why=s.entry_reason?'<div style="margin-top:4px;color:#8ea0bd;font-size:12px;white-space:normal"><b style="color:#e7eefc">Why we entered:</b> '+String(s.entry_reason).split("<").join("&lt;")+'</div>':"";
+ return '<tr class="scanrow"><td colspan="22" style="background:#0e1527;white-space:normal;padding:6px 14px 10px 28px;border-bottom:1px solid #27334d"><div style="font-size:11px;color:#8ea0bd;margin-bottom:2px">INTRADAY SCAN &mdash; '+x.symbol+(m?"":" (live scan data not loaded yet)")+'</div>'+h+(h&&e?"<br>":"")+e+why+(hint?'<div style="margin-top:4px;font-size:12px;color:'+holdColor(x)+'"><b>Hold / exit:</b> '+hint+'</div>':"")+'</td></tr>'}
+var mgRow=null;
+function holdHint(x){
+ if(!x||x.high_age_min==null||x.from_high_pct==null)return "";
+ var m=Number(x.high_age_min),f=Number(x.from_high_pct),age=m>=60?Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m":m+"m";
+ if(f>-0.05)return "At the option's high right now.";
+ var st=x.stock_since_high_pct==null?"":" Stock "+(x.stock_since_high_pct>=0?"+":"")+Number(x.stock_since_high_pct).toFixed(2)+"% since the high.";
+ var tail=x.high_state==="MELTING"?" The stock has not moved against you, so the premium is melting - consider tightening the stop or exiting.":(x.high_state==="STOCK_REVERSING"?" The stock has turned against you.":"");
+ return "Peak was "+age+" ago, option is "+Math.abs(f).toFixed(1)+"% below it."+st+tail}
+function holdColor(x){return x&&x.high_state==="STOCK_REVERSING"?"#ff6363":(x&&x.high_state==="MELTING"?"#ffb454":"#8ea0bd")}
+function mgPrice(){var p=parseFloat(document.getElementById("mgpct").value),d=document.getElementById("mgdir").value;
+ if(!mgRow||!(p>=0)||!(Number(mgRow.entry)>0))return null;return Math.round(Number(mgRow.entry)*(1+(d==="above"?1:-1)*p/100)/0.05)*0.05}
+function mgPreview(){var v=mgPrice(),el=document.getElementById("mgprev");
+ if(v==null){el.textContent="Type a % to see the stop price for this trade.";el.style.color="";return}
+ var e=Number(mgRow.entry),cur=Math.max(Number(mgRow.sl)||0,Number(mgRow.ladder_stop)||0),last=Number(mgRow.last)||0;
+ var risk=(v/e-1)*100,t="Stop = "+v.toFixed(2)+" ("+(risk>=0?"+":"")+risk.toFixed(1)+"% from entry "+e.toFixed(2)+")",bad="";
+ if(v<=cur)bad="Not allowed: must be above the current stop "+cur.toFixed(2)+" (a manual stop can only tighten).";
+ else if(last>0&&v>=last)bad="Too high: last price is "+last.toFixed(2)+". Use Exit now to leave at the market.";
+ el.textContent=bad?t+" - "+bad:t+" - "+((1-v/last)*100).toFixed(1)+"% below the last price.";el.style.color=bad?"#ff6363":"#2ecc71"}
+function mgOpen(id){var rows=(lastData&&lastData.rows)||[];mgRow=rows.find(function(r){return String(r.id)===String(id)});if(!mgRow)return;
+ var cur=Math.max(Number(mgRow.sl)||0,Number(mgRow.ladder_stop)||0);
+ document.getElementById("mgtitle").textContent="Manage "+mgRow.symbol+" "+(mgRow.strike||"")+" "+String(mgRow.side||"").split(" ").pop();
+ document.getElementById("mginfo").innerHTML="<span>Entry <b>"+Number(mgRow.entry).toFixed(2)+"</b></span><span>Last <b>"+Number(mgRow.last).toFixed(2)+"</b></span><span>Current stop <b>"+(cur?cur.toFixed(2):"-")+"</b></span>"+(mgRow.manual_stop?"<span>Your stop <b>"+Number(mgRow.manual_stop).toFixed(2)+"</b></span>":"");
+ var w=document.getElementById("mgwarn");w.textContent=holdHint(mgRow);w.style.color=holdColor(mgRow);
+ document.getElementById("mgpct").value="";document.getElementById("mgdir").value="below";
+ var ready=!(lastData&&lastData.manual_ready===false);
+ var m=document.getElementById("mgmsg");m.textContent=ready?"A manual stop can only tighten risk (above the current stop, below the last price). Paper trade; applies at the next position update (about a minute).":"Manual controls are NOT active yet: the running scanner has not loaded them (needs a restart). Commands are refused until then.";m.style.color=ready?"#8ea0bd":"#ffb454";
+ mgPreview();document.getElementById("mgback").style.display="flex"}
+function mgSend(url,body){var m=document.getElementById("mgmsg");m.textContent="Sending...";m.style.color="#8ea0bd";
+ fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){m.textContent=d.message||"Done";m.style.color=d.ok?"#2ecc71":"#ff6363";if(d.ok)setTimeout(load,1500)}).catch(function(){m.textContent="Could not reach the dashboard.";m.style.color="#ff6363"})}
+document.getElementById("mgpct").addEventListener("input",mgPreview);document.getElementById("mgdir").addEventListener("change",mgPreview);
+document.querySelectorAll(".mgchip").forEach(function(b){b.addEventListener("click",function(){document.getElementById("mgpct").value=b.getAttribute("data-p");document.getElementById("mgdir").value=b.getAttribute("data-d");mgPreview()})});
+document.getElementById("mgset").addEventListener("click",function(){var v=mgPrice();if(v==null||!(v>0)){var m=document.getElementById("mgmsg");m.textContent="Enter the stop % first.";m.style.color="#ff6363";return}
+ if(confirm("Set stop-loss at "+v.toFixed(2)+" for "+mgRow.symbol+" (paper trade)?"))mgSend("/api/manual-stop",{id:mgRow.id,stop:Math.round(v*100)/100})});
+document.getElementById("mgclr").addEventListener("click",function(){mgSend("/api/manual-stop",{id:mgRow.id,stop:0})});
+document.getElementById("mgexit").addEventListener("click",function(){if(confirm("Exit "+mgRow.symbol+" now at the market price (paper trade)?"))mgSend("/api/manual-exit",{id:mgRow.id})});
+document.getElementById("mgclose").addEventListener("click",function(){document.getElementById("mgback").style.display="none"});
+document.getElementById("mgback").addEventListener("click",function(e){if(e.target.id==="mgback")e.target.style.display="none"});
+loadMW();setInterval(loadMW,15000);
 </script><div class="crisp-footer"><div class="cf-quote">❝ &nbsp;<b>Discipline Creates Profits,</b><br>&nbsp;&nbsp;&nbsp;&nbsp;Automation Protects Them.</div><div class="cf-brand"><svg class="cf-logo" viewBox="0 0 64 64"><defs><linearGradient id="cfg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#22c55e"/></linearGradient></defs><path d="M7 55 27 9l17 46h-10l-7-20-8 20z" fill="url(#cfg)"/><path d="m18 47 12-10 8 5 17-21" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M47 21h9v9" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round"/></svg><div><div class="cf-title">APlus <span class="live">Live</span> Trading Terminal</div><div class="cf-dev">— &nbsp; Developed by Darpan Bobhate &nbsp; —</div></div></div><div><div class="cf-flow">RESEARCH <span class="dot">•</span> ANALYZE <span class="dot">•</span> EXECUTE <span class="dot">•</span> IMPROVE</div><div class="cf-safe">🛡️ &nbsp; Paper Trading &nbsp; | &nbsp; NSE F&amp;O &nbsp; | &nbsp; No Live Orders</div></div><div class="cf-copy">© 2026 &nbsp; <span class="cf-flag">🇮🇳</span><br>All Rights Reserved</div></div></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        """Every page except the main one is passed through page_skin so the whole dashboard shares one compact look; JSON, files and the main page go straight through."""
+        if dashboard_login.guard(self, "GET"):      # password gate + welcome screen (nothing changes until a password is set)
+            return
+        _p = urlparse(self.path).path
+        if _p == "/" or _p.startswith(("/api/", "/static/")) or _p.endswith((".json", ".csv", ".png", ".js", ".svg", ".ico", ".webmanifest")):
+            return self._do_GET()
+        import io
+        import page_skin
+        real, buf = self.wfile, io.BytesIO()
+        self.wfile = buf
+        try:
+            self._do_GET()
+        finally:
+            self.wfile = real
+        data = buf.getvalue()
+        try:
+            data = page_skin.filter_response(data, (self.headers.get("Host") or "127.0.0.1").split(":")[0])
+        except Exception:  # noqa: BLE001 - a styling problem must never break a page
+            pass
+        real.write(data)
+
+    def _do_GET(self):
+        if not dashboard_access.is_allowed(self.client_address[0]):
+            body = b"Forbidden: the APlus dashboard is limited to the local network."
+            self.send_response(403); self.send_header("Content-Type","text/plain; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         path = urlparse(self.path).path
         if path == "/paper-history":
             body = history_html().encode("utf-8")
@@ -411,8 +815,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(history_payload(day)).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/fno-market-watch":
-            body = json.dumps(_load_fno_market_watch()).encode("utf-8")
+            body = json.dumps(_enrich_market_watch(_load_fno_market_watch())).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/opening-leaders":
+            import opening_leaders_shadow
+            report = _load_fno_market_watch()
+            body = json.dumps(opening_leaders_shadow.build_payload(report)).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/opening-leaders":
+            import opening_leaders_shadow_page
+            body = _mobileize_html(opening_leaders_shadow_page.HTML).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/fno-market-watch":
             body = _mobileize_html(FNO_MARKET_WATCH_HTML).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -428,12 +841,528 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stock-alerts":
             body = json.dumps(stock_alerts_payload()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/rs-leaders", "/api/rs-leaders"):
+            import rs_leaders, rs_leaders_page
+            if path == "/rs-leaders":
+                body = rs_leaders_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = rs_leaders.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/stock-study", "/api/stock-study"):
+            import stock_study, stock_study_page
+            if path == "/stock-study":
+                body = stock_study_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = stock_study.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/rupees", "/api/rupees"):
+            import rupee_report, rupee_report_page
+            if path == "/rupees":
+                body = rupee_report_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = rupee_report.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/stock-study", "/api/stock-study"):
+            import stock_study, stock_study_page
+            if path == "/stock-study":
+                body = stock_study_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = stock_study.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/candle-story", "/api/candle-story"):
+            import candle_story, candle_story_page
+            if path == "/candle-story":
+                body = candle_story_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = candle_story.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/stock-study", "/api/stock-study"):
+            import stock_study, stock_study_page
+            if path == "/stock-study":
+                body = stock_study_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = stock_study.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/rupees", "/api/rupees"):
+            import rupee_report, rupee_report_page
+            if path == "/rupees":
+                body = rupee_report_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = rupee_report.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/stock-study", "/api/stock-study"):
+            import stock_study, stock_study_page
+            if path == "/stock-study":
+                body = stock_study_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = stock_study.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/breakouts", "/api/breakouts"):
+            import breakout_board, breakout_board_page
+            if path == "/breakouts":
+                body = breakout_board_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = breakout_board.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-opportunities", "/api/chart-opportunities"):
+            import chart_opportunity, chart_opportunity_page
+            if path == "/chart-opportunities":
+                body = chart_opportunity_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = chart_opportunity.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/big-players", "/api/big-players"):
+            import big_players, big_players_page
+            if path == "/big-players":
+                body = big_players_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = big_players.payload()
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/smart-flow", "/api/smart-flow"):
+            import smart_flow, smart_flow_page
+            if path == "/smart-flow":
+                body = smart_flow_page.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    try:
+                        import index_strip as _ix
+                        rows = (_ix.payload() or {}).get("rows") or []
+                    except Exception:  # noqa: BLE001 - the cards still show the flow bars without a quote
+                        rows = []
+                    out = smart_flow.payload(indices=rows)
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/view3d", "/api/view3d"):
+            import view3d
+            if path == "/view3d":
+                body = view3d.HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = view3d.build(_enrich_market_watch(_load_fno_market_watch()), money_flow.payload(window=0), snapshot())
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/chart-lab", "/api/chart-lab", "/api/chart-lab-delta", "/api/chart-lab-symbols"):
+            import chart_lab
+            q = parse_query(self.path)
+            if path == "/chart-lab":
+                body = chart_lab.CHART_LAB_HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                if path == "/api/chart-lab":
+                    out = chart_lab.candles(q.get("symbol") or "", q.get("tf") or "5m")
+                elif path == "/api/chart-lab-delta":
+                    out = chart_lab.delta_payload(q.get("symbol") or "")
+                else:
+                    out = {"ok": True, "symbols": chart_lab.symbols()}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/manual-paper", "/api/manual-paper", "/api/manual-paper-contracts", "/api/manual-paper-quote", "/api/manual-paper-chain"):
+            import manual_paper
+            try:
+                ctype, body = manual_paper.handle_get(path, parse_query(self.path))
+            except Exception as exc:  # noqa: BLE001 - the page shows the message
+                ctype, body = "application/json", json.dumps({"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
+        if path in ("/contract-lab", "/api/contract-lab", "/api/contract-lab-symbols"):
+            import contract_lab
+            q = parse_query(self.path)
+            if path == "/contract-lab":
+                body = contract_lab.CONTRACT_LAB_HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = contract_lab.analyse(q.get("symbol") or "", q.get("side") or "CE", q.get("expiry") or "") if path == "/api/contract-lab" else {"ok": True, "symbols": contract_lab.symbols()}
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/strategy-builder", "/api/strategy-chain", "/api/strategy-eval"):
+            import strategy_builder
+            q = parse_query(self.path)
+            if path == "/strategy-builder":
+                body = strategy_builder.STRATEGY_HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = strategy_builder.chain(q.get("symbol") or "", q.get("expiry") or "") if path == "/api/strategy-chain" else strategy_builder.evaluate(q.get("symbol") or "", q.get("expiry") or "", q.get("legs") or "", q.get("fill") or "worst", q.get("move") or 0, q.get("days") or 0, q.get("iv") or 0)
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/greeks-lab", "/api/greeks-lab", "/api/greeks-whatif"):
+            import greeks_lab
+            q = parse_query(self.path)
+            if path == "/greeks-lab":
+                body = greeks_lab.GREEKS_LAB_HTML.encode("utf-8"); ctype = "text/html; charset=utf-8"
+            else:
+                try:
+                    out = greeks_lab.table(q.get("symbol") or "", q.get("side") or "CE", q.get("expiry") or "") if path == "/api/greeks-lab" else greeks_lab.whatif(q.get("symbol") or "", q.get("side") or "CE", q.get("expiry") or "", q.get("strike") or "", q.get("move") or 0, q.get("days") or 0, q.get("iv") or 0)
+                except Exception as exc:  # noqa: BLE001 - the page shows the message
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body = json.dumps(out).encode("utf-8"); ctype = "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/stock-analysis":
             body=STOCK_ANALYSIS_HTML.encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/stock-analysis":
             q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
-            body=json.dumps(analysis_payload(day,symbol)).encode("utf-8")
+            _analysis = analysis_payload(day,symbol)
+            _analysis["profile"] = company_profiles.get(symbol)
+            body=json.dumps(_analysis).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/xray":
+            import market_xray
+            body = market_xray.XRAY_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/market-xray":
+            try:
+                import market_xray
+                _mx = market_xray.payload(ROOT)
+            except Exception as exc:
+                _mx = {"ok": False, "error": type(exc).__name__}
+            body = json.dumps(_mx, ensure_ascii=False).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/focus":
+            import premarket_focus
+            body = premarket_focus.FOCUS_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/premarket-focus":
+            try:
+                import premarket_focus
+                _pf = premarket_focus.payload(ROOT)
+            except Exception as exc:
+                _pf = {"ok": False, "error": type(exc).__name__, "focus": []}
+            body = json.dumps(_pf, ensure_ascii=False).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/premium":
+            import premium_tracker
+            body = premium_tracker.PREMIUM_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/premium-tracker":
+            try:
+                import premium_tracker
+                _pt = premium_tracker.payload(ROOT)
+            except Exception as exc:
+                _pt = {"ok": False, "error": type(exc).__name__}
+            body = json.dumps(_pt, ensure_ascii=False).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/pipeline":
+            import pipeline_view
+            body = pipeline_view.PIPELINE_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/api/pipeline", "/api/day-verdict"):
+            try:
+                import pipeline_view
+                _pv = pipeline_view.payload(ROOT) if path == "/api/pipeline" else pipeline_view.verdict_payload(ROOT)
+            except Exception as exc:
+                _pv = {"ok": False, "error": type(exc).__name__}
+            body = json.dumps(_pv, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/catalyst":
+            q=parse_query(self.path); symbol=q.get("symbol") or ""
+            try:
+                import catalyst
+                _ct = {"ok": True, **catalyst.for_symbol(symbol, ROOT)}
+            except Exception as exc:
+                _ct = {"ok": False, "error": type(exc).__name__}
+            body=json.dumps(_ct, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-trend":
+            q=parse_query(self.path); symbol=q.get("symbol") or ""
+            try:
+                import stock_trend
+                _tr = stock_trend.for_symbol(symbol, ROOT, datetime.now().date().isoformat())
+            except Exception as exc:
+                _tr = {"ok": False, "error": type(exc).__name__}
+            body=json.dumps(_tr).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/stock-option-chain":
             q=parse_query(self.path); symbol=q.get("symbol") or ""; expiry=q.get("expiry") or ""
@@ -454,11 +1383,222 @@ class Handler(BaseHTTPRequestHandler):
             q=parse_query(self.path); day=q.get("day") or datetime.now().date().isoformat(); symbol=q.get("symbol") or ""
             body=json.dumps(chart_payload(day,symbol)).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/control-room" and control_room_payload is not None:
+            body = CONTROL_ROOM_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/control-room" and control_room_payload is not None:
+            try:
+                body = json.dumps(control_room_payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                body = json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/static/three.min.js":
+            try:
+                body = (ROOT / "static" / "three.min.js").read_bytes()
+            except OSError:
+                body = b"/* three.js missing */"
+            self.send_response(200); self.send_header("Content-Type", "application/javascript; charset=utf-8"); self.send_header("Cache-Control", "public, max-age=86400"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/static/lightweight-charts.js":
+            try:
+                body = (ROOT / "static" / "lightweight-charts.js").read_bytes()
+            except OSError:
+                body = b"/* chart library missing */"
+            self.send_response(200); self.send_header("Content-Type","application/javascript; charset=utf-8"); self.send_header("Cache-Control","public, max-age=86400"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/stock-chart":
+            body = stock_chart.STOCK_CHART_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/stock-day-chart":
+            body = json.dumps(stock_chart.payload(str(parse_query(self.path).get("symbol") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/why-moving":
+            body = json.dumps(why_moving.payload(str(parse_query(self.path).get("symbol") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/sector-rrg":
+            body = json.dumps(_rrg_payload(), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/entries-pause":
+            try:
+                body = json.dumps({"ok": True, "state": _entries_state()}, ensure_ascii=False, default=str).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                body = json.dumps({"ok": False, "message": str(exc)}).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/indices":
+            body = json.dumps(index_strip.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/market-mood":
+            body = json.dumps(market_mood.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/trade":
+            body = trade_chart.TRADE_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/trade-chart":
+            body = json.dumps(trade_chart.payload(str(parse_query(self.path).get("id") or "")), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/voice":
+            q = parse_query(self.path)
+            try:
+                payload = voice_commands.answer(str(q.get("q") or ""), ROOT)
+            except Exception:  # noqa: BLE001 - a bad question must never break the dashboard
+                payload = {"ok": False, "reply": "Sorry, I could not answer that.", "speech": "Sorry, I could not answer that.", "rows": [], "intent": "error"}
+            body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/manifest.webmanifest":
+            body = mobile_app.manifest_json()
+            self.send_response(200); self.send_header("Content-Type","application/manifest+json"); self.send_header("Cache-Control","no-cache"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/sw.js":
+            body = mobile_app.SERVICE_WORKER.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/javascript"); self.send_header("Cache-Control","no-cache"); self.send_header("Service-Worker-Allowed","/"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/static/icon-192.png", "/static/icon-512.png"):
+            try:
+                body = (ROOT / "static" / path.rsplit("/", 1)[1]).read_bytes()
+            except OSError:
+                body = b""
+            self.send_response(200 if body else 404); self.send_header("Content-Type","image/png"); self.send_header("Cache-Control","public, max-age=86400"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/journal":
+            body = trade_journal.JOURNAL_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/journal":
+            q = parse_query(self.path)
+            body = json.dumps(trade_journal.payload(str(q.get("from") or ""), str(q.get("to") or ""), ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/journal.csv":
+            q = parse_query(self.path)
+            body = trade_journal.export_csv(str(q.get("from") or ""), str(q.get("to") or ""), ROOT).encode("utf-8-sig")
+            self.send_response(200); self.send_header("Content-Type","text/csv; charset=utf-8"); self.send_header("Content-Disposition","attachment; filename=aplus_trade_journal.csv"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/sector-analysis":
+            body = sector_analysis.SECTOR_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/sector-analysis":
+            body = json.dumps(sector_analysis.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/money-flow":
+            body = money_flow.MONEY_FLOW_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/money-flow":
+            q = parse_query(self.path)
+            try:
+                window = int(q.get("window") or 0)
+            except ValueError:
+                window = 0
+            body = json.dumps(money_flow.payload(window, ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/live-scanner":
+            body = live_scanner.LIVE_SCANNER_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/live-scanner":
+            q = parse_query(self.path)
+            try:
+                limit = int(q.get("limit") or 200)
+            except ValueError:
+                limit = 200
+            body = json.dumps(live_scanner.payload(str(q.get("group") or "ALL").upper(), limit, ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/decision-desk":
+            body = decision_desk.DECISION_DESK_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/decision-desk":
+            body = json.dumps(decision_desk.payload(ROOT), ensure_ascii=False, default=str).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/positions":
+            body = POSITIONS_HTML.replace("</body>", market_mood.MOOD_WIDGET_HTML + mobile_app.PWA_SNIPPET + voice_commands.VOICE_WIDGET_HTML + "</body>", 1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/api/mode":
+            body = json.dumps(trading_mode.get_state()).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
         if path == "/api/snapshot":
             body = json.dumps(snapshot()).encode("utf-8")
             self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body); return
-        body = _mobileize_html(HTML, self.headers.get("Host","127.0.0.1").split(":")[0]).encode("utf-8")
+        import dashboard_skin
+        _page = dashboard_skin.inject(index_strip.inject(_mobileize_html(HTML, self.headers.get("Host","127.0.0.1").split(":")[0])))
+        try:
+            import robotics_theme
+            _page = robotics_theme.inject(_page)      # AI / robotics look on top (look only)
+        except Exception:  # noqa: BLE001 - a styling problem must never break the page
+            pass
+        body = _page.encode("utf-8")
         self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        def reply(code, payload):
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(code); self.send_header("Content-Type","application/json"); self.send_header("Cache-Control","no-store"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
+        if not dashboard_access.is_allowed(self.client_address[0]):
+            return reply(403, {"ok": False, "message": "Not allowed from this address."})
+        if dashboard_login.guard(self, "POST"):
+            return
+        if self.path.split("?", 1)[0] == "/api/journal-note":
+            try:
+                length = min(int(self.headers.get("Content-Length") or 0), 20000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                entry = trade_journal.save_note(str(req.get("id", "")), str(req.get("note", "")), list(req.get("tags") or []), int(req.get("rating") or 0), ROOT)
+                return reply(200, {"ok": True, "entry": entry})
+            except Exception:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": "Could not save the note."})
+        route = self.path.split("?", 1)[0]
+        if route in ("/api/manual-paper-open", "/api/manual-paper-close", "/api/manual-paper-stop", "/api/manual-paper-ladder", "/api/manual-paper-cancel"):
+            try:
+                import manual_paper
+                length = min(int(self.headers.get("Content-Length") or 0), 4000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                return reply(200, manual_paper.handle_post(route, req))
+            except Exception as exc:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": f"{type(exc).__name__}: {str(exc)[:160]}"})
+        if route == "/api/entries-pause":
+            try:
+                import entry_pause
+                length = min(int(self.headers.get("Content-Length") or 0), 2000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                src = "dashboard:" + str(self.client_address[0])
+                paused = req.get("paused")
+                target = req.get("target_pct")
+                if target in ("", None, 0, "0"):
+                    clear = "target_pct" in req
+                    target = None
+                else:
+                    clear, target = False, float(target)
+                entry_pause.set_state(ROOT, paused=(None if paused is None else bool(paused)), target_pct=target, clear_target=clear, by=src)
+                return reply(200, {"ok": True, "state": _entries_state()})
+            except Exception as exc:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": str(exc) or "Could not change the entry switch."})
+        if route in ("/api/manual-stop", "/api/manual-exit"):
+            try:
+                import manual_orders
+                if not manual_orders.enabled():
+                    return reply(403, {"ok": False, "message": "Manual controls are switched off (APLUS_MANUAL_CONTROLS=OFF)."})
+                if not manual_orders.scanner_ready(ROOT):
+                    return reply(503, {"ok": False, "message": "The running scanner has not loaded manual controls yet (it needs a restart), so nothing was queued. Use the stop-loss/exit it already has, or restart the scanner."})
+                length = min(int(self.headers.get("Content-Length") or 0), 2000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                tid = str(req.get("id", "")).strip()
+                trade = next((t for t in _load_trades() if str(t.get("paper_trade_id") or t.get("trade_id") or "") == tid), None)
+                if trade is None or _status(trade) != "OPEN":
+                    return reply(400, {"ok": False, "message": "That trade is not open."})
+                src = "dashboard:" + str(self.client_address[0])
+                if route == "/api/manual-exit":
+                    manual_orders.add(ROOT, tid, "EXIT", None, src)
+                    return reply(200, {"ok": True, "message": "Exit queued. It closes at the next valid option price, usually within a minute."})
+                raw = req.get("stop")
+                if raw in (None, "", 0, "0"):
+                    manual_orders.add(ROOT, tid, "CLEAR", None, src)
+                    return reply(200, {"ok": True, "message": "Manual stop cleared."})
+                stop = float(raw)
+                ok, msg = manual_orders.validate_stop(trade, stop)
+                if not ok:
+                    return reply(400, {"ok": False, "message": msg})
+                manual_orders.add(ROOT, tid, "STOP", stop, src)
+                return reply(200, {"ok": True, "message": f"Manual stop {stop:.2f} queued. It applies at the next position update (about a minute)."})
+            except Exception:  # noqa: BLE001
+                return reply(400, {"ok": False, "message": "Could not queue that command."})
+        if self.path.split("?", 1)[0] != "/api/mode":
+            return reply(404, {"ok": False, "message": "Not found."})
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), 2000)
+            req = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:  # noqa: BLE001
+            return reply(400, {"ok": False, "message": "Bad request."})
+        remote = mobile_app.effective_remote(self.headers, self.client_address[0])      # proxied (tailscale serve) requests are not "this PC"
+        ok, state, message = trading_mode.set_mode(str(req.get("mode", "")), confirm=str(req.get("confirm", "")), remote_addr=remote)
+        return reply(200, {"ok": ok, "message": message, "state": state})
+
     def log_message(self, fmt, *args):
         return
 

@@ -1,0 +1,226 @@
+"""Daily indicators for the dashboard's technical-alerts tab (read-only, never trades).
+
+    python daily_indicators.py        # fetch ~1 year of daily candles for the F&O stocks, write data/reports/daily_indicators.json
+
+Per stock (using completed days only): prior N-day highs/lows (5, 10, 30, 90 days, 52 weeks), 20 EMA, 50/100/200 DMA,
+the last close and the 10,3 supertrend state. `enrich_rows` adds the fields the alert rules look for to each live
+market-watch row, comparing the live price with those levels:
+  range_Nd_breakout / range_Nd_breakdown  - live price beyond the prior N-day high / low
+  dmaN_breakout, ema20_breakout           - price crossed that average today (prev close on one side, live price on the other)
+  supertrend_direction                    - "up"/"down" only when the live price flips the daily supertrend today
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "data" / "reports" / "daily_indicators.json"
+RANGES = {"5d": 5, "10d": 10, "30d": 30, "90d": 90, "52w": 250}
+
+
+def ema(values: Sequence[float], period: int) -> float:
+    v = np.asarray(values, dtype=float)
+    if len(v) < period:
+        return 0.0
+    k = 2.0 / (period + 1)
+    e = float(v[:period].mean())
+    for x in v[period:]:
+        e = float(x) * k + e * (1 - k)
+    return e
+
+
+def sma(values: Sequence[float], period: int) -> float:
+    v = np.asarray(values, dtype=float)
+    return float(v[-period:].mean()) if len(v) >= period else 0.0
+
+
+def supertrend_state(high: Sequence[float], low: Sequence[float], close: Sequence[float], period: int = 10,
+                     mult: float = 3.0) -> dict[str, Any]:
+    """Final bands and direction after the last completed bar (direction 1 = up/bullish, -1 = down)."""
+    h, l, c = (np.asarray(x, dtype=float) for x in (high, low, close))
+    n = len(c)
+    if n <= period + 2:
+        return {"direction": 0, "upper": 0.0, "lower": 0.0}
+    tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
+    atr = np.full(n, np.nan)
+    atr[period] = tr[:period].mean()
+    for i in range(period + 1, n):
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i - 1]) / period
+    hl2 = (h + l) / 2
+    ub, lb = hl2 + mult * atr, hl2 - mult * atr
+    fub, flb = ub.copy(), lb.copy()
+    direction = 1
+    for i in range(period + 1, n):
+        fub[i] = ub[i] if (ub[i] < fub[i - 1] or c[i - 1] > fub[i - 1]) else fub[i - 1]
+        flb[i] = lb[i] if (lb[i] > flb[i - 1] or c[i - 1] < flb[i - 1]) else flb[i - 1]
+        if direction == 1 and c[i] < flb[i]:
+            direction = -1
+        elif direction == -1 and c[i] > fub[i]:
+            direction = 1
+    return {"direction": direction, "upper": float(fub[-1]), "lower": float(flb[-1])}
+
+
+def compute_indicators(high: Sequence[float], low: Sequence[float], close: Sequence[float],
+                       volume: Sequence[float] | None = None) -> dict[str, Any]:
+    h, l, c = (np.asarray(x, dtype=float) for x in (high, low, close))
+    out: dict[str, Any] = {"last_close": float(c[-1]) if len(c) else 0.0, "bars": int(len(c))}
+    if volume is not None and len(volume) >= 20:
+        out["avg_vol20"] = float(np.mean(np.asarray(volume, dtype=float)[-20:]))
+    if volume is not None and len(volume) >= 22:
+        vol = np.asarray(volume, dtype=float)
+        base = float(vol[-21:-1].mean())                                   # the 20 days BEFORE the last completed day
+        out["last_vol"] = float(vol[-1])
+        out["vol_x_prev"] = round(float(vol[-1]) / base, 2) if base > 0 else 0.0
+    if len(c) >= 2 and c[-2] > 0:
+        out["last_chg_pct"] = round(float(c[-1] / c[-2] - 1) * 100.0, 2)    # the last completed day's close vs the day before
+        out["last_rng_pct"] = round(float(h[-1] - l[-1]) / float(c[-2]) * 100.0, 2)
+    for name, n in RANGES.items():
+        if len(h) >= n:
+            out[f"hi_{name}"], out[f"lo_{name}"] = float(h[-n:].max()), float(l[-n:].min())
+    for n in (50, 100, 200):
+        out[f"dma{n}"] = sma(c, n)
+    out["ema20"] = ema(c, 20)
+    out["pdh"], out["pdl"] = (float(h[-1]), float(l[-1])) if len(h) else (0.0, 0.0)
+    st = supertrend_state(h, l, c)
+    out["st_dir"], out["st_upper"], out["st_lower"] = st["direction"], st["upper"], st["lower"]
+    return out
+
+
+def enrich_rows(rows: Sequence[Mapping[str, Any]], indicators: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Add the alert-rule fields to every row; rows without indicators get all fields False/empty (rules stay silent)."""
+    out = []
+    for row in rows:
+        r = dict(row)
+        ind = indicators.get(str(r.get("symbol", "")).upper()) or {}
+        try:
+            ltp = float(r.get("ltp") or 0)
+        except (TypeError, ValueError):
+            ltp = 0.0
+        prev = float(ind.get("last_close") or 0)
+        for name in RANGES:
+            hi, lo = ind.get(f"hi_{name}"), ind.get(f"lo_{name}")
+            r[f"range_{name}_breakout"] = bool(ltp > 0 and hi and ltp > hi)
+            r[f"range_{name}_breakdown"] = bool(ltp > 0 and lo and ltp < lo)
+        for key, ma_key in (("dma200_breakout", "dma200"), ("dma100_breakout", "dma100"), ("dma50_breakout", "dma50"), ("ema20_breakout", "ema20")):
+            ma = float(ind.get(ma_key) or 0)
+            r[key] = bool(ltp > 0 and prev > 0 and ma > 0 and ((prev < ma < ltp) or (prev > ma > ltp)))
+        pdh, pdl = float(ind.get("pdh") or 0), float(ind.get("pdl") or 0)
+        try:
+            day_open = float(r.get("open_0915") or r.get("day_open") or 0)
+        except (TypeError, ValueError):
+            day_open = 0.0
+        r["open_above_pdh"] = bool(day_open > 0 and pdh > 0 and day_open > pdh)          # gapped up: the 09:15 open was above the previous day's high
+        r["open_below_pdl"] = bool(day_open > 0 and pdl > 0 and day_open < pdl)          # gapped down: the 09:15 open was below the previous day's low
+        r["pdh_breakout"] = bool(ltp > 0 and pdh > 0 and ltp > pdh)
+        r["pdl_breakdown"] = bool(ltp > 0 and pdl > 0 and ltp < pdl)
+        flip = ""
+        if ltp > 0 and ind.get("st_dir"):
+            if ind["st_dir"] == -1 and ltp > float(ind.get("st_upper") or 1e18):
+                flip = "up"
+            elif ind["st_dir"] == 1 and ltp < float(ind.get("st_lower") or 0):
+                flip = "down"
+        r["supertrend_direction"] = flip
+        out.append(r)
+    return out
+
+
+def load_indicators(path: Path = OUT) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("symbols", {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _fetch_and_write_upstox(universe: dict) -> int:
+    from core.upstox_client import UpstoxClient
+
+    up = UpstoxClient()
+    today = date.today()
+    start = today - timedelta(days=400)
+    result: dict = {}
+    for symbol, security_id in universe.items():
+        d = None
+        for attempt in range(3):
+            try:
+                d = up.get_daily_candles(security_id=security_id, segment="NSE_EQ", from_date=start, to_date=today)
+                break
+            except Exception:                              # noqa: BLE001 - one stock failing must not stop the job
+                time.sleep(1.5 * (attempt + 1))
+        if not d or len(d["timestamp"]) < 30:
+            continue
+        keep = [i for i, t in enumerate(d["timestamp"]) if datetime.fromtimestamp(t).date() < today]     # completed days only
+        pick = lambda key: [d[key][i] for i in keep]                                                     # noqa: E731
+        result[symbol] = compute_indicators(pick("high"), pick("low"), pick("close"), pick("volume"))
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(), "count": len(result), "symbols": result}), encoding="utf-8")
+    print(f"daily indicators for {len(result)} of {len(universe)} stocks (Upstox) -> {OUT}")
+    return 0 if len(result) >= 0.8 * max(1, len(universe)) else 1
+
+
+def fetch_and_write() -> int:
+    import requests
+    from dotenv import load_dotenv
+
+    sys.path.insert(0, str(ROOT))
+    load_dotenv(ROOT / ".env")
+    from order_book_recorder import _universe
+
+    universe = _universe()
+    if os.getenv("APLUS_DATA_PROVIDER", "").strip().upper() == "UPSTOX" and os.getenv("APLUS_DHAN_FALLBACK", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return _fetch_and_write_upstox(universe)           # Dhan plan expired (3 Nov 2026): daily candles come from Upstox
+    from dhan_auth import resolve_access_token
+    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+    token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+    headers = {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
+    today = date.today()
+    start = (today - timedelta(days=400)).isoformat()
+    end = (today + timedelta(days=1)).isoformat()
+    session, last, result = requests.Session(), 0.0, {}
+    for symbol, security_id in universe.items():
+        for attempt in range(4):
+            time.sleep(max(0.0, 0.7 - (time.time() - last)))
+            last = time.time()
+            r = session.post("https://api.dhan.co/v2/charts/historical", headers=headers, timeout=40, json={
+                "securityId": str(security_id), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "expiryCode": 0,
+                "oi": False, "fromDate": start, "toDate": end})
+            if r.status_code == 429:
+                time.sleep(3 * (attempt + 1))
+                continue
+            break
+        if r.status_code != 200:
+            continue
+        d = r.json()
+        stamps = d.get("timestamp") or []
+        if len(stamps) < 30:
+            continue
+        keep = [i for i, t in enumerate(stamps) if datetime.fromtimestamp(t).date() < today]     # completed days only
+        pick = lambda key: [d[key][i] for i in keep]                                             # noqa: E731
+        result[symbol] = compute_indicators(pick("high"), pick("low"), pick("close"), pick("volume"))
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(), "count": len(result), "symbols": result}), encoding="utf-8")
+    print(f"daily indicators for {len(result)} of {len(universe)} stocks -> {OUT}")
+    return 0
+
+
+def _main() -> int:
+    code = fetch_and_write()
+    try:                                                   # sector rotation cache for tomorrow's trade tags and the dashboard
+        import sector_rrg
+
+        sector_rrg.refresh(ROOT)
+    except Exception:                                      # noqa: BLE001 - never fail the indicators job over this
+        pass
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

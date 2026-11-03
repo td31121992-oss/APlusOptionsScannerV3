@@ -34,9 +34,12 @@ TIMEOUT = 12
 
 
 def log(message: str) -> None:
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().isoformat()}] {message}\n")
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {message}\n")
+    except OSError:                       # a full disk must not kill the collector (it did on 27 Oct); the next cycle retries
+        pass
 
 
 def rss_url(query: str) -> str:

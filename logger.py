@@ -15,16 +15,19 @@ from __future__ import annotations
 
 import logging
 import sys
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler  # noqa: F401  (kept for importers of this name)
 from pathlib import Path
 
 from config import CONFIG
+from safe_log_handler import SafeTimedRotatingFileHandler
 
 _CONSOLE_FORMAT = "%(asctime)s %(levelname)-8s %(name)-22s [%(threadName)s] %(message)s"
 _FILE_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)-22s | %(threadName)-16s | %(message)s"
 _DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 _INITIALIZED = False
+
+
 
 # ANSI escape codes -- widely supported on Linux/macOS terminals and modern
 # Windows Terminal / VS Code. Falls back to no color automatically when
@@ -99,7 +102,7 @@ def setup_logging() -> None:
     # ------------------------------------------------
     backup_days = getattr(CONFIG.logging, "backup_days", 14)
 
-    file_handler = TimedRotatingFileHandler(
+    file_handler = SafeTimedRotatingFileHandler(
         log_dir / CONFIG.logging.log_file,
         when="midnight",
         interval=1,

@@ -16,122 +16,152 @@ print("PAPER ONLY - THIS SCRIPT DOES NOT PLACE ORDERS")
 print("=" * 60)
 
 # ------------------------------------------------------------
-# Dhan automatic authentication
+# Upstox-only mode (the Dhan plan expired on 3 Nov 2026): APLUS_DATA_PROVIDER=UPSTOX without APLUS_DHAN_FALLBACK=1
 # ------------------------------------------------------------
-client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
-pin = os.getenv("DHAN_PIN", "").strip()
+UPSTOX_ONLY = (
+    os.getenv("APLUS_DATA_PROVIDER", "").strip().upper() == "UPSTOX"
+    and os.getenv("APLUS_DHAN_FALLBACK", "").strip().lower() not in {"1", "true", "yes", "on"}
+)
 
-if not client_id:
-    raise SystemExit("FAIL: DHAN_CLIENT_ID missing in .env")
-if not pin:
-    raise SystemExit("FAIL: DHAN_PIN missing in .env")
+if UPSTOX_ONLY:
+    try:
+        from core.upstox_client import UpstoxClient
 
-try:
-    from dhan_auth import resolve_access_token
-except Exception as exc:
-    raise SystemExit(f"FAIL: could not import dhan_auth.py: {type(exc).__name__}: {exc}")
+        _up = UpstoxClient()
+        if not _up.token:
+            raise RuntimeError("UPSTOX_ANALYTICS_TOKEN missing in .env")
+        _q = _up.get_market_quotes({"NSE_EQ": ["2885"]}).get("NSE_EQ", {}).get("2885", {})
+        if float(_q.get("last_price") or 0) <= 0:
+            raise RuntimeError("Upstox quote probe returned no positive price")
+        print("PASS: Upstox market-quote probe succeeded (read-only).")
+        _day = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1))
+        _c = _up.get_intraday_candles(security_id="1333", segment="NSE_EQ", instrument="EQUITY", interval=5,
+                                      from_datetime=_day.replace(hour=9, minute=15, second=0, microsecond=0, tzinfo=None),
+                                      to_datetime=_day.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=None))
+        if not _c.get("timestamp"):
+            raise RuntimeError("Upstox candle probe returned no candles")
+        print("PASS: Upstox historical candle probe succeeded (read-only).")
+        print("Token value: NOT DISPLAYED. Dhan is not used.")
+    except Exception as exc:
+        raise SystemExit(f"FAIL: Upstox validation failed: {type(exc).__name__}: {exc}")
+else:
+    # ------------------------------------------------------------
+    # Dhan automatic authentication
+    # ------------------------------------------------------------
+    client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
+    pin = os.getenv("DHAN_PIN", "").strip()
 
-try:
-    token = resolve_access_token(
-        project_root=PROJECT_ROOT,
-        client_id=client_id,
-        env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
-    )
-except Exception as exc:
-    raise SystemExit(f"FAIL: Dhan token resolution failed: {type(exc).__name__}: {exc}")
+    if not client_id:
+        raise SystemExit("FAIL: DHAN_CLIENT_ID missing in .env")
+    if not pin:
+        raise SystemExit("FAIL: DHAN_PIN missing in .env")
 
-if not token:
-    raise SystemExit("FAIL: Dhan token resolver returned an empty token")
+    try:
+        from dhan_auth import resolve_access_token
+    except Exception as exc:
+        raise SystemExit(f"FAIL: could not import dhan_auth.py: {type(exc).__name__}: {exc}")
 
-print("PASS: Dhan access token resolved automatically.")
-print("Token value: NOT DISPLAYED")
+    try:
+        token = resolve_access_token(
+            project_root=PROJECT_ROOT,
+            client_id=client_id,
+            env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
+        )
+    except Exception as exc:
+        raise SystemExit(f"FAIL: Dhan token resolution failed: {type(exc).__name__}: {exc}")
 
-try:
-    r = requests.get(
-        "https://api.dhan.co/v2/profile",
-        headers={
-            "access-token": token,
-            "client-id": client_id,
-            "Accept": "application/json",
-        },
-        timeout=10,
-    )
-    r.raise_for_status()
-    body = r.json()
-    if not isinstance(body, dict):
-        raise RuntimeError("profile response is not a JSON object")
-    returned_id = str(body.get("dhanClientId") or "")
-    if returned_id and returned_id != client_id:
-        raise RuntimeError("profile client ID does not match DHAN_CLIENT_ID")
+    if not token:
+        raise SystemExit("FAIL: Dhan token resolver returned an empty token")
 
-    # Dhan separates token validity from Data API entitlement/validity.
-    # A valid /profile response is therefore not enough to start the scanner.
-    data_plan = str(body.get("dataPlan") or "").strip().lower()
-    if data_plan != "active":
-        raise RuntimeError(f"Dhan Data API plan is not Active (dataPlan={body.get('dataPlan')!r})")
+    print("PASS: Dhan access token resolved automatically.")
+    print("Token value: NOT DISPLAYED")
 
-    data_validity = str(body.get("dataValidity") or "").strip()
-    if data_validity:
-        parsed = None
-        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M"):
+    try:
+        r = requests.get(
+            "https://api.dhan.co/v2/profile",
+            headers={
+                "access-token": token,
+                "client-id": client_id,
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        body = r.json()
+        if not isinstance(body, dict):
+            raise RuntimeError("profile response is not a JSON object")
+        returned_id = str(body.get("dhanClientId") or "")
+        if returned_id and returned_id != client_id:
+            raise RuntimeError("profile client ID does not match DHAN_CLIENT_ID")
+
+        # Dhan separates token validity from Data API entitlement/validity.
+        # A valid /profile response is therefore not enough to start the scanner.
+        data_plan = str(body.get("dataPlan") or "").strip().lower()
+        if data_plan != "active":
+            raise RuntimeError(f"Dhan Data API plan is not Active (dataPlan={body.get('dataPlan')!r})")
+
+        data_validity = str(body.get("dataValidity") or "").strip()
+        if data_validity:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M"):
+                try:
+                    parsed = datetime.strptime(data_validity, fmt).replace(
+                        tzinfo=timezone(timedelta(hours=5, minutes=30))
+                    )
+                    break
+                except ValueError:
+                    pass
+            if parsed is not None and parsed <= datetime.now(timezone.utc):
+                raise RuntimeError(f"Dhan Data API validity has expired (dataValidity={data_validity})")
+
+        # Read-only Data API probe. This does not place or modify orders.
+        # It intentionally uses a small 5-minute candle request for a stable NSE
+        # equity security so a token with profile access but broken Data API
+        # authorization is not mistaken for a healthy scanner session.
+        probe_day = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1)).date()
+        probe_date = probe_day.isoformat()
+        probe = requests.post(
+            "https://api.dhan.co/v2/charts/intraday",
+            headers={
+                "access-token": token,
+                "client-id": client_id,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            json={
+                "securityId": "1333",
+                "exchangeSegment": "NSE_EQ",
+                "instrument": "EQUITY",
+                "interval": "5",
+                "oi": False,
+                "fromDate": probe_date + " 09:15:00",
+                "toDate": probe_date + " 15:30:00",
+            },
+            timeout=12,
+        )
+        if probe.status_code != 200:
+            detail = ""
             try:
-                parsed = datetime.strptime(data_validity, fmt).replace(
-                    tzinfo=timezone(timedelta(hours=5, minutes=30))
-                )
-                break
-            except ValueError:
+                payload = probe.json()
+                if isinstance(payload, dict):
+                    detail = str(payload.get("errorMessage") or payload.get("message") or payload.get("errorCode") or "").strip()
+            except Exception:
                 pass
-        if parsed is not None and parsed <= datetime.now(timezone.utc):
-            raise RuntimeError(f"Dhan Data API validity has expired (dataValidity={data_validity})")
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(f"Dhan intraday Data API probe HTTP {probe.status_code}{suffix}")
+        probe_body = probe.json()
+        if not isinstance(probe_body, dict):
+            raise RuntimeError("Dhan intraday Data API probe returned a non-JSON-object response")
+    except Exception as exc:
+        raise SystemExit(f"FAIL: Dhan Data API validation failed: {type(exc).__name__}: {exc}")
 
-    # Read-only Data API probe. This does not place or modify orders.
-    # It intentionally uses a small 5-minute candle request for a stable NSE
-    # equity security so a token with profile access but broken Data API
-    # authorization is not mistaken for a healthy scanner session.
-    probe_day = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1)).date()
-    probe_date = probe_day.isoformat()
-    probe = requests.post(
-        "https://api.dhan.co/v2/charts/intraday",
-        headers={
-            "access-token": token,
-            "client-id": client_id,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        json={
-            "securityId": "1333",
-            "exchangeSegment": "NSE_EQ",
-            "instrument": "EQUITY",
-            "interval": "5",
-            "oi": False,
-            "fromDate": probe_date + " 09:15:00",
-            "toDate": probe_date + " 15:30:00",
-        },
-        timeout=12,
-    )
-    if probe.status_code != 200:
-        detail = ""
-        try:
-            payload = probe.json()
-            if isinstance(payload, dict):
-                detail = str(payload.get("errorMessage") or payload.get("message") or payload.get("errorCode") or "").strip()
-        except Exception:
-            pass
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"Dhan intraday Data API probe HTTP {probe.status_code}{suffix}")
-    probe_body = probe.json()
-    if not isinstance(probe_body, dict):
-        raise RuntimeError("Dhan intraday Data API probe returned a non-JSON-object response")
-except Exception as exc:
-    raise SystemExit(f"FAIL: Dhan Data API validation failed: {type(exc).__name__}: {exc}")
+    print("PASS: Dhan profile validation succeeded.")
+    print("PASS: Dhan Data API plan/validity validation succeeded.")
+    print("PASS: Dhan intraday historical Data API probe succeeded (read-only).")
+    print("PASS: daily manual access-token generation should no longer be required.")
 
-print("PASS: Dhan profile validation succeeded.")
-print("PASS: Dhan Data API plan/validity validation succeeded.")
-print("PASS: Dhan intraday historical Data API probe succeeded (read-only).")
-print("PASS: daily manual access-token generation should no longer be required.")
-
-cache_path = PROJECT_ROOT / "data" / "cache" / "dhan_access_token.json"
-print(f"Token cache: {cache_path}")
+    cache_path = PROJECT_ROOT / "data" / "cache" / "dhan_access_token.json"
+    print(f"Token cache: {cache_path}")
 
 # ------------------------------------------------------------
 # Telegram configuration/connection check

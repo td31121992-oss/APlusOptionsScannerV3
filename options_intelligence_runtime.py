@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from config import AppConfig
 from core.dhan_client import DhanClient
+from core.market_data import build_client
 from core.instrument_loader import InstrumentLoader
 from options_intelligence_data_layer import MAX_SYMBOLS_LIMIT, _safe_error, collect_once, resolve_symbols
 
@@ -139,7 +140,7 @@ def main() -> int:
                 _health(args.health_file, status="CONNECTING", cycle=cycle,
                         max_symbols=args.max_symbols, symbols_count=len(symbols),
                         symbols_requested=len(symbols))
-                with DhanClient(cfg.dhan) as client:
+                with build_client(cfg) as client:          # Upstox first (APLUS_DATA_PROVIDER=UPSTOX), Dhan fallback
                     _health(args.health_file, status="RUNNING", cycle=cycle,
                             max_symbols=args.max_symbols, symbols_count=len(symbols),
                             symbols_requested=len(symbols))

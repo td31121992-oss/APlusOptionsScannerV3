@@ -144,7 +144,7 @@ def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
 
     try:
         from config import AppConfig
-        from core.dhan_client import DhanClient
+        from core.market_data import build_client
         from core.instrument_loader import InstrumentLoader
 
         cfg = AppConfig.from_env()
@@ -156,12 +156,12 @@ def _load_dhan_intraday_points(day: str, symbol: str) -> list[dict[str, Any]]:
         security_id = int(getattr(underlying, "security_id"))
         segment = str(getattr(underlying, "exchange_segment", "NSE_EQ") or "NSE_EQ").upper()
 
-        start = datetime.strptime(f"{safe_day} 09:15:00", "%Y-%m-%d %H:%M:%S")
+        start = datetime.strptime(f"{safe_day} 09:00:00", "%Y-%m-%d %H:%M:%S")
         end = datetime.now()
         if end <= start:
             return []
 
-        client = DhanClient(cfg.dhan)
+        client = build_client(cfg)
         candles = client.get_intraday_candles(
             security_id=security_id,
             segment=segment,
@@ -432,15 +432,34 @@ _OPTION_CHAIN_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _OPTION_CHAIN_CACHE_SECONDS = 15.0
 
 
+_OPTION_CHAIN_BUILT_AT = 0.0
+_OPTION_CHAIN_BUILD_LOCK = threading.Lock()
+_OPTION_CHAIN_CLIENT_REFRESH_SECONDS = 300.0      # the Dhan token is renewed every morning; a dashboard left running must not keep using yesterday's
+
+
 def _option_chain_runtime() -> tuple[Any, Any]:
-    global _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
-    if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None:
+    with _OPTION_CHAIN_BUILD_LOCK:                      # two page requests at once must not both download / rewrite the instrument master
+        return _option_chain_runtime_locked()
+
+
+def _option_chain_runtime_locked() -> tuple[Any, Any]:
+    global _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER, _OPTION_CHAIN_BUILT_AT
+    now = time.monotonic()
+    stale = _OPTION_CHAIN_CLIENT is not None and now - _OPTION_CHAIN_BUILT_AT > _OPTION_CHAIN_CLIENT_REFRESH_SECONDS
+    if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None or stale:
         from config import AppConfig
-        from core.dhan_client import DhanClient
+        from core.market_data import build_client
         from core.instrument_loader import InstrumentLoader
-        cfg = AppConfig.from_env()
-        _OPTION_CHAIN_CLIENT = DhanClient(cfg.dhan)
-        _OPTION_CHAIN_LOADER = InstrumentLoader(cfg).load(force_refresh=False)
+        try:
+            cfg = AppConfig.from_env()                  # re-reads the current token
+            _OPTION_CHAIN_CLIENT = build_client(cfg)
+            _OPTION_CHAIN_BUILT_AT = now
+            if _OPTION_CHAIN_LOADER is None:
+                _OPTION_CHAIN_LOADER = InstrumentLoader(cfg).load(force_refresh=False)
+        except Exception:                               # noqa: BLE001 - keep serving with the old client if the refresh fails; a first-time failure still raises
+            if _OPTION_CHAIN_CLIENT is None or _OPTION_CHAIN_LOADER is None:
+                raise
+            _OPTION_CHAIN_BUILT_AT = now - _OPTION_CHAIN_CLIENT_REFRESH_SECONDS + 30.0      # try again in 30 seconds
     return _OPTION_CHAIN_CLIENT, _OPTION_CHAIN_LOADER
 
 
@@ -586,7 +605,8 @@ STOCK_ANALYSIS_HTML = r"""<!doctype html>
 ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.notice{margin-top:10px;padding:10px 12px;border:1px solid #3a2e60;background:#15112a;border-radius:10px;color:#cfc5f7;font-size:11px}
 @media(max-width:1000px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.grid{grid-template-columns:1fr}}
  @media(max-width:600px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:0 10px 16px}.header{padding:12px}.toolbar{padding:10px}.title{font-size:19px}.rows,.intel-sections{grid-template-columns:1fr}#chart{height:300px}}
-</style></head>
+</style><script src="/static/lightweight-charts.js"></script>
+</head>
 <body>
 <div class="nav">
 <a href="/">LIVE TRADING</a><a href="/fno-market-watch">F&amp;O MARKET WATCH</a><a href="/stock-analysis">STOCK ANALYSIS</a>
@@ -604,9 +624,19 @@ ul{margin:0;padding-left:18px;color:#cbd7eb;font-size:12px;line-height:1.8}.noti
 <div class="card"><div class="label">APlus Status</div><div class="value" id="status">-</div></div>
 </div>
  <div class="grid">
+ <div class="panel"><div class="pt">Price chart with day levels <span class="sub" style="font-weight:400">PDH / PDL, day high / low with times</span></div><div class="body"><div id="lvchart" style="height:420px"></div><div id="lvlegend" style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:13px"></div></div></div>
+ <div class="panel"><div class="pt"><a id="chartlink" href="#" style="float:right;font-size:12px;font-weight:700;color:#4c8dff;text-decoration:none">Open chart with day high/low, PDH, PDL &rsaquo;</a>Why is it moving? <span class="sub" style="font-weight:400">likely drivers, not confirmed causes</span></div><div class="body" id="why"></div></div>
+ <div class="panel"><div class="pt">Company</div><div class="body" id="company"></div></div>
  <div class="panel"><div class="pt">Intraday Price / Movement</div><div id="chart"></div><div class="body"><div class="rows" id="market"></div></div></div>
  <div class="panel"><div class="pt">Technical Snapshot</div><div class="body"><div class="rows" id="technical"></div></div></div>
  </div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Catalyst <span class="sub">news &rarr; catalyst &rarr; direction &rarr; confidence &rarr; option impact (NSE filings + headlines, last 48 hours)</span></div>
+  <div class="body"><div id="catHead" style="font-weight:800;font-size:15px"></div><div id="catImpact" class="sub" style="margin:4px 0 8px"></div><div id="catItems"></div></div></div>
+ <div class="panel" style="margin-top:10px"><div class="pt">Stock trend, indicators &amp; intraday scans <span class="sub">5M / 15M / daily - read-only</span></div>
+  <div class="body"><div id="trWrap" style="display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:12px">
+   <div><div id="trTabs" style="display:flex;gap:6px;margin-bottom:6px"></div><div id="trGauge"></div><div id="trLbl" style="text-align:center;font-weight:900;font-size:17px"></div><div id="trCounts" style="display:flex;gap:6px;margin-top:8px"></div></div>
+   <div><table id="trTbl" style="width:100%;border-collapse:collapse;font-size:13px"></table></div>
+   <div id="trScans"></div></div><div class="sub" id="trNote"></div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">Order Flow &amp; Market Depth <span class="sub">Live Dhan depth • read-only confirmation layer</span></div><div class="body"><div class="rows" id="orderflow"></div><div class="notice">Depth values are live exchange-book quantities. Candle delta is a direction/volume proxy, not true aggressor-tagged trade delta.</div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">APlus Multi-Factor Confirmation <span class="sub">Structure + relative strength + RVAT + VWAP + futures/OI + order flow</span></div><div class="body"><div class="rows" id="confirmation"></div></div></div>
  <div class="panel" style="margin-top:10px"><div class="pt">Why this stock is moving • local read-only evidence</div><div class="body"><div id="intelligence"></div><div class="notice">Possible drivers are evidence-based context, not confirmed causality or a trading recommendation.</div></div></div>
@@ -632,7 +662,32 @@ function drawChart(points){
   let grid="";for(let i=0;i<5;i++){const yy=p+(h-2*p)*i/4;grid+="<line class='gridline' x1='"+p+"' y1='"+yy+"' x2='"+(w-p)+"' y2='"+yy+"'/>";}
   q("#chart").innerHTML="<svg viewBox='0 0 "+w+" "+h+"' width='100%' height='100%' preserveAspectRatio='none'>"+grid+"<polyline class='chartline' points='"+line+"'/><text class='point' x='"+p+"' y='"+(h-8)+"'>"+esc(points[0].time)+"</text><text class='point' x='"+(w-p)+"' y='"+(h-8)+"' text-anchor='end'>"+esc(points[points.length-1].time)+"</text></svg>";
 }
+var LVC={chart:null,series:null,lines:[],sym:""};
+function drawLv(sym){
+  if(typeof LightweightCharts==="undefined"||!sym)return;
+  fetch("/api/stock-day-chart?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){
+    if(!d.ok){document.getElementById("lvlegend").textContent=d.error||"chart not available";return}
+    if(!LVC.chart){LVC.chart=LightweightCharts.createChart(document.getElementById("lvchart"),{layout:{background:{color:"#121a2d"},textColor:"#8ea0bd"},grid:{vertLines:{color:"#1d2842"},horzLines:{color:"#1d2842"}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:"#27334d"},rightPriceScale:{borderColor:"#27334d"},autoSize:true});
+      LVC.series=LVC.chart.addCandlestickSeries({upColor:"#2ecc71",downColor:"#ff6363",borderUpColor:"#2ecc71",borderDownColor:"#ff6363",wickUpColor:"#2ecc71",wickDownColor:"#ff6363"})}
+    var COL={pdh:"#4c8dff",pdl:"#b86bff",dayhigh:"#2ecc71",daylow:"#ff6363"};
+    LVC.series.setData(d.candles.map(function(x){return{time:x.t,open:x.o,high:x.h,low:x.l,close:x.c}}));
+    LVC.lines.forEach(function(l){LVC.series.removePriceLine(l)});LVC.lines=[];var mk=[],ps=[];
+    d.marks.forEach(function(m){ps.push(m.price);var day=m.key.indexOf("day")===0;
+      LVC.lines.push(LVC.series.createPriceLine({price:m.price,color:COL[m.key],lineWidth:day?2:1,lineStyle:day?0:2,axisLabelVisible:true,title:m.name+" "+m.price.toFixed(2)+(m.hm?" @ "+m.hm:"")}));
+      if(m.time){mk.push({time:m.time,position:m.key==="dayhigh"?"aboveBar":"belowBar",color:COL[m.key],shape:m.key==="dayhigh"?"arrowDown":"arrowUp",text:m.name+" "+m.hm})}});
+    mk.sort(function(a,b){return a.time-b.time});LVC.series.setMarkers(mk);
+    if(ps.length){var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);LVC.series.applyOptions({autoscaleInfoProvider:function(orig){var r=orig();if(!r)return{priceRange:{minValue:lo,maxValue:hi}};return{priceRange:{minValue:Math.min(r.priceRange.minValue,lo),maxValue:Math.max(r.priceRange.maxValue,hi)},margins:r.margins}}})}
+    document.getElementById("lvlegend").innerHTML=d.marks.map(function(m){return "<span><span style='display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;background:"+COL[m.key]+"'></span>"+m.name+" <b>"+m.price.toFixed(2)+"</b>"+(m.hm?" <span class='sub'>at "+m.hm+"</span>":" <span class='sub'>"+m.label+"</span>")+"</span>"}).join("");
+    if(LVC.sym!==sym){LVC.chart.timeScale().fitContent();LVC.sym=sym}
+  }).catch(function(){})}
 function render(d){
+  (function(){var sym=(d.market&&d.market.symbol)||(d.symbol||"");if(!sym){q("#why").innerHTML="";return}
+   q("#chartlink").href="/stock-chart?symbol="+encodeURIComponent(sym);drawLv(sym);
+   fetch("/api/why-moving?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(w){
+    if(!w.ok){q("#why").innerHTML="<div class='sub'>"+esc(w.error||"not available")+"</div>";return}
+    var icon={market:"&#127757;",sector:"&#127981;",group:"&#128279;",announcement:"&#128226;",news:"&#128240;",gap:"&#8597;",level:"&#128205;",volume:"&#128202;",vwap:"&#12336;",flow:"&#9878;",trend:"&#128200;"};
+    q("#why").innerHTML="<div style='margin-bottom:8px;font-weight:700'>"+esc(w.summary)+"</div>"+(w.drivers||[]).map(function(x){return "<div style='display:flex;gap:8px;padding:5px 0;border-top:1px solid #27334d'><span>"+(icon[x.kind]||"&#8226;")+"</span><div style='flex:1'><b>"+esc(x.title)+"</b>"+(x.detail?"<div class='sub'>"+esc(x.detail)+"</div>":"")+"</div><span class='sub'>"+esc(x.time||"")+"</span></div>"}).join("")}).catch(function(){})})();
+  var pr=d.profile;q("#company").innerHTML=pr?("<div style='font-size:17px;font-weight:800'>"+esc(pr.name)+"</div><div style='margin:4px 0'>"+esc(pr.business)+"</div><div class='sub'><b>Owner / promoter:</b> "+esc(pr.owner)+"</div><div class='sub'><b>Founded:</b> "+esc(pr.founded)+"</div><div class='sub' style='margin-top:6px;font-size:11px'>"+esc(pr.note)+"</div>"):"<div class='sub'>No company profile for this symbol.</div>";
   const m=d.market||{},t=d.technical||{},c=d.candidate||{};
   const intel=d.intelligence||{},sections=intel.sections||[];
   q("#intelligence").innerHTML="<div class='intel-confidence'>Evidence confidence: "+esc(intel.confidence||"INSUFFICIENT_DATA")+" • Technical "+esc(intel.technical_alignment||"unknown")+" • Sector "+esc(intel.sector_alignment||"unknown")+" • Options "+esc(intel.options_alignment||"unknown")+"</div><div class='intel-sections'>"+sections.map(s=>"<section class='intel-section'><h3>"+esc(s.title)+"</h3><ul>"+(s.items||[]).map(x=>"<li>"+esc(x)+"</li>").join("")+"</ul></section>").join("")+"</div>";
@@ -708,7 +763,42 @@ async function load(){
   const day=q("#day").value;
   const r=await fetch("/api/stock-analysis?symbol="+encodeURIComponent(sym)+"&day="+encodeURIComponent(day)+"&ts="+Date.now());
   render(await r.json());
+  loadTrend();
+  loadCatalyst();
 }
+var TRD=null,TRF="5M";
+function trGauge(score){var a=Math.max(-1,Math.min(1,score))*90,cx=110,cy=100,r=84,segs=24,h="";
+ for(var i=0;i<segs;i++){var t=i/(segs-1),ang=Math.PI*(1-i/segs),a2=Math.PI*(1-(i+0.7)/segs),col="hsl("+Math.round(t*165)+",60%,50%)";
+  var x1=cx+r*Math.cos(ang),y1=cy-r*Math.sin(ang),x2=cx+(r-16)*Math.cos(ang),y2=cy-(r-16)*Math.sin(ang),x3=cx+(r-16)*Math.cos(a2),y3=cy-(r-16)*Math.sin(a2),x4=cx+r*Math.cos(a2),y4=cy-r*Math.sin(a2);
+  h+='<path d="M'+x1+','+y1+' L'+x2+','+y2+' L'+x3+','+y3+' L'+x4+','+y4+'Z" fill="'+col+'"/>'}
+ var rad=(90-a)*Math.PI/180,nx=cx+(r-6)*Math.cos(rad),ny=cy-(r-6)*Math.sin(rad);
+ return '<svg viewBox="0 0 220 112" style="width:100%;max-width:280px;display:block;margin:0 auto">'+h+'<line x1="'+cx+'" y1="'+cy+'" x2="'+nx+'" y2="'+ny+'" stroke="#e7eefc" stroke-width="2.5"/><circle cx="'+cx+'" cy="'+cy+'" r="5" fill="#e7eefc"/></svg>'}
+function trDraw(){var tr=TRD&&TRD.trend;if(!tr||!Object.keys(tr).length){document.getElementById("trNote").textContent=TRD&&TRD.error?("Trend unavailable: "+TRD.error):"Trend unavailable";return}
+ var keys=["5M","15M","DAILY"].filter(function(k){return tr[k]});if(keys.indexOf(TRF)<0)TRF=keys[0];
+ document.getElementById("trTabs").innerHTML=keys.map(function(k){return'<button style="flex:1;padding:6px;border-radius:8px;border:1px solid #27334d;font-weight:800;cursor:pointer;background:'+(k===TRF?"#12351f":"#0f1729")+';color:'+(k===TRF?"#2ecc71":"#8ea0bd")+'" data-k="'+k+'">'+k+'</button>'}).join("");
+ document.querySelectorAll("#trTabs button").forEach(function(b){b.onclick=function(){TRF=b.dataset.k;trDraw()}});
+ var c=tr[TRF],s=c.score;document.getElementById("trGauge").innerHTML=trGauge(s);
+ var lbl=s>=0.6?"STRONG BULLISH":s>=0.2?"BULLISH":s<=-0.6?"STRONG BEARISH":s<=-0.2?"BEARISH":"NEUTRAL";
+ var l=document.getElementById("trLbl");l.textContent=lbl;l.style.color=s>=0.2?"#2ecc71":s<=-0.2?"#ff6363":"#8ea0bd";
+ document.getElementById("trCounts").innerHTML='<span style="flex:1;text-align:center;background:#3a1620;color:#ff9bb0;border-radius:8px;padding:6px;font-weight:700">Bearish '+c.bearish+'</span><span style="flex:1;text-align:center;background:#232b3f;color:#8ea0bd;border-radius:8px;padding:6px;font-weight:700">Neutral '+c.neutral+'</span><span style="flex:1;text-align:center;background:#12351f;color:#2ecc71;border-radius:8px;padding:6px;font-weight:700">Bullish '+c.bullish+'</span>';
+ var col={bull:"#2ecc71",bear:"#ff6363",neutral:"#8ea0bd"};
+ document.getElementById("trTbl").innerHTML='<tr style="color:#8ea0bd"><td>NAME</td><td>VALUE</td><td style="text-align:right">INTERPRETATION</td></tr>'+(c.table||[]).map(function(r){return'<tr style="border-top:1px solid #27334d"><td style="padding:6px 4px">'+r.name+'</td><td>'+r.value+'</td><td style="text-align:right;font-weight:700;color:'+col[r.tone]+'">'+r.text+'</td></tr>'}).join("");
+ var chb=tr.chop?'<div style="border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px;background:'+(tr.chop.chop_state==="CHOPPY"?"#3a1620":tr.chop.chop_state==="TRENDING"?"#12351f":"#232b3f")+';color:'+(tr.chop.chop_state==="CHOPPY"?"#ffb9c8":tr.chop.chop_state==="TRENDING"?"#b9f5cf":"#c8d3e8")+'">'+tr.chop.text+'</div>':"";
+ document.getElementById("trScans").innerHTML=chb+((tr.scans||[]).length?(tr.scans).map(function(x){return'<div style="border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:13px;background:'+(x.tone==="bull"?"#12351f":"#3a1620")+';color:'+(x.tone==="bull"?"#b9f5cf":"#ffb9c8")+'">'+x.text+(x.time?'<span style="float:right;opacity:.75;font-weight:600;font-size:12px">@ '+x.time+'</span>':'')+'</div>'}).join(""):'<div class="sub">No scan matches right now.</div>');
+ document.getElementById("trNote").textContent=""}
+function loadCatalyst(){var sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
+ fetch("/api/catalyst?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){
+  var h=document.getElementById("catHead"),i=document.getElementById("catImpact"),L=document.getElementById("catItems");
+  if(!d.ok){h.textContent="Catalyst unavailable";i.textContent="";L.innerHTML="";return}
+  var col=d.direction==="BULLISH"?"#2ecc71":d.direction==="BEARISH"?"#ff6363":d.direction==="MIXED"?"#f5b942":"#8ea0bd";
+  h.innerHTML='<span style="color:'+col+'">'+d.direction+'</span> &middot; '+d.confidence+' confidence'+(d.type?' &middot; '+String(d.type).replace(/_/g," ").toLowerCase():'')
+   +(d.age_h!=null?' &middot; newest '+d.age_h+'h ago':'')+(d.event_risk?' &middot; <span style="color:#f5b942">event risk</span>':'');
+  i.textContent=d.impact||"";
+  L.innerHTML=(d.items||[]).length?d.items.map(function(x){var c=x.dir>0?"#2ecc71":x.dir<0?"#ff6363":"#8ea0bd";
+   return'<div style="border-top:1px solid #27334d;padding:6px 2px;font-size:13px"><span style="color:'+c+';font-weight:800">'+(x.dir>0?"&#9650;":x.dir<0?"&#9660;":"&#9679;")+'</span> '
+    +'<span class="sub">'+x.time+' &middot; '+x.source+' &middot; '+String(x.type).replace(/_/g," ").toLowerCase()+' ('+x.rule+')</span><br>'+(x.url?'<a href="'+x.url+'" target="_blank" rel="noopener" style="color:#e7eefc;text-decoration:none">'+x.title+'</a>':x.title)+'</div>'}).join(""):'<div class="sub">Nothing in the last 48 hours for this stock.</div>'}).catch(function(){})}
+function loadTrend(){var sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
+ fetch("/api/stock-trend?symbol="+encodeURIComponent(sym)+"&ts="+Date.now()).then(function(r){return r.json()}).then(function(d){TRD=d;trDraw()}).catch(function(){})}
 async function loadChain(){
   const sym=q("#symbol").value.trim().toUpperCase();if(!sym)return;
   const expiry=q("#expiry").value;
