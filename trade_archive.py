@@ -191,6 +191,12 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
         trades = shadow_scoreboard.load_trades(root / "data" / "reports" / "paper_trade_history.json", upto=last)
         if trades:
             shadow_scoreboard.add_canary(trades)
+            import derived_tags
+
+            derived_tags.enrich(trades, root)
+            keep = {t["paper_trade_id"]: {k: t.get(k) for k in ("dx_spread_wide", "dx_mom5_block", "dx_would_block")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}
+            if keep:                                       # keep the day's derived tags: the tick files they come from may be cleaned up later
+                (root / "data" / "trade_archive" / f"derived_{last}.json").write_text(json.dumps(keep), encoding="utf-8")
             write_rule_history(last, shadow_scoreboard.gate_rows(trades), root / "data" / "trade_archive" / "rule_history.csv")
             shadow_scoreboard.run(last, root)
             print(f"rule history + scoreboard updated for {last}")

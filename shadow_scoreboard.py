@@ -116,6 +116,9 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Regime 60% (the majority side must hold more than 60% of stocks)": ("-", lambda t: None if _truthy(t.get("rgs_regime60_ok")) is None else not _truthy(t.get("rgs_regime60_ok"))),
     "No put while the market is flat or falling (Nifty under +0.2% since the open)": ("-", lambda t: _truthy(t.get("gs_bear_weakmkt"))),
     "No cheap options (premium under 10)": ("-", lambda t: _truthy(t.get("gs_lowprice"))),
+    "Spread cap, all history (no entry when the option spread at entry is over 1%)  [derived]": ("-", lambda t: _truthy(t.get("dx_spread_wide"))),
+    "Momentum confirmation (not at / above entry price 5 minutes after the signal, or closed by then)  [derived from recorded ticks]": ("-", lambda t: _truthy(t.get("dx_mom5_block"))),
+    "Spread cap + momentum confirmation together  [derived]": ("-", lambda t: _truthy(t.get("dx_would_block"))),
     "Fewer-better combo (any of: spread over 1%, clean score under 96, 6th+ entry of the day)": ("-", lambda t: None if _truthy(t.get("gs_q_pass")) is None else not _truthy(t.get("gs_q_pass"))),
 }
 
@@ -320,6 +323,12 @@ def run(day: str | None = None, root: Path = ROOT) -> Path | None:
     if not trades:
         return None
     add_canary(trades)
+    try:                                                   # derived entry-filter tags (spread cap, 5-minute momentum) from the recorded ticks; the report must not depend on them
+        import derived_tags
+
+        derived_tags.enrich(trades, root)
+    except Exception:                                      # noqa: BLE001
+        pass
     gates, splits = gate_rows(trades), split_rows(trades)
     folder = root / "data" / "shadow_scoreboard"
     folder.mkdir(parents=True, exist_ok=True)

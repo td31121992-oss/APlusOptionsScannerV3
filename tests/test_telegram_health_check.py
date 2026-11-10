@@ -52,3 +52,19 @@ class BuildMessageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpstoxLabelTests(unittest.TestCase):
+    def test_upstox_mode_labels_the_line_upstox_not_dhan(self):
+        status, text = thc.build_message(NOW, True, {**GOOD_ITEMS, "Dhan token": {"level": "bad", "value": "expired"}}, TASKS_OK, calpha=True, market_note="x", upstox=True)
+        self.assertIn("Upstox token: ✅ live quote OK", text)
+        self.assertNotIn("Dhan token", text)
+        self.assertNotIn("expired", text)
+
+    def test_upstox_mode_failed_live_check_is_not_ready(self):
+        status, text = thc.build_message(NOW, False, GOOD_ITEMS, TASKS_OK, calpha=True, market_note="x", upstox=True)
+        self.assertEqual(status, "NOT READY")
+        self.assertIn("Upstox token: ❌ live check FAILED", text)
+
+    def test_default_still_shows_dhan_for_the_fallback_mode(self):
+        self.assertIn("Dhan token:", thc.build_message(NOW, True, GOOD_ITEMS, TASKS_OK, calpha=True, market_note="x")[1])

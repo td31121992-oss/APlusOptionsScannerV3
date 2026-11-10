@@ -59,6 +59,13 @@ def calpha_running() -> bool:
     return bool(out) and not out.startswith("ERROR")
 
 
+def upstox_only() -> bool:
+    """True when the data provider is Upstox and the Dhan fallback is off (the Dhan plan expired on 3 Nov 2026)."""
+    import os
+
+    return os.getenv("APLUS_DATA_PROVIDER", "").strip().upper() == "UPSTOX" and os.getenv("APLUS_DHAN_FALLBACK", "").strip().lower() not in {"1", "true", "yes", "on"}
+
+
 def live_token_ok() -> bool:
     """Confirm the shared Dhan token against Dhan /profile (retrying transient failures)."""
     try:
@@ -80,7 +87,7 @@ def live_token_ok() -> bool:
 
 
 def build_message(now: datetime, token_ok: bool, items: dict[str, dict], tasks: dict[str, bool | None],
-                  calpha: bool, market_note: str) -> tuple[str, str]:
+                  calpha: bool, market_note: str, upstox: bool = False) -> tuple[str, str]:
     """Return (status, text). Pure function (unit-tested)."""
     def mark(level: str) -> str:
         return {"ok": "✅", "warn": "⚠️", "bad": "❌"}.get(level, "➖")
@@ -98,7 +105,8 @@ def build_message(now: datetime, token_ok: bool, items: dict[str, dict], tasks: 
     lines = [
         f"{icon} 09:10 APlus pre-market check - {now:%a %d %b}",
         "",
-        f"Dhan token: {mark('ok' if token_ok else 'bad')} {tok.get('value', 'unknown')}" + ("" if token_ok else " (live check FAILED)"),
+        (f"Upstox token: {mark('ok' if token_ok else 'bad')} " + ("live quote OK" if token_ok else "live check FAILED")) if upstox
+        else f"Dhan token: {mark('ok' if token_ok else 'bad')} {tok.get('value', 'unknown')}" + ("" if token_ok else " (live check FAILED)"),
         f"Supervisor: {mark(sup.get('level', ''))} {sup.get('value', 'unknown')}",
         f"Scanner: {mark('ok' if tasks.get('APlusOptionsScannerV3_MorningStart') else 'bad')} auto-starts 09:14",
         f"Safety data: {mark(mwpl.get('level', ''))} MWPL {mwpl.get('value', 'n/a')} ({mwpl.get('detail', '')}); "
@@ -127,6 +135,9 @@ def send(message: str) -> tuple[bool, str]:
 
 
 def main() -> int:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")                               # the scheduled task does not carry the project's environment: without this it cannot tell it is Upstox-only
     import dashboard_intel as di
 
     dry = "--dry-run" in sys.argv
@@ -135,7 +146,7 @@ def main() -> int:
     health = di.health(ROOT, now, market)
     items = {i["key"]: i for i in health["items"]}
     tasks = {n: task_ready(n) for n in ("APlusOptionsScannerV3_MorningStart", "APlus_Master_Self_Healing")}
-    status, text = build_message(now, live_token_ok(), items, tasks, calpha_running(), f"{market['state']} ({market['note']})")
+    status, text = build_message(now, live_token_ok(), items, tasks, calpha_running(), f"{market['state']} ({market['note']})", upstox=upstox_only())
     if dry:
         print(text)
         log(f"DRY RUN status={status} (nothing sent)")
