@@ -386,3 +386,20 @@ class UpstoxRetryTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             UpstoxClient(token="t", session=Boom(), master=[])._get("/x", {}, auth=False)
+
+
+class PooledSessionTests(unittest.TestCase):
+    def test_default_client_reuses_one_session_and_can_be_switched_off(self):
+        import requests
+        from unittest import mock
+
+        c = UpstoxClient(token="t", master=[])
+        first = c._http()
+        self.assertIsInstance(first, requests.Session)
+        self.assertIs(c._http(), first)
+        with mock.patch.dict("os.environ", {"APLUS_UPSTOX_POOL": "0"}):
+            self.assertIs(UpstoxClient(token="t", master=[])._http(), requests)
+
+    def test_injected_session_is_still_used(self):
+        s = object()
+        self.assertIs(UpstoxClient(token="t", session=s, master=[])._http(), s)

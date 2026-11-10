@@ -88,6 +88,7 @@ class UpstoxClient:
                  budget: _Budget | None = None, batch_size: int = 150) -> None:
         self.token = (token or os.getenv("UPSTOX_ANALYTICS_TOKEN", "") or os.getenv("UPSTOX_ACCESS_TOKEN", "")).strip()
         self._session = session
+        self._pooled: Any = None
         self._master = master
         self._maps: dict[str, dict[str, str]] | None = None
         self._reverse: dict[str, tuple[str, str]] = {}
@@ -96,11 +97,21 @@ class UpstoxClient:
 
     # ------------------------------------------------------------------ instrument mapping
     def _http(self):
+        """The injected session (tests), else one shared connection pool, so a call re-uses an open HTTPS connection instead of opening a new one every time.
+        A network blip that only stops NEW connections (seen every 64 minutes, 10 Nov 2026) then does not fail every call. APLUS_UPSTOX_POOL=0 goes back to a fresh connection per call."""
         if self._session is not None:
             return self._session
         import requests
 
-        return requests
+        if os.getenv("APLUS_UPSTOX_POOL", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return requests
+        if self._pooled is None:
+            from requests.adapters import HTTPAdapter
+
+            pooled = requests.Session()
+            pooled.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=32, max_retries=0))      # _get retries a dropped or stale connection itself
+            self._pooled = pooled
+        return self._pooled
 
     def _load_master(self) -> list[dict[str, Any]]:
         if self._master is not None:
