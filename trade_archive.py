@@ -255,6 +255,15 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
             write_rule_history(last, shadow_scoreboard.gate_rows(trades), root / "data" / "trade_archive" / "rule_history.csv")
             shadow_scoreboard.run(last, root)
             print(f"rule history + scoreboard updated for {last}")
+            try:                                           # the record of trades that never went into profit, with a post-mortem each (see never_profit_log.py)
+                import never_profit_log
+
+                print(f"never-in-profit record: {len(never_profit_log.run(history, root))} trades")
+                import daily_mfe_report
+
+                print(f"daily peak-profit report: {len(daily_mfe_report.run(history, root))} sessions")
+            except Exception as exc:                       # noqa: BLE001 - must not hide the archive that was just written
+                print(f"never-in-profit record failed: {type(exc).__name__}: {str(exc)[:120]}")
     except Exception as exc:                               # noqa: BLE001
         print(f"scoreboard step failed: {type(exc).__name__}: {str(exc)[:160]}")
         return 2

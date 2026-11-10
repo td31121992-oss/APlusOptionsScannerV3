@@ -222,3 +222,37 @@ class LagTests(unittest.TestCase):
             self.assertEqual(dt.first_ready_minutes("2026-11-11", root), {})
             self.write_signals(root)
             self.assertEqual(dt.first_ready_minutes("2026-11-11", root)[("ABB", "BULLISH")], 600)
+
+
+class RvolTests(unittest.TestCase):
+    def setUp(self):
+        dt._OPENING.clear()
+
+    def build(self, root, today_volume):
+        import json
+
+        cache = root / "data" / "cache"
+        cache.mkdir(parents=True)
+        days = [f"2026-10-{d:02d}" for d in range(1, 15)]                                       # 14 earlier sessions, first-bar volume 1,000 each
+        (cache / "rvol_first_bars.json").write_text(json.dumps({"ABB": {d: {"v5": 1000.0, "o5": 100.0, "c5": 101.0, "v15": 3000.0} for d in days}}), encoding="utf-8")
+        folder = root / "data" / "pattern_log" / "candles"
+        folder.mkdir(parents=True)
+        candles = {"ABB": {"minute": [555, 560, 565], "open": [100.0] * 3, "close": [101.0] * 3, "volume": [today_volume, 500.0, 500.0]}}
+        (folder / "2026-11-11.json").write_text(json.dumps({"day": "2026-11-11", "symbols": candles}), encoding="utf-8")
+
+    def test_quiet_normal_and_in_play(self):
+        for vol, quiet, three in ((500.0, True, True), (1500.0, False, True), (3500.0, False, False)):
+            dt._OPENING.clear()
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self.build(root, vol)
+                out = dt.rvol_tags({"symbol": "ABB", "entry_time": "2026-11-11T10:00:00"}, root)
+                self.assertAlmostEqual(out["dx_rvol"], vol / 1000.0, places=2)
+                self.assertEqual((out["dx_rvol_quiet_block"], out["dx_rvol3_block"]), (quiet, three))
+
+    def test_unknown_stock_or_short_history_gives_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.build(root, 1000.0)
+            self.assertEqual(set(dt.rvol_tags({"symbol": "TCS", "entry_time": "2026-11-11T10:00:00"}, root).values()), {None})
+            self.assertEqual(set(dt.rvol_tags({"symbol": "ABB", "entry_time": "2026-10-03T10:00:00"}, root).values()), {None})      # only 2 earlier sessions

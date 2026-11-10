@@ -24,6 +24,11 @@ chosen from:
                      311 trades: entered within 10 minutes of the first signal lost (-Rs 91,700 over 160 trades), 11-30 minutes after made +Rs 34,123 (84 trades), later lost a little.
                      early_block = entered 10 minutes or less after the first signal; window_block = not entered 11-30 minutes after it. None when there is no signal row for the trade.
 
+    dx_rvol / dx_rvol_quiet_block / dx_rvol3_block
+                     relative opening volume (rvol_replay.py, 10 Nov 2026): the traded stock's first 5-minute volume divided by its average over the previous 14 sessions (known from 09:20).
+                     quiet_block = RVOL below 1.0 (a quiet opening: 193 trades lost Rs 164,681 in the study); rvol3_block = RVOL below 3 (only "stocks in play" kept: 64 trades, +Rs 48,191).
+                     The opening bars come from data/cache/rvol_first_bars.json (Sep-Nov history) plus each day's stored candle file; None when the history is too short.
+
 Nothing here blocks anything; shadow_scoreboard.py lists them as rules ("would block") and the registry date gives the forward-only evidence.
 """
 
@@ -91,6 +96,44 @@ def exit_variants(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, 
 
 
 _LABELS: dict[str, dict[str, str]] = {}
+_OPENING: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
+
+
+def opening_history(root: Path = ROOT) -> dict[str, dict[str, dict[str, float]]]:
+    """symbol -> day -> {v5, o5, c5, v15}: the cached Sep-Nov opening bars, extended with the first bars found in each stored 5-minute candle file (data/pattern_log/candles)."""
+    key = str(root)
+    if key in _OPENING:
+        return _OPENING[key]
+    import json
+
+    hist: dict[str, dict[str, dict[str, float]]] = {}
+    try:
+        hist = json.loads((root / "data" / "cache" / "rvol_first_bars.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    folder = root / "data" / "pattern_log" / "candles"
+    for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        try:
+            symbols = json.loads(p.read_text(encoding="utf-8")).get("symbols", {})
+        except (OSError, ValueError):
+            continue
+        for sym, d in symbols.items():
+            mins, vols = d.get("minute") or [], d.get("volume") or []
+            if 555 not in mins or len(vols) != len(mins):
+                continue
+            i = mins.index(555)
+            hist.setdefault(sym.upper(), {})[p.stem] = {"v5": float(vols[i] or 0), "o5": float((d.get("open") or [0] * (i + 1))[i]), "c5": float((d.get("close") or [0] * (i + 1))[i]),
+                                                        "v15": float(sum(vols[j] or 0 for j, m in enumerate(mins) if 555 <= m <= 565))}
+    _OPENING[key] = hist
+    return hist
+
+
+def rvol_tags(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
+    from rvol_replay import rvol
+
+    day, sym = str(trade.get("entry_time") or "")[:10], str(trade.get("symbol") or "").upper()
+    r = rvol(opening_history(root).get(sym, {}), day) if day and sym else None
+    return {"dx_rvol": None if r is None else round(r, 2), "dx_rvol_quiet_block": None if r is None else r < 1.0, "dx_rvol3_block": None if r is None else r < 3.0}
 _SIGNALS: dict[tuple[str, str], dict[tuple[str, str], int]] = {}
 LAG_EARLY_MAX = 10                                           # minutes: entered this soon after the first signal counts as early
 LAG_WINDOW = (11, 30)                                        # minutes: the window that was profitable in the 10 Nov study
@@ -184,7 +227,7 @@ def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     wide = spread_wide(trade)
     ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
     block = momentum_block(trade, ticks)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root)}
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out

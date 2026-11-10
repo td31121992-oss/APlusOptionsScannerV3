@@ -127,6 +127,8 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "  ... and only the 5 strongest movers (previous-close ranking)  [derived]": ("-", lambda t: _truthy(t.get("dx_s945p_top5_block"))),
     "Wait 11+ minutes after the stock's first entry-ready signal (entered 10 minutes or sooner = would block)  [derived]": ("-", lambda t: _truthy(t.get("dx_lag_early_block"))),
     "Enter only 11-30 minutes after the first entry-ready signal  [derived]": ("-", lambda t: _truthy(t.get("dx_lag_window_block"))),
+    "Skip a quiet opening (the stock's first 5-minute volume below its 14-session average)  [derived]": ("-", lambda t: _truthy(t.get("dx_rvol_quiet_block"))),
+    "Only stocks in play (first 5-minute volume at least 3x its 14-session average)  [derived]": ("-", lambda t: _truthy(t.get("dx_rvol3_block"))),
     "Fewer-better combo (any of: spread over 1%, clean score under 96, 6th+ entry of the day)": ("-", lambda t: None if _truthy(t.get("gs_q_pass")) is None else not _truthy(t.get("gs_q_pass"))),
 }
 
