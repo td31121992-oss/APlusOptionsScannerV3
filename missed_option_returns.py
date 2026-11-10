@@ -96,11 +96,16 @@ def run(day: str, root: Path = ROOT) -> Path | None:
 
     sys.path.insert(0, str(root))
     load_dotenv(root / ".env")
-    from dhan_auth import resolve_access_token
+    from core import market_data
 
-    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
-    token = resolve_access_token(project_root=root, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
-    headers = {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
+    upstox = market_data.upstox_only()                      # Dhan plan expired (3 Nov 2026): option candles come from Upstox
+    headers: dict[str, str] = {}
+    if not upstox:
+        from dhan_auth import resolve_access_token
+
+        cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+        token = resolve_access_token(project_root=root, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+        headers = {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
     signals = list(csv.DictReader(sig_path.open(encoding="utf-8")))
     master = pd.read_csv(root / "data" / "cache" / "api-scrip-master-detailed.csv", low_memory=False,
                          usecols=["SECURITY_ID", "INSTRUMENT", "UNDERLYING_SYMBOL", "SM_EXPIRY_DATE", "STRIKE_PRICE", "OPTION_TYPE"])
@@ -109,6 +114,13 @@ def run(day: str, root: Path = ROOT) -> Path | None:
     session, last = requests.Session(), [0.0]
 
     def fetch(security_id: int) -> list[dict]:
+        if upstox:
+            d = market_data.chart_call("charts/intraday", {"securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5",
+                                                          "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}) or {}
+            idx = pd.to_datetime(d.get("timestamp") or [], unit="s", utc=True).tz_convert("Asia/Kolkata")
+            return [{"minute": t.hour * 60 + t.minute, "high": float(h), "low": float(lo), "close": float(c)}
+                    for t, h, lo, c in zip(idx, d.get("high", []), d.get("low", []), d.get("close", []))
+                    if t.date().isoformat() == day]
         for attempt in range(4):
             time.sleep(max(0.0, RATE_SLEEP - (time.time() - last[0])))
             last[0] = time.time()
