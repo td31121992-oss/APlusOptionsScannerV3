@@ -56,7 +56,7 @@ def chart_call(url: str, body: Mapping[str, Any]) -> dict[str, Any] | None:
         sid, segment = str(int(float(body["securityId"]))), str(body.get("exchangeSegment") or "NSE_EQ")
         if url.rstrip("/").endswith("charts/historical"):
             out = client.get_daily_candles(security_id=sid, segment=segment, from_date=datetime.fromisoformat(str(body["fromDate"])[:10]).date(),
-                                           to_date=datetime.fromisoformat(str(body["toDate"])[:10]).date())
+                                           to_date=min(datetime.fromisoformat(str(body["toDate"])[:10]).date(), datetime.now().date()))
         else:
             out = client.get_intraday_candles(security_id=sid, segment=segment, instrument=str(body.get("instrument") or ""), interval=int(body.get("interval") or 5),
                                               from_datetime=datetime.fromisoformat(str(body["fromDate"])), to_datetime=datetime.fromisoformat(str(body["toDate"])))

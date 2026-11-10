@@ -45,13 +45,17 @@ class SectorTape:
     def _fetch_quotes(self) -> dict[int, dict[str, float]]:
         import index_strip
         import requests
+        from core import market_data
 
         ids = sorted(set(sector_rrg.INDICES.values()))
-        r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=index_strip._headers(self.root),
-                          json={"IDX_I": ids}, timeout=6)
-        if r.status_code != 200:
-            raise RuntimeError(f"quote HTTP {r.status_code}")
-        data = ((r.json() or {}).get("data") or {}).get("IDX_I") or {}
+        if market_data.upstox_only():                       # Dhan plan expired (3 Nov 2026)
+            data = market_data.upstox_quote("IDX_I", ids)
+        else:
+            r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=index_strip._headers(self.root),
+                              json={"IDX_I": ids}, timeout=6)
+            if r.status_code != 200:
+                raise RuntimeError(f"quote HTTP {r.status_code}")
+            data = ((r.json() or {}).get("data") or {}).get("IDX_I") or {}
         return {int(k): {"ltp": _f((v or {}).get("last_price"))} for k, v in data.items()}
 
     def update(self, now_ts: float | None = None, force: bool = False) -> bool:

@@ -45,6 +45,10 @@ def _headers(root: Path) -> dict[str, str]:
     from dotenv import load_dotenv
 
     load_dotenv(root / ".env")
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026): index data comes from Upstox, no Dhan headers
+        return {}
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
@@ -54,11 +58,15 @@ def _headers(root: Path) -> dict[str, str]:
 
 def _fetch_quotes(root: Path) -> dict[int, dict[str, float]]:
     import requests
+    from core import market_data
 
-    r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=_headers(root), json={SEGMENT: [i for i, _ in ALL]}, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"quote HTTP {r.status_code}")
-    data = ((r.json() or {}).get("data") or {}).get(SEGMENT) or {}
+    if market_data.upstox_only():
+        data = market_data.upstox_quote(SEGMENT, [i for i, _ in ALL])
+    else:
+        r = requests.post("https://api.dhan.co/v2/marketfeed/quote", headers=_headers(root), json={SEGMENT: [i for i, _ in ALL]}, timeout=15)
+        if r.status_code != 200:
+            raise RuntimeError(f"quote HTTP {r.status_code}")
+        data = ((r.json() or {}).get("data") or {}).get(SEGMENT) or {}
     out: dict[int, dict[str, float]] = {}
     for key, v in data.items():
         o = (v or {}).get("ohlc") or {}
@@ -69,16 +77,21 @@ def _fetch_quotes(root: Path) -> dict[int, dict[str, float]]:
 def _fetch_prev_closes(root: Path) -> dict[int, float]:
     """Close of the last session BEFORE today for every index, from daily history."""
     import requests
+    from core import market_data
 
+    upstox = market_data.upstox_only()
     headers = _headers(root)
     today = datetime.now(IST).date()
     out: dict[int, float] = {}
     for sid, _ in ALL:
         try:
-            r = requests.post("https://api.dhan.co/v2/charts/historical", headers=headers, timeout=20, json={
-                "securityId": str(sid), "exchangeSegment": SEGMENT, "instrument": "INDEX", "expiryCode": 0, "oi": False,
-                "fromDate": (today - timedelta(days=12)).isoformat(), "toDate": (today + timedelta(days=1)).isoformat()})
-            d = r.json() if r.status_code == 200 else {}
+            body = {"securityId": str(sid), "exchangeSegment": SEGMENT, "instrument": "INDEX", "expiryCode": 0, "oi": False,
+                    "fromDate": (today - timedelta(days=12)).isoformat(), "toDate": (today + timedelta(days=1)).isoformat()}
+            if upstox:
+                d = market_data.chart_call("charts/historical", body) or {}
+            else:
+                r = requests.post("https://api.dhan.co/v2/charts/historical", headers=headers, timeout=20, json=body)
+                d = r.json() if r.status_code == 200 else {}
             best = 0.0
             for ts, c in zip(d.get("timestamp") or [], d.get("close") or []):
                 if datetime.fromtimestamp(int(ts), IST).date() < today:

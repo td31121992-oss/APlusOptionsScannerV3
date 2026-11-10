@@ -290,6 +290,11 @@ def main() -> int:
 
     sys.path.insert(0, str(ROOT))
     load_dotenv(ROOT / ".env")
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026): this reads Dhan's rolling expired-options endpoint, which Upstox does not offer
+        print("download_expired_options needs Dhan's expired-options history; not available with Upstox only. Nothing downloaded.")
+        return 0
     from dhan_auth import resolve_access_token
 
     def headers_factory() -> dict:

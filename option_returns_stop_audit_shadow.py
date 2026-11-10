@@ -205,24 +205,29 @@ def main() -> int:
 
     load_dotenv(root / ".env")
     sys.path.insert(0, str(root))
-    from dhan_auth import resolve_access_token
+    from core import market_data
 
-    client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
-    token = resolve_access_token(
-        project_root=root,
-        client_id=client_id,
-        env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
-    )
-    if not client_id or not token:
-        print("Dhan authentication could not be resolved locally. No credentials were displayed.")
-        return 3
+    upstox = market_data.upstox_only()                      # Dhan plan expired (3 Nov 2026): option candles come from Upstox
+    headers: dict[str, str] = {}
+    if not upstox:
+        from dhan_auth import resolve_access_token
 
-    headers = {
-        "access-token": token,
-        "client-id": client_id,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+        client_id = os.getenv("DHAN_CLIENT_ID", "").strip()
+        token = resolve_access_token(
+            project_root=root,
+            client_id=client_id,
+            env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip(),
+        )
+        if not client_id or not token:
+            print("Dhan authentication could not be resolved locally. No credentials were displayed.")
+            return 3
+
+        headers = {
+            "access-token": token,
+            "client-id": client_id,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
     session = requests.Session()
     last_call = [0.0]
     cache: dict[str, list[dict[str, Any]]] = {}
@@ -234,6 +239,17 @@ def main() -> int:
         key = str(security_id)
         if key in cache:
             return cache[key]
+        if upstox:
+            data = market_data.chart_call("charts/intraday", {"securityId": key, "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5",
+                                                              "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}) or {}
+            idx = pd.to_datetime(data.get("timestamp") or [], unit="s", utc=True).tz_convert("Asia/Kolkata")
+            candles = [{"minute": int(ts.hour * 60 + ts.minute), "time": ts.strftime("%H:%M"), "open": float(op), "high": float(hi), "low": float(lo), "close": float(cl)}
+                       for ts, op, hi, lo, cl in zip(idx, data.get("open", []), data.get("high", []), data.get("low", []), data.get("close", [])) if ts.date().isoformat() == day]
+            candles.sort(key=lambda c: c["minute"])
+            cache[key] = candles
+            if candles:
+                fetched_contracts += 1
+            return candles
         for attempt in range(4):
             time.sleep(max(0.0, RATE_SLEEP - (time.time() - last_call[0])))
             last_call[0] = time.time()

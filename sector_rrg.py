@@ -93,18 +93,26 @@ def fetch_daily(root: Path = ROOT, days: int = 150) -> dict[str, dict[str, float
     from dotenv import load_dotenv
 
     load_dotenv(root / ".env")
-    from dhan_auth import resolve_access_token
+    from core import market_data
 
-    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
-    token = resolve_access_token(project_root=root, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
-    headers = {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
+    upstox = market_data.upstox_only()                      # Dhan plan expired (3 Nov 2026): index history comes from Upstox
+    headers: dict[str, str] = {}
+    if not upstox:
+        from dhan_auth import resolve_access_token
+
+        cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+        token = resolve_access_token(project_root=root, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+        headers = {"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}
     today = datetime.now(IST).date()
     out: dict[str, dict[str, float]] = {}
     for name, sid in INDICES.items():
-        r = requests.post("https://api.dhan.co/v2/charts/historical", headers=headers, timeout=30, json={
-            "securityId": str(sid), "exchangeSegment": "IDX_I", "instrument": "INDEX", "expiryCode": 0, "oi": False,
-            "fromDate": (today - timedelta(days=days)).isoformat(), "toDate": (today + timedelta(days=1)).isoformat()})
-        d = r.json() if r.status_code == 200 else {}
+        body = {"securityId": str(sid), "exchangeSegment": "IDX_I", "instrument": "INDEX", "expiryCode": 0, "oi": False,
+                "fromDate": (today - timedelta(days=days)).isoformat(), "toDate": (today + timedelta(days=1)).isoformat()}
+        if upstox:
+            d = market_data.chart_call("charts/historical", body) or {}
+        else:
+            r = requests.post("https://api.dhan.co/v2/charts/historical", headers=headers, timeout=30, json=body)
+            d = r.json() if r.status_code == 200 else {}
         out[name] = {str(datetime.fromtimestamp(int(t), IST).date()): float(c) for t, c in zip(d.get("timestamp") or [], d.get("close") or [])}
         time.sleep(0.4)
     return out

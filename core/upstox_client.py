@@ -35,6 +35,8 @@ INDEX_KEYS = {
     "442": "NSE_INDEX|NIFTY MID SELECT", "38": "NSE_INDEX|Nifty Next 50", "29": "NSE_INDEX|Nifty IT", "14": "NSE_INDEX|Nifty Auto",
     "32": "NSE_INDEX|Nifty Pharma", "28": "NSE_INDEX|Nifty FMCG", "31": "NSE_INDEX|Nifty Metal", "33": "NSE_INDEX|Nifty PSU Bank",
     "34": "NSE_INDEX|Nifty Realty", "42": "NSE_INDEX|Nifty Energy", "19": "NSE_INDEX|Nifty 500",
+    "43": "NSE_INDEX|Nifty Infra", "30": "NSE_INDEX|Nifty Media", "40": "NSE_INDEX|Nifty Consumption", "41": "NSE_INDEX|Nifty PSE",
+    "37": "NSE_INDEX|NIFTY MIDCAP 100", "22": "NSE_INDEX|NIFTY SMLCAP 50", "51": "BSE_INDEX|SENSEX",
 }
 _SEGMENT_TO_MASTER = {"NSE_EQ": "NSE_EQ", "NSE_FNO": "NSE_FO"}
 

@@ -82,6 +82,10 @@ def get_state(now: datetime | None = None, path: Path = STATE_PATH) -> dict[str,
 
 def broker_check() -> dict[str, Any]:
     """Read-only Dhan check (profile + fund limits). Never returns the token."""
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026); the Upstox token is market-data only, so no broker is connected and LIVE stays refused
+        return {"connected": False, "error": "NO_BROKER_CONNECTED_UPSTOX_DATA_ONLY"}
     try:
         import requests
         from dotenv import load_dotenv

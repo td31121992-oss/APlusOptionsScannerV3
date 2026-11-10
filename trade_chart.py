@@ -64,21 +64,25 @@ def _candles(security_id: int, segment: str, instrument: str, day: str) -> list[
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
-    from dhan_auth import resolve_access_token
-
-    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
-    token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+    from core import market_data
     # Start the window at 09:00, before the open: Dhan drops the first minute when it starts exactly at the open, and the first candle then loses the real open and low.
     from datetime import date as _date, timedelta as _td
 
     next_day = (_date.fromisoformat(day) + _td(days=1)).isoformat()      # a window ending on the next date also answers for yesterday
-    r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=25, json={
-        "securityId": str(int(security_id)), "exchangeSegment": segment, "instrument": instrument, "interval": "5", "oi": False,
-        "fromDate": f"{day} 09:00:00", "toDate": f"{next_day} 15:30:00"},
-        headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
-    if r.status_code != 200:
-        return []
-    d = r.json()
+    body = {"securityId": str(int(security_id)), "exchangeSegment": segment, "instrument": instrument, "interval": "5", "oi": False,
+            "fromDate": f"{day} 09:00:00", "toDate": f"{next_day} 15:30:00"}
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026)
+        d = market_data.chart_call("charts/intraday", body) or {}
+    else:
+        from dhan_auth import resolve_access_token
+
+        cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+        token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+        r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=25, json=body,
+                          headers={"access-token": token, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"})
+        if r.status_code != 200:
+            return []
+        d = r.json()
     return [{"t": int(ts) + 19800, "o": float(o), "h": float(h), "l": float(l), "c": float(c)}      # +5:30 so the chart axis shows IST
             for ts, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or [])
             if datetime.fromtimestamp(int(ts), IST).date().isoformat() == day]
@@ -91,6 +95,10 @@ def _headers() -> dict[str, str]:
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026): candles come from Upstox, no Dhan headers
+        return {}
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
@@ -108,13 +116,18 @@ def _five_history(security_id: int, day: str, timeout: float = 25) -> tuple[dict
     if hit and time.time() - hit[0] < 45:
         return hit[1]
     frm = (date.fromisoformat(day) - timedelta(days=9)).isoformat()
-    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=timeout, json={
-        "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
-        "fromDate": f"{frm} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
+    body = {"securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
+            "fromDate": f"{frm} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}
+    from core import market_data
+
+    if market_data.upstox_only():
+        d, ok = market_data.chart_call("charts/intraday", body) or {}, True
+    else:
+        r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=_headers(), timeout=timeout, json=body)
+        d, ok = (r.json() or {}) if r.status_code == 200 else {}, r.status_code == 200
     out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": [], "m": []}
     start = 0
-    if r.status_code == 200:
-        d = r.json() or {}
+    if ok:
         for i, ts in enumerate(d.get("timestamp") or []):
             when = datetime.fromtimestamp(int(ts), IST)
             if when.date().isoformat() == day and start == 0 and out["c"]:
@@ -139,12 +152,17 @@ def _daily_history(security_id: int, day: str, timeout: float = 25) -> dict[str,
     hit = _HIST.get(key)
     if hit and time.time() - hit[0] < 3600:
         return hit[1]
-    r = requests.post("https://api.dhan.co/v2/charts/historical", headers=_headers(), timeout=timeout, json={
-        "securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "expiryCode": 0, "oi": False,
-        "fromDate": (date.fromisoformat(day) - timedelta(days=260)).isoformat(), "toDate": day})
+    body = {"securityId": str(int(security_id)), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "expiryCode": 0, "oi": False,
+            "fromDate": (date.fromisoformat(day) - timedelta(days=260)).isoformat(), "toDate": day}
+    from core import market_data
+
+    if market_data.upstox_only():
+        d, ok = market_data.chart_call("charts/historical", body) or {}, True
+    else:
+        r = requests.post("https://api.dhan.co/v2/charts/historical", headers=_headers(), timeout=timeout, json=body)
+        d, ok = (r.json() or {}) if r.status_code == 200 else {}, r.status_code == 200
     out: dict[str, list[float]] = {"o": [], "h": [], "l": [], "c": [], "v": []}
-    if r.status_code == 200:
-        d = r.json() or {}
+    if ok:
         for i, ts in enumerate(d.get("timestamp") or []):
             if datetime.fromtimestamp(int(ts), IST).date().isoformat() >= day:
                 continue
