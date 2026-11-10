@@ -66,3 +66,40 @@ class EnrichTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExitVariantTests(unittest.TestCase):
+    def trade(self, **kw):
+        return trade(quantity=100, gross_pnl=0, net_pnl=-214, **kw)
+
+    def test_wide_stop_exits_at_minus_25_percent_and_pays_the_cost(self):
+        tk = ticks((T0 + 10, 10.0, 10.1), (T0 + 100, 8.0, 8.1), (T0 + 200, 7.4, 7.5), (T0 + 300, 12.0, 12.1))
+        out = dt.exit_variants(self.trade(), tk)
+        self.assertAlmostEqual(out["dx_x_wide25"], (7.4 - 10.0) * 100 - 214, places=2)          # first tick at or below 7.5 is 7.4
+
+    def test_late_trail_keeps_most_of_a_big_gain_and_runs_to_the_close_without_it(self):
+        tk = ticks((T0 + 10, 10.0, 10.1), (T0 + 100, 14.0, 14.1), (T0 + 200, 11.0, 11.1), (T0 + 300, 12.0, 12.1))
+        out = dt.exit_variants(self.trade(), tk)
+        self.assertAlmostEqual(out["dx_x_wide25_t30g30"], (11.0 - 10.0) * 100 - 214, places=2)  # trail floor = 10 + 4 * 0.7 = 12.8, hit by 11.0
+        self.assertAlmostEqual(out["dx_x_wide25"], (12.0 - 10.0) * 100 - 214, places=2)         # no trail: held to the last tick
+
+    def test_no_ticks_gives_none_for_every_variant(self):
+        self.assertEqual(set(dt.exit_variants(self.trade(), None).values()), {None})
+
+
+class ExitVariantReportTests(unittest.TestCase):
+    def test_rows_are_per_day_and_rewriting_a_day_keeps_the_others(self):
+        import trade_archive as ta
+
+        rows_a = ta.exit_variant_rows([{"_day": "2026-11-11", "net_pnl": -100, "dx_x_wide25": 50, "dx_x_wide25_t30g30": None, "dx_x_wide25_t30g40": None},
+                                       {"_day": "2026-11-11", "net_pnl": 20, "dx_x_wide25": 10}])
+        self.assertEqual(rows_a, [["2026-11-11", "dx_x_wide25", 2, -80.0, 60.0]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "exit_variants.csv"
+            ta.write_exit_variants(rows_a, path)
+            ta.write_exit_variants([["2026-11-12", "dx_x_wide25", 1, 5.0, 9.0]], path)
+            ta.write_exit_variants([["2026-11-11", "dx_x_wide25", 2, -80.0, 70.0]], path)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 3)                                                     # header + one row per day
+            self.assertIn("2026-11-11,dx_x_wide25,2,-80.0,70.0", lines)
+            self.assertIn("Forward only", ta.render_exit_variants(path))

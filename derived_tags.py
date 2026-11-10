@@ -7,6 +7,10 @@ chosen from:
     dx_mom5_block    five minutes after the entry signal the option was NOT at or above the entry price, or the trade was already closed by then (it would not have been taken).
                      Worked out from the option ticks the recorder saved in data/option_ticks/<day>/; None when no ticks exist for the contract.
     dx_would_block   either of the two (the "both" filter)
+    dx_x_wide25 / dx_x_wide25_t30g30 / dx_x_wide25_t30g40
+                     net P&L (Rs, after the trade's own round-trip cost) the trade WOULD have made under an alternative exit ladder, replayed tick by tick from the recorded option
+                     ticks (ladder_search.py, 10 Nov 2026): a -25% initial stop with no break-even step and no trail (wide25), or with a late trail that starts at +30% and gives back
+                     at most 30% / 40% of the peak gain. The live ladder is not changed; trade_archive.py totals these against the real result, forward from 10 Nov.
 
 Nothing here blocks anything; shadow_scoreboard.py lists them as rules ("would block") and the registry date gives the forward-only evidence.
 """
@@ -17,6 +21,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from entry_filter_replay import load_ticks, seconds_of
+from ladder_search import ladder_exit
 
 ROOT = Path(__file__).resolve().parent
 SPREAD_LIMIT = 1.0                                           # percent
@@ -52,11 +57,32 @@ def momentum_block(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float,
     return upto[-1][1] < entry
 
 
+EXIT_VARIANTS: dict[str, tuple[float, float | None, tuple[float, float] | None]] = {          # name -> (initial stop %, break-even trigger %, trail (start %, give-back share))
+    "dx_x_wide25": (25.0, None, None),
+    "dx_x_wide25_t30g30": (25.0, None, (30.0, 0.30)),
+    "dx_x_wide25_t30g40": (25.0, None, (30.0, 0.40)),
+}
+
+
+def exit_variants(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, float]] | None) -> dict[str, float | None]:
+    """Rs the trade would have made under each alternative ladder, or None for each when the ticks cannot say."""
+    entry, qty, t0 = _f(trade.get("entry_price")), _f(trade.get("quantity")), seconds_of(trade.get("entry_time"))
+    if not ticks or not entry or entry <= 0 or not qty or qty <= 0 or t0 is None:
+        return {name: None for name in EXIT_VARIANTS}
+    path = [(sec, ltp) for sec, ltp, _ in ticks if sec >= t0]
+    if len(path) < 3:
+        return {name: None for name in EXIT_VARIANTS}
+    gross, net = _f(trade.get("gross_pnl")), _f(trade.get("net_pnl"))
+    cost = gross - net if gross is not None and net is not None else 214.0
+    return {name: round((ladder_exit(entry, path, stop, be, trail) - entry) * qty - cost, 2) for name, (stop, be, trail) in EXIT_VARIANTS.items()}
+
+
 def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     day = str(trade.get("entry_time") or "")[:10]
     wide = spread_wide(trade)
-    block = momentum_block(trade, load_ticks(str(trade.get("option_security_id")), day, root) if day else None)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block}
+    ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
+    block = momentum_block(trade, ticks)
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out

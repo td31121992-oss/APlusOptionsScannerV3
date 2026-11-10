@@ -159,6 +159,58 @@ def write_rule_history(day: str, gates: Sequence[Mapping[str, Any]], path: Path)
         w.writerows(rule_history_rows(day, gates))
 
 
+EXIT_HEADER = ["day", "variant", "trades", "real_net", "variant_net"]
+FORWARD_FROM = "2026-11-10"                                  # exit variants were added on this date; "forward" results count trades entered after it
+
+
+def exit_variant_rows(trades: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
+    """One row per (day, variant): trades that have the variant, their real net and the net under the alternative exit ladder."""
+    import derived_tags
+
+    out: list[list[Any]] = []
+    for day in sorted({str(t.get("_day") or _day(t)) for t in trades}):
+        today = [t for t in trades if str(t.get("_day") or _day(t)) == day]
+        for name in derived_tags.EXIT_VARIANTS:
+            have = [t for t in today if _f(t.get(name)) is not None and _f(t.get("net_pnl")) is not None]
+            if have:
+                out.append([day, name, len(have), round(sum(float(t["net_pnl"]) for t in have), 2), round(sum(float(t[name]) for t in have), 2)])
+    return out
+
+
+def write_exit_variants(rows: Sequence[Sequence[Any]], path: Path) -> None:
+    """Replace the days present in `rows` (re-running a day is safe) and keep every other day as it was."""
+    days = {str(r[0]) for r in rows}
+    keep: list[list[str]] = []
+    if path.exists():
+        with path.open(encoding="utf-8", newline="") as h:
+            keep = [r for r in csv.reader(h) if r and r[0] not in days and r[0] != "day"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as h:
+        w = csv.writer(h)
+        w.writerow(EXIT_HEADER)
+        w.writerows(sorted(keep + [list(map(str, r)) for r in rows], key=lambda r: (r[0], r[1])))
+
+
+def render_exit_variants(path: Path) -> str:
+    """Totals per variant: forward-only (days after FORWARD_FROM) and over every day that has ticks."""
+    if not path.exists():
+        return ""
+    with path.open(encoding="utf-8", newline="") as h:
+        rows = [r for r in csv.DictReader(h)]
+    lines = ["# Exit-ladder variants vs the live ladder (derived from recorded ticks; the live ladder is unchanged)", ""]
+    for title, sel in (("Forward only (trades entered after " + FORWARD_FROM + ")", [r for r in rows if r["day"] > FORWARD_FROM]), ("All days with ticks (hindsight)", rows)):
+        lines += [f"## {title}", "", "| Variant | Days | Trades | Live net Rs | Variant net Rs | Change Rs |", "|---|---|---|---|---|---|"]
+        for name in sorted({r["variant"] for r in rows}):
+            v = [r for r in sel if r["variant"] == name]
+            if v:
+                real, var = sum(float(r["real_net"]) for r in v), sum(float(r["variant_net"]) for r in v)
+                lines.append(f"| {name} | {len(v)} | {sum(int(r['trades']) for r in v)} | {real:,.0f} | {var:,.0f} | {var - real:+,.0f} |")
+        if len(lines) and lines[-1].startswith("|---"):
+            lines.append("| (no days yet) | | | | | |")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def check_day(day: str, history: Sequence[Mapping[str, Any]], root: Path = ROOT) -> tuple[list[dict[str, Any]], list[str]]:
     trades = trades_for(day, history)
     folder = root / "data" / "trade_archive"
@@ -194,7 +246,10 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
             import derived_tags
 
             derived_tags.enrich(trades, root)
-            keep = {t["paper_trade_id"]: {k: t.get(k) for k in ("dx_spread_wide", "dx_mom5_block", "dx_would_block")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}
+            xrows = exit_variant_rows(trades)
+            write_exit_variants(xrows, root / "data" / "trade_archive" / "exit_variants.csv")
+            (root / "data" / "trade_archive" / "exit_variants.md").write_text(render_exit_variants(root / "data" / "trade_archive" / "exit_variants.csv"), encoding="utf-8")
+            keep = {t["paper_trade_id"]: {k: t.get(k) for k in ("dx_spread_wide", "dx_mom5_block", "dx_would_block", "dx_x_wide25", "dx_x_wide25_t30g30", "dx_x_wide25_t30g40")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}
             if keep:                                       # keep the day's derived tags: the tick files they come from may be cleaned up later
                 (root / "data" / "trade_archive" / f"derived_{last}.json").write_text(json.dumps(keep), encoding="utf-8")
             write_rule_history(last, shadow_scoreboard.gate_rows(trades), root / "data" / "trade_archive" / "rule_history.csv")
