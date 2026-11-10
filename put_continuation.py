@@ -145,20 +145,25 @@ def option_outcome(symbol: str, minute: int, price: float, day: str, fetch: Call
 
 
 def _fetch_option_bars(security_id: int, day: str) -> list[tuple[int, float, float, float, float]]:
-    import requests
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
-    from dhan_auth import resolve_access_token
+    from core import market_data
 
-    cid = os.getenv("DHAN_CLIENT_ID", "").strip()
-    tok = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
-    time.sleep(0.35)
-    r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=30,
-                      headers={"access-token": tok, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"},
-                      json={"securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5", "oi": False,
-                            "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
-    d = r.json() if r.status_code == 200 else {}
+    body = {"securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5", "oi": False,
+            "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026)
+        d = market_data.chart_call("charts/intraday", body) or {}
+    else:
+        import requests
+        from dhan_auth import resolve_access_token
+
+        cid = os.getenv("DHAN_CLIENT_ID", "").strip()
+        tok = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
+        time.sleep(0.35)
+        r = requests.post("https://api.dhan.co/v2/charts/intraday", timeout=30,
+                          headers={"access-token": tok, "client-id": cid, "Accept": "application/json", "Content-Type": "application/json"}, json=body)
+        d = r.json() if r.status_code == 200 else {}
     out = []
     for t, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or []):
         x = datetime.fromtimestamp(int(t), IST)

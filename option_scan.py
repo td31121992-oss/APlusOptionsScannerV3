@@ -53,6 +53,17 @@ def fetch_bars(security_id: int, day: str, tries: int = 4) -> list[tuple[int, fl
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env")
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026): option candles come from Upstox
+        d = market_data.chart_call("charts/intraday", {"securityId": str(security_id), "exchangeSegment": "NSE_FNO", "instrument": "OPTSTK", "interval": "5",
+                                                      "fromDate": f"{day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}) or {}
+        out = []
+        for t, o, h, l, c in zip(d.get("timestamp") or [], d.get("open") or [], d.get("high") or [], d.get("low") or [], d.get("close") or []):
+            x = datetime.fromtimestamp(int(t), IST)
+            if x.date().isoformat() == day:
+                out.append((x.hour * 60 + x.minute, float(o), float(h), float(l), float(c)))
+        return out
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()

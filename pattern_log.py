@@ -217,6 +217,10 @@ def _headers(root: Path) -> dict[str, str]:
     from dotenv import load_dotenv
 
     load_dotenv(root / ".env")
+    from core import market_data
+
+    if market_data.upstox_only():                           # Dhan plan expired (3 Nov 2026): candles come from Upstox, no Dhan headers needed
+        return {}
     from dhan_auth import resolve_access_token
 
     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
@@ -226,10 +230,13 @@ def _headers(root: Path) -> dict[str, str]:
 
 def _fetch(sid: int, day: str, headers: dict[str, str], frm: str | None = None) -> dict[str, list[float]]:
     import requests
+    from core import market_data
 
-    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=headers, timeout=30, json={
-        "securityId": str(sid), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
-        "fromDate": f"{frm or day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"})
+    body = {"securityId": str(sid), "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "interval": "5", "oi": False,
+            "fromDate": f"{frm or day} 09:00:00", "toDate": f"{(date.fromisoformat(day) + timedelta(days=1)).isoformat()} 15:30:00"}
+    if market_data.upstox_only():
+        return market_data.chart_call("charts/intraday", body) or {}
+    r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=headers, timeout=30, json=body)
     if r.status_code != 200:
         return {}
     return r.json() or {}

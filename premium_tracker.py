@@ -78,6 +78,15 @@ def compute(day: str | None = None, root: Path = ROOT, quote: Callable[[str, lis
     import pandas as pd
 
     day = day or date.today().isoformat()
+    from core import market_data
+
+    if quote is None and market_data.upstox_only():         # Dhan plan expired (3 Nov 2026): quotes come from Upstox, already in the Dhan shape
+        def quote(segment: str, ids: list[int]) -> dict[str, Any]:                     # noqa: F811
+            out: dict[str, Any] = {}
+            for i in range(0, len(ids), 500):
+                out.update(market_data.upstox_quote(segment, ids[i:i + 500]))
+            return out
+
     if quote is None:
         import requests
         from dotenv import load_dotenv
