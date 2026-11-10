@@ -170,7 +170,7 @@ def exit_variant_rows(trades: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
     out: list[list[Any]] = []
     for day in sorted({str(t.get("_day") or _day(t)) for t in trades}):
         today = [t for t in trades if str(t.get("_day") or _day(t)) == day]
-        for name in derived_tags.EXIT_VARIANTS:
+        for name in derived_tags.FORWARD_VARIANTS:
             have = [t for t in today if _f(t.get(name)) is not None and _f(t.get("net_pnl")) is not None]
             if have:
                 out.append([day, name, len(have), round(sum(float(t["net_pnl"]) for t in have), 2), round(sum(float(t[name]) for t in have), 2)])
@@ -197,7 +197,7 @@ def render_exit_variants(path: Path) -> str:
         return ""
     with path.open(encoding="utf-8", newline="") as h:
         rows = [r for r in csv.DictReader(h)]
-    lines = ["# Exit-ladder variants vs the live ladder (derived from recorded ticks; the live ladder is unchanged)", ""]
+    lines = ["# Alternative exit ladders and the 5-minute wait-then-buy entry rule vs the live system (derived; nothing live is changed)", ""]
     for title, sel in (("Forward only (trades entered after " + FORWARD_FROM + ")", [r for r in rows if r["day"] > FORWARD_FROM]), ("All days with ticks (hindsight)", rows)):
         lines += [f"## {title}", "", "| Variant | Days | Trades | Live net Rs | Variant net Rs | Change Rs |", "|---|---|---|---|---|---|"]
         for name in sorted({r["variant"] for r in rows}):
@@ -249,7 +249,7 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
             xrows = exit_variant_rows(trades)
             write_exit_variants(xrows, root / "data" / "trade_archive" / "exit_variants.csv")
             (root / "data" / "trade_archive" / "exit_variants.md").write_text(render_exit_variants(root / "data" / "trade_archive" / "exit_variants.csv"), encoding="utf-8")
-            keep = {t["paper_trade_id"]: {k: t.get(k) for k in ("dx_spread_wide", "dx_mom5_block", "dx_would_block", "dx_x_wide25", "dx_x_wide25_t30g30", "dx_x_wide25_t30g40")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}
+            keep = {t["paper_trade_id"]: {k: v for k, v in t.items() if k.startswith("dx_")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}
             if keep:                                       # keep the day's derived tags: the tick files they come from may be cleaned up later
                 (root / "data" / "trade_archive" / f"derived_{last}.json").write_text(json.dumps(keep), encoding="utf-8")
             write_rule_history(last, shadow_scoreboard.gate_rows(trades), root / "data" / "trade_archive" / "rule_history.csv")

@@ -119,6 +119,14 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Spread cap, all history (no entry when the option spread at entry is over 1%)  [derived]": ("-", lambda t: _truthy(t.get("dx_spread_wide"))),
     "Momentum confirmation (not at / above entry price 5 minutes after the signal, or closed by then)  [derived from recorded ticks]": ("-", lambda t: _truthy(t.get("dx_mom5_block"))),
     "Spread cap + momentum confirmation together  [derived]": ("-", lambda t: _truthy(t.get("dx_would_block"))),
+    "Observe till 09:45, then top-2 gaining / losing sectors only (calls in gaining, puts in losing; ranked since the open)  [derived]": ("-", lambda t: _truthy(t.get("dx_s945_block"))),
+    "  ... and only the 5 strongest movers of that sector on the trade's side  [derived]": ("-", lambda t: _truthy(t.get("dx_s945_top5_block"))),
+    "  ... and only the 3 strongest movers of that sector on the trade's side  [derived]": ("-", lambda t: _truthy(t.get("dx_s945_top3_block"))),
+    "  ... sector must also be moving the right way (gaining sector up, losing sector down)  [derived]": ("-", lambda t: _truthy(t.get("dx_s945_abs_block"))),
+    "Observe till 09:45, top-2 sectors ranked since the previous close  [derived]": ("-", lambda t: _truthy(t.get("dx_s945p_block"))),
+    "  ... and only the 5 strongest movers (previous-close ranking)  [derived]": ("-", lambda t: _truthy(t.get("dx_s945p_top5_block"))),
+    "Wait 11+ minutes after the stock's first entry-ready signal (entered 10 minutes or sooner = would block)  [derived]": ("-", lambda t: _truthy(t.get("dx_lag_early_block"))),
+    "Enter only 11-30 minutes after the first entry-ready signal  [derived]": ("-", lambda t: _truthy(t.get("dx_lag_window_block"))),
     "Fewer-better combo (any of: spread over 1%, clean score under 96, 6th+ entry of the day)": ("-", lambda t: None if _truthy(t.get("gs_q_pass")) is None else not _truthy(t.get("gs_q_pass"))),
 }
 

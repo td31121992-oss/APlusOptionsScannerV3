@@ -12,6 +12,18 @@ chosen from:
                      ticks (ladder_search.py, 10 Nov 2026): a -25% initial stop with no break-even step and no trail (wide25), or with a late trail that starts at +30% and gives back
                      at most 30% / 40% of the peak gain. The live ladder is not changed; trade_archive.py totals these against the real result, forward from 10 Nov.
 
+    dx_e_wait5       net P&L (Rs) under "wait 5 minutes after the signal, buy at the ask only if the option is at or above the signal price" (0.0 = the rule would not have taken it).
+                     Taken from the journal's live record (opt5 / opt5_ask, set by paper_trade_journal.record_opt5) when present, otherwise from the recorded ticks.
+    dx_s945_block / dx_s945_top5_block / dx_s945_top3_block / dx_s945_abs_block / dx_s945p_block / dx_s945p_top5_block
+                     the "observe until 09:45" strategy (sector_rank945.py, 10 Nov 2026): True = the strategy would NOT have taken the trade (before 09:45, wrong side for its sector, or not
+                     among the strongest N movers). s945 = sectors ranked by the move since the 09:15 open, s945p = since the previous close; top5 / top3 = only the strongest 5 / 3 movers of the
+                     sector on the trade's side; abs = the sector must also be moving the right way. None when the day has no candle file yet.
+
+    dx_lag_min / dx_lag_early_block / dx_lag_window_block
+                     minutes from the stock's FIRST entry-ready signal of the day (data/missed_opportunities/<day>/signals.csv, column first_ready) to this trade's entry. 10 Nov 2026 study of
+                     311 trades: entered within 10 minutes of the first signal lost (-Rs 91,700 over 160 trades), 11-30 minutes after made +Rs 34,123 (84 trades), later lost a little.
+                     early_block = entered 10 minutes or less after the first signal; window_block = not entered 11-30 minutes after it. None when there is no signal row for the trade.
+
 Nothing here blocks anything; shadow_scoreboard.py lists them as rules ("would block") and the registry date gives the forward-only evidence.
 """
 
@@ -22,6 +34,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 from entry_filter_replay import load_ticks, seconds_of
 from ladder_search import ladder_exit
+from sector_rank945 import allowed, day_picks, sector_labels
 
 ROOT = Path(__file__).resolve().parent
 SPREAD_LIMIT = 1.0                                           # percent
@@ -77,12 +90,101 @@ def exit_variants(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, 
     return {name: round((ladder_exit(entry, path, stop, be, trail) - entry) * qty - cost, 2) for name, (stop, be, trail) in EXIT_VARIANTS.items()}
 
 
+_LABELS: dict[str, dict[str, str]] = {}
+_SIGNALS: dict[tuple[str, str], dict[tuple[str, str], int]] = {}
+LAG_EARLY_MAX = 10                                           # minutes: entered this soon after the first signal counts as early
+LAG_WINDOW = (11, 30)                                        # minutes: the window that was profitable in the 10 Nov study
+
+
+def first_ready_minutes(day: str, root: Path = ROOT) -> dict[tuple[str, str], int]:
+    """(SYMBOL, BULLISH|BEARISH) -> minute of day of the first entry-ready signal, from the day's signals.csv; empty when the file is not there (yet)."""
+    key = (str(root), day)
+    if key in _SIGNALS:
+        return _SIGNALS[key]
+    out: dict[tuple[str, str], int] = {}
+    try:
+        import csv
+
+        with (root / "data" / "missed_opportunities" / day / "signals.csv").open(encoding="utf-8", newline="") as h:
+            for row in csv.DictReader(h):
+                try:
+                    hh, mm = str(row["first_ready"]).split(":")[:2]
+                    k = (str(row["symbol"]).upper(), str(row["direction"]).upper())
+                    out[k] = min(out.get(k, 99999), int(hh) * 60 + int(mm))
+                except (KeyError, ValueError):
+                    continue
+    except OSError:
+        return {}                                             # not written yet: do not cache, a later run may find it
+    _SIGNALS[key] = out
+    return out
+
+
+def lag_tags(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
+    none = {"dx_lag_min": None, "dx_lag_early_block": None, "dx_lag_window_block": None}
+    day, hhmm = str(trade.get("entry_time") or "")[:10], str(trade.get("entry_time") or "")[11:16]
+    direction = str(trade.get("direction") or "").upper() or {"CE": "BULLISH", "PE": "BEARISH"}.get(str(trade.get("option_type") or "").upper(), "")
+    try:
+        entered = int(hhmm[:2]) * 60 + int(hhmm[3:5])
+    except ValueError:
+        return none
+    first = first_ready_minutes(day, root).get((str(trade.get("symbol") or "").upper(), direction)) if day else None
+    if first is None or entered < first:
+        return none
+    lag = entered - first
+    return {"dx_lag_min": lag, "dx_lag_early_block": lag <= LAG_EARLY_MAX, "dx_lag_window_block": not (LAG_WINDOW[0] <= lag <= LAG_WINDOW[1])}
+
+
+def sector_tags(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, bool | None]:
+    day, hhmm = str(trade.get("entry_time") or "")[:10], str(trade.get("entry_time") or "")[11:16]
+    names = ("dx_s945_block", "dx_s945_top5_block", "dx_s945_top3_block", "dx_s945_abs_block", "dx_s945p_block", "dx_s945p_top5_block")
+    try:
+        minute = int(hhmm[:2]) * 60 + int(hhmm[3:5])
+    except ValueError:
+        return {n: None for n in names}
+    labels = _LABELS.setdefault(str(root), sector_labels(root))
+    picks = day_picks(day, root, labels) if day else {}
+    sym, side = str(trade.get("symbol") or ""), str(trade.get("option_type") or "")
+
+    def block(basis: str, top_n: int | None, absolute: bool = False) -> bool | None:
+        ok = allowed(sym, side, minute, picks.get(basis), labels, top_n, absolute)
+        return None if ok is None else not ok
+
+    return dict(zip(names, (block("open", None), block("open", 5), block("open", 3), block("open", None, True), block("prev", None), block("prev", 5))))
+
+
+FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5",)
+
+
+def wait5_pnl(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, float]] | None, wait: int = WAIT_MINUTES) -> float | None:
+    """Rs the trade would have made under 'wait 5 minutes after the signal, buy at the ask only if the option is at or above the signal price, sell where the trade really ended':
+    0.0 when the rule would not have taken it, None when that cannot be told. Uses the journal's own live record (opt5 / opt5_ask) when there is one, else the recorded ticks."""
+    entry, qty, exit_px = _f(trade.get("entry_price")), _f(trade.get("quantity")), _f(trade.get("exit_price"))
+    if not entry or not qty or not exit_px or entry <= 0 or qty <= 0 or exit_px <= 0:
+        return None
+    gross, net = _f(trade.get("gross_pnl")), _f(trade.get("net_pnl"))
+    cost = gross - net if gross is not None and net is not None else 214.0
+    live = str(trade.get("opt5") or "").upper()
+    if live == "FAILED":
+        return 0.0
+    if live == "HELD":
+        ask = _f(trade.get("opt5_ask")) or _f(trade.get("opt5_price"))
+        return None if not ask else round((exit_px - ask) * qty - cost, 2)
+    block = momentum_block(trade, ticks, wait)
+    if block is None:
+        return None
+    if block:
+        return 0.0
+    t0 = seconds_of(trade.get("entry_time"))
+    after = [x for x in (ticks or []) if t0 is not None and x[0] >= t0 + wait * 60]
+    return round((exit_px - after[0][2]) * qty - cost, 2) if after else None
+
+
 def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     day = str(trade.get("entry_time") or "")[:10]
     wide = spread_wide(trade)
     ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
     block = momentum_block(trade, ticks)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks)}
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out

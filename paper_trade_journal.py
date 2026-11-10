@@ -95,6 +95,24 @@ def user_ladder_floor(entry: float, high: float) -> float:
         return 0.0
     return entry * (1.0 + lock / 100.0)
 
+def record_opt5(trade: dict[str, Any], entry: float, price: float, when: datetime) -> None:
+    """SHADOW only (10 Nov 2026): on the first update 5 or more minutes after entry, record the OPTION's price, the ask and whether the option is at or above our entry price
+    (opt5 = HELD / FAILED). It is what a 'wait 5 minutes after the signal, then buy at the ask only if the option is still at or above the signal price' rule WOULD have done.
+    Nothing reads it for a real decision; the trade is untouched. Set once per trade."""
+    try:
+        if trade.get("opt5") or entry <= 0 or price <= 0:
+            return
+        if (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds() < 300:
+            return
+        ask = float(trade.get("last_ask") or 0)
+        trade["opt5"] = "HELD" if price >= entry else "FAILED"
+        trade["opt5_price"] = round(price, 4)
+        trade["opt5_ask"] = round(ask, 4) if ask > 0 else ""
+        trade["opt5_at"] = when.isoformat()
+    except (TypeError, ValueError):
+        return
+
+
 def cost5_floor(entry: float, high: float) -> float:
     """cost5 shadow (28 Oct 2026): YOUR ladder with only its first step changed - once the best price reaches +5% the stop moves to COST (was -15%); +10% -> +3%, +20% -> +13%, +30% -> +22%, +2 per +5%.
     Why: trades whose best price was only +5% to +10% gave it all back and left at -15% (DMART, POWERGRID on 28 Oct); a tick replay of 65 trades (26-28 Oct) with this first step: -37,107 against -44,464.
@@ -569,6 +587,7 @@ class PaperTradeJournal:
             trade["position_lifecycle_status"] = "OPEN"
             self._append_option_tape(trade, when, price)
             self._record_quote_depth(trade, when, price, raw)
+            record_opt5(trade, entry, price, when)                      # SHADOW: option vs entry price 5 minutes after the signal (see record_opt5)
             prev_high = self._number(trade.get("highest_option_price"))
             high = max(prev_high, price)
             old_low = self._number(trade.get("lowest_option_price"))
