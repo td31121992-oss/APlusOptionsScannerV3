@@ -52,7 +52,7 @@ goto SESSION_CHECK
 echo [%date% %time%] PASS: shared Dhan token/preflight validation succeeded.>>"%LOG%"
 
 rem Avoid duplicate scanner.
-powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -and $_.CommandLine -match 'main\.py' -and $_.CommandLine -match '--intraday-movement' }; if($p){exit 0}else{exit 1}"
+powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -and $_.CommandLine -match 'main\.py' -and $_.CommandLine -match '--intraday-movement' }; if($p){exit 0}; try{$f=[IO.File]::Open('data\intraday_scanner.lock','Open','Read','ReadWrite'); try{[void]$f.ReadByte(); $f.Close(); exit 1}catch{$f.Close(); exit 0}}catch{exit 1}"
 if not errorlevel 1 (
     echo [%date% %time%] Scanner already running - duplicate skipped.>>"%LOG%"
     goto START_DASHBOARD
@@ -69,7 +69,7 @@ start "APlus Intraday Scanner" /min cmd /c "cd /d ""%~dp0"" && call run_intraday
 rem Verify startup. If the scanner exits immediately, retry safely instead of
 rem abandoning the day after one failed launch.
 timeout /t 25 /nobreak >nul
-powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -and $_.CommandLine -match 'main\.py' -and $_.CommandLine -match '--intraday-movement' }; if($p){exit 0}else{exit 1}"
+powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -and $_.CommandLine -match 'main\.py' -and $_.CommandLine -match '--intraday-movement' }; if($p){exit 0}; try{$f=[IO.File]::Open('data\intraday_scanner.lock','Open','Read','ReadWrite'); try{[void]$f.ReadByte(); $f.Close(); exit 1}catch{$f.Close(); exit 0}}catch{exit 1}"
 if errorlevel 1 (
     echo [%date% %time%] WARNING: scanner did not remain running. Safe recovery retry in 60 seconds.>>"%LOG%"
     timeout /t 60 /nobreak >nul

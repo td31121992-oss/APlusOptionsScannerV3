@@ -184,6 +184,14 @@ function Test-ReportFresh {
     }
 }
 
+# The scanner writes logs\scanner.log continuously from its first second (the intraday report only appears after the first cycle, ~2 minutes after launch).
+# A fresh log means a launch is under way or running, so do not start another one on top of it (a non-elevated supervisor cannot see an elevated scanner).
+function Test-ScannerLogActive {
+    $log = Join-Path $ProjectRoot "logs\scanner.log"
+    if (-not (Test-Path $log)) { return $false }
+    try { return (((Get-Date) - (Get-Item $log).LastWriteTime).TotalSeconds -le 120) } catch { return $false }
+}
+
 Write-Log "============================================================"
 Write-Log "APlus Master Self-Healing Supervisor V4 START"
 Write-Log "Trading engine untouched"
@@ -219,7 +227,7 @@ do {
     # Liveness = the scanner's own report is fresh. A scanner started by an ELEVATED task (the 2-minute
     # watchdog) is invisible to this non-elevated supervisor (its command line cannot be read), so
     # process counting alone would start a duplicate that the watchdog then force-kills.
-    if ($market -and $scannerCount -eq 0 -and $reportFresh) {
+    if ($market -and $scannerCount -eq 0 -and ($reportFresh -or (Test-ScannerLogActive))) {
 
         Write-Log "SCANNER ALIVE: report is fresh (scanner process not visible - started by an elevated task); no action"
 

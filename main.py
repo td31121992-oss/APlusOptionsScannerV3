@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from analytics.pipeline import AnalyticsPipeline
 from config import AppConfig
 from core.dhan_client import DhanClient
 from core.market_data import build_client
+from core import instance_lock
 from core.instrument_loader import InstrumentLoader
 from core.option_chain import OptionChainService
 from core.scanner import Scanner
@@ -134,6 +136,11 @@ def main() -> int:
     try:
         intraday_once = args.intraday_once or args.opening_once
         intraday_loop = args.intraday_movement or args.opening_momentum
+        if intraday_loop and not intraday_once:
+            lock_path = Path(config.reports.output_dir).parent / "intraday_scanner.lock"
+            if not instance_lock.acquire(lock_path):
+                logger.warning("Another intraday scanner instance is already running (lock %s); this duplicate launch exits.", lock_path)
+                return 0
         if intraday_once or intraday_loop:
             scanner = build_intraday_movement_scanner(config)
             settings = config.opening_momentum
