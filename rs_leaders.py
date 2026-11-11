@@ -44,7 +44,8 @@ LOG_EVERY_MIN = 30
 TOP_N = 15
 MOM_SAMPLE_S, MOM_WINDOW_S = 5.0, 15 * 60
 NIFTY_ID = 13
-SECTOR_INDEX = {"IT": 29, "Auto": 14, "Pharma/Healthcare": 32, "FMCG/Consumer": 28, "Metals": 31, "Energy/Oil & Gas": 42, "Banking/Financial Services": 27}     # our sector label -> Dhan index id (index_strip.py)
+SECTOR_INDEX = {"IT": 29, "Auto": 14, "Pharma/Healthcare": 32, "FMCG/Consumer": 28, "Metals": 31, "Energy/Oil & Gas": 42, "Banking/Financial Services": 27,
+                "Private Banks": 25, "PSU Banks": 33, "NBFC & Insurance": 27, "Capital Markets": 27, "Real Estate": 34}     # our sector label -> Dhan index id (index_strip.py)
 INDEX_IDS = [NIFTY_ID] + sorted(set(SECTOR_INDEX.values()))
 OPEN_S = 9 * 3600 + 15 * 60                         # ticks before the open are pre-open auction prices: not part of the board
 EVENT_FIELDS = ["date", "time", "symbol", "kind", "move_pct", "rs", "vs_vwap_pct", "rvol", "ltp", "market_median", "pct_down", "rs_nifty", "rs_sec", "acc2", "checks_ok", "failed",

@@ -29,6 +29,16 @@ def load_day(day: str, root: Path = ROOT) -> dict[str, dict[str, Any]]:
 
 
 def sector_labels(root: Path = ROOT) -> dict[str, str]:
+    """symbol -> sector: the map the scanner itself reads (data/reference/fno_sector_map.csv, built from NSE's official files by build_nse_sector_map.py), else the last market-watch report."""
+    import csv
+
+    try:
+        with (root / "data" / "reference" / "fno_sector_map.csv").open(encoding="utf-8-sig", newline="") as h:
+            out = {str(r.get("symbol") or "").strip().upper(): str(r.get("sector") or "").strip() for r in csv.DictReader(h) if r.get("symbol")}
+        if out:
+            return out
+    except OSError:
+        pass
     try:
         rows = json.loads((root / "data" / "reports" / "fno_market_watch_latest.json").read_text(encoding="utf-8")).get("rows", [])
     except (OSError, ValueError):

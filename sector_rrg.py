@@ -33,7 +33,10 @@ INDICES = {"NIFTY 50": 13, "BANK": 25, "FIN SERV": 27, "IT": 29, "AUTO": 14, "PH
 # our F&O sector label (market-watch "sector") -> index used for it; None = no sensible index
 SECTOR_TO_INDEX = {"IT": "IT", "Banking/Financial Services": "BANK", "Auto": "AUTO", "Pharma/Healthcare": "PHARMA", "FMCG/Consumer": "FMCG",
                    "Metals": "METAL", "Energy/Oil & Gas": "ENERGY", "Power/Utilities": "ENERGY", "Capital Goods": "INFRA",
-                   "Consumer Durables": "CONSUMPTION", "Retail": "CONSUMPTION", "Telecom/Media": "MEDIA", "Logistics/Transportation": "INFRA"}
+                   "Consumer Durables": "CONSUMPTION", "Retail": "CONSUMPTION", "Telecom/Media": "MEDIA", "Logistics/Transportation": "INFRA",
+                   # labels of the NSE-based sector map (build_nse_sector_map.py, 11 Nov 2026)
+                   "Private Banks": "BANK", "PSU Banks": "PSU BANK", "NBFC & Insurance": "FIN SERV", "Capital Markets": "FIN SERV", "Real Estate": "REALTY",
+                   "Cement/Construction Materials": "INFRA", "Construction/Infra": "INFRA", "Services": "INFRA", "Consumer Services": "CONSUMPTION"}
 
 
 def quadrant(ratio: float, momentum: float) -> str:
