@@ -34,10 +34,11 @@ if UPSTOX_ONLY:
         if float(_q.get("last_price") or 0) <= 0:
             raise RuntimeError("Upstox quote probe returned no positive price")
         print("PASS: Upstox market-quote probe succeeded (read-only).")
-        _day = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30) - timedelta(days=1))
+        _now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        # a week of completed sessions: yesterday alone has no candles after a weekend or an NSE holiday (the check failed all day on 11 Nov 2026, the day after Diwali-Balipratipada)
         _c = _up.get_intraday_candles(security_id="1333", segment="NSE_EQ", instrument="EQUITY", interval=5,
-                                      from_datetime=_day.replace(hour=9, minute=15, second=0, microsecond=0, tzinfo=None),
-                                      to_datetime=_day.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=None))
+                                      from_datetime=(_now - timedelta(days=7)).replace(hour=9, minute=15, second=0, microsecond=0, tzinfo=None),
+                                      to_datetime=(_now - timedelta(days=1)).replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=None))
         if not _c.get("timestamp"):
             raise RuntimeError("Upstox candle probe returned no candles")
         print("PASS: Upstox historical candle probe succeeded (read-only).")
