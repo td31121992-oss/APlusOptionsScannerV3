@@ -262,6 +262,15 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
                 import daily_mfe_report
 
                 print(f"daily peak-profit report: {len(daily_mfe_report.run(history, root))} sessions")
+                import exit_quality
+
+                print(f"exit quality (what the option did after each exit): {len(exit_quality.run(history, root))} trades")
+                import supervisor_facts
+
+                supervisor_facts.OUT.mkdir(parents=True, exist_ok=True)
+                facts = supervisor_facts.evening(last, root)                        # the numbers the AI Supervisor reads for its evening review
+                (supervisor_facts.OUT / f"facts_evening_{last}.json").write_text(json.dumps(facts, indent=1, default=str), encoding="utf-8")
+                print(f"supervisor facts: data/ai_supervisor/facts_evening_{last}.json")
             except Exception as exc:                       # noqa: BLE001 - must not hide the archive that was just written
                 print(f"never-in-profit record failed: {type(exc).__name__}: {str(exc)[:120]}")
     except Exception as exc:                               # noqa: BLE001

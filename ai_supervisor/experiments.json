@@ -1,0 +1,97 @@
+{
+ "pass_marks": {
+  "variants": "at least 10 forward sessions and 100 trades, total change > 0 and better than live on at least 60% of days",
+  "gates": "at least 30 blocked trades over 8+ days, forward change if enforced > 0 and it helped on at least 60% of the blocked days",
+  "rule": "READY only means the mark is met. Nothing goes live without the user's explicit yes."
+ },
+ "experiments": [
+  {
+   "id": "V01",
+   "kind": "variant",
+   "key": "dx_x_wide25",
+   "name": "Wide stop (-25%), no early profit locks",
+   "registered": "2026-11-10",
+   "note": "Replay on 268 trades (26 Oct - 9 Nov): +Rs 38k vs -Rs 32k live. First forward day (11 Nov) went against it."
+  },
+  {
+   "id": "V02",
+   "kind": "variant",
+   "key": "dx_x_wide25_t30g30",
+   "name": "Wide stop (-25%) with a late trail (+30% reached, give back 30%)",
+   "registered": "2026-11-10",
+   "note": "Replay +Rs 24k vs -Rs 32k live."
+  },
+  {
+   "id": "V03",
+   "kind": "variant",
+   "key": "dx_e_wait5",
+   "name": "Wait 5 minutes after the signal, buy at the ask only if the option is at / above the signal price",
+   "registered": "2026-11-10",
+   "note": "Replay +Rs 25.5k vs -Rs 24.9k live on 255 trades; unstable at other waits."
+  },
+  {
+   "id": "G01",
+   "kind": "gate",
+   "name": "Spread cap (no entry when the option spread is over 1%)",
+   "key": "Spread cap, all history (no entry when the option spread at entry is over 1%)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Spread over 1%: 276 trades, -Rs 175k; tighter: about break-even."
+  },
+  {
+   "id": "G02",
+   "kind": "gate",
+   "name": "5-minute momentum confirmation",
+   "key": "Momentum confirmation (not at / above entry price 5 minutes after the signal, or closed by then)  [derived from recorded ticks]",
+   "registered": "2026-11-09",
+   "note": "Confirmed trades +Rs 108k at real prices but only +Rs 27k after paying the later ask."
+  },
+  {
+   "id": "G03",
+   "kind": "gate",
+   "name": "Skip a quiet opening (RVOL below 1)",
+   "key": "Skip a quiet opening (the stock's first 5-minute volume below its 14-session average)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Quiet openings: 193 trades, -Rs 164k (range clearly negative)."
+  },
+  {
+   "id": "G04",
+   "kind": "gate",
+   "name": "Only stocks in play (RVOL 3x or more)",
+   "key": "Only stocks in play (first 5-minute volume at least 3x its 14-session average)  [derived]",
+   "registered": "2026-11-09",
+   "note": "64 trades, +Rs 48k, range includes zero."
+  },
+  {
+   "id": "G05",
+   "kind": "gate",
+   "name": "Wait 11+ minutes after the first entry-ready signal",
+   "key": "Wait 11+ minutes after the stock's first entry-ready signal (entered 10 minutes or sooner = would block)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Entries within 10 minutes of the first signal lost -Rs 91.7k over 160 trades."
+  },
+  {
+   "id": "G06",
+   "kind": "gate",
+   "name": "Enter only 11-30 minutes after the first signal",
+   "key": "Enter only 11-30 minutes after the first entry-ready signal  [derived]",
+   "registered": "2026-11-09",
+   "note": "The only profitable lag bucket (+Rs 34k, 84 trades)."
+  },
+  {
+   "id": "G07",
+   "kind": "gate",
+   "name": "Observe till 09:45, then the top-2 gaining / losing sectors only (NSE-corrected sectors)",
+   "key": "Observe till 09:45, then top-2 gaining / losing sectors only (calls in gaining, puts in losing; ranked since the open)  [derived]",
+   "registered": "2026-11-11",
+   "note": "With the corrected NSE sectors the replay turned negative (-Rs 24.6k, 87 trades); the earlier + result came from bad sector labels. Forward evidence restarts 12 Nov."
+  },
+  {
+   "id": "G08",
+   "kind": "gate",
+   "name": "... and only the 5 strongest movers of that sector",
+   "key": "  ... and only the 5 strongest movers of that sector on the trade's side  [derived]",
+   "registered": "2026-11-11",
+   "note": "Corrected replay -Rs 11k (67 trades)."
+  }
+ ]
+}

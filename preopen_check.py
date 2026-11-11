@@ -16,6 +16,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")      # the scheduled task does not carry the project's environment: without it the Dhan-only checks run and report "Dhan token expired" every morning (Upstox-only since 3 Nov 2026)
 import dashboard_intel as di
 
 ROOT = Path(__file__).resolve().parent
