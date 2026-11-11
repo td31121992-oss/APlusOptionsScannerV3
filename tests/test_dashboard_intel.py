@@ -246,13 +246,25 @@ if __name__ == "__main__":
 
 
 class UpstoxOnlyHealthTests(unittest.TestCase):
-    def test_dhan_token_item_says_not_used_when_dhan_is_off(self) -> None:
+    def health(self, probe_result):
         import os
 
-        with unittest.mock.patch.dict(os.environ, {"APLUS_DATA_PROVIDER": "UPSTOX"}, clear=False), tempfile.TemporaryDirectory() as tmp:
+        with unittest.mock.patch.dict(os.environ, {"APLUS_DATA_PROVIDER": "UPSTOX"}, clear=False), tempfile.TemporaryDirectory() as tmp,                 unittest.mock.patch.object(di, "upstox_probe", return_value=probe_result):
             os.environ.pop("APLUS_DHAN_FALLBACK", None)
-            _write(Path(tmp), "data/cache/dhan_access_token.json", {"expiryTime": "06/10/2026 01:43"})     # an old, expired Dhan token must not show as bad
-            result = di.health(Path(tmp), ist(2026, 11, 4, 10, 0), {"state": "OPEN"})
-        tok = next(i for i in result["items"] if i["key"] == "Dhan token")
-        self.assertEqual(tok["level"], "ok")
-        self.assertIn("Upstox", tok["value"])
+            _write(Path(tmp), "data/cache/dhan_access_token.json", {"expiryTime": "06/10/2026 01:43"})     # an old, expired Dhan token must not show at all
+            return di.health(Path(tmp), ist(2026, 11, 4, 10, 0), {"state": "OPEN"})
+
+    def test_item_is_the_upstox_token_with_its_live_check_and_no_dhan_line(self) -> None:
+        result = self.health((True, "live quote OK"))
+        keys = [i["key"] for i in result["items"]]
+        self.assertNotIn("Dhan token", keys)
+        tok = next(i for i in result["items"] if i["key"] == "Upstox token")
+        self.assertEqual((tok["level"], tok["value"]), ("ok", "live quote OK"))
+
+    def test_failed_or_missing_token_is_not_shown_as_ok(self) -> None:
+        self.assertEqual(next(i for i in self.health((False, "live quote FAILED (HTTP 401)"))["items"] if i["key"] == "Upstox token")["level"], "bad")
+        self.assertEqual(next(i for i in self.health((None, "UPSTOX_ANALYTICS_TOKEN is not set"))["items"] if i["key"] == "Upstox token")["level"], "unknown")
+
+    def test_probe_is_cached(self) -> None:
+        di._PROBE.update(at=__import__("time").time(), ok=True, why="live quote OK")
+        self.assertEqual(di.upstox_probe(), (True, "live quote OK"))                                  # no network call inside the cache window

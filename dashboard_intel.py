@@ -103,6 +103,29 @@ def market_status(now: datetime, base: Path = ROOT) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- health
+_PROBE: dict[str, Any] = {"at": 0.0, "ok": None, "why": ""}
+
+
+def upstox_probe(ttl_ok: float = 600.0, ttl_bad: float = 120.0) -> tuple[bool | None, str]:
+    """(ok, why) of one live Upstox quote, cached because the health panel refreshes often (10 minutes when it works, 2 when it does not). ok None = no token configured."""
+    now = time.time()
+    if _PROBE["ok"] is not None and now - _PROBE["at"] < (ttl_ok if _PROBE["ok"] else ttl_bad):
+        return _PROBE["ok"], _PROBE["why"]
+    try:
+        from core.upstox_client import UpstoxClient
+
+        client = UpstoxClient()
+        if not client.token:
+            return None, "UPSTOX_ANALYTICS_TOKEN is not set"
+        quote = client.get_market_quotes({"NSE_EQ": ["2885"]}).get("NSE_EQ", {}).get("2885", {})
+        ok = float(quote.get("last_price") or 0) > 0
+        res: tuple[bool | None, str] = (ok, "live quote OK" if ok else "quote returned no price")
+    except Exception as exc:                               # noqa: BLE001 - a failed probe is a health result, not an error
+        res = (False, f"live quote FAILED ({type(exc).__name__})")
+    _PROBE.update(at=now, ok=res[0], why=res[1])
+    return res
+
+
 def health(base: Path, now: datetime, market: dict[str, Any]) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     report_path = base / "data" / "reports" / "intraday_movement_latest.json"
@@ -134,7 +157,9 @@ def health(base: Path, now: datetime, market: dict[str, Any]) -> dict[str, Any]:
     cache = _read_json(base / "data" / "cache" / "dhan_access_token.json") or {}
     expiry = _parse_dt(cache.get("expiryTime"))
     if os.getenv("APLUS_DATA_PROVIDER", "").strip().upper() == "UPSTOX" and os.getenv("APLUS_DHAN_FALLBACK", "").strip().lower() not in {"1", "true", "yes", "on"}:
-        items.append({"key": "Dhan token", "level": "ok", "value": "not used (Upstox only)", "detail": "the Dhan plan expired on 3 Nov 2026"})
+        ok, why = upstox_probe()                           # Upstox is the only data source since 3 Nov 2026: test its token with one live quote (cached)
+        items.append({"key": "Upstox token", "level": "unknown" if ok is None else ("ok" if ok else "bad"), "value": why,
+                      "detail": "Upstox analytics token (market data); Dhan is no longer used"})
     elif expiry:
         hours = (expiry - now).total_seconds() / 3600
         items.append({"key": "Dhan token", "level": "bad" if hours <= 0 else ("warn" if hours < 6 else "ok"),
