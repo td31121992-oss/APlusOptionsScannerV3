@@ -3,7 +3,10 @@
 A review (data/ai_supervisor/review_<kind>_<day>.md) ends with a section "## Telegram summary" of a few lines. This sends that section, through the same CAlphaTrader sender as the 09:10 health message.
 Set APLUS_SUPERVISOR_TELEGRAM=0 in .env to switch the message off (the review file is still written).
 
-    python supervisor_notify.py data/ai_supervisor/review_evening_2026-11-11.md [--dry-run]
+    python supervisor_notify.py data/ai_supervisor/review_evening_2026-11-11.md [--dry-run] [--force]
+
+The review is checked against its facts first (review_check.py). If it fails the check nothing is sent and the problems are printed (exit code 3);
+--force sends it anyway with a warning line.
 """
 
 from __future__ import annotations
@@ -35,10 +38,20 @@ def main() -> int:
         load_dotenv(ROOT / ".env")
     except ImportError:
         pass
+    import review_check
+
+    problems = review_check.check_file(Path(args[0]))
+    for p in problems:
+        print("review check problem:", p)
+    if problems and "--force" not in sys.argv:
+        print(f"REVIEW CHECK FAILED ({len(problems)} problem(s)): fix the review, then run this again. After two attempts add --force to send it with a warning.")
+        return 3
     text = summary_of(Path(args[0]).read_text(encoding="utf-8"))
     if not text:
         print("no '## Telegram summary' section found; nothing sent")
         return 1
+    if problems:
+        text += f"\n(review check: {len(problems)} problem(s) not fixed: {'; '.join(problems)[:300]})"
     if "--dry-run" in sys.argv:
         print(text)
         return 0

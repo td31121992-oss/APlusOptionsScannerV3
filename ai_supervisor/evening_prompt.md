@@ -27,4 +27,5 @@ research disciplined. You are a reviewer, not a trader: you never change anythin
    - `## Open items`: items carried from the previous review that are still open, and new ones.
    - `## Telegram summary`: at most 8 short lines: verdict, trades and net, the one most important finding, anything the user must do.
 6. Run `.venv\Scripts\python.exe supervisor_notify.py data\ai_supervisor\review_evening_<day>.md` to send the Telegram summary.
+   It first checks your review against the facts. If it prints `REVIEW CHECK FAILED` with problems, correct your review (use only the facts) and run it again; after two attempts add `--force`.
 7. Finish with a short reply: the verdict, the path of the review, and anything urgent.

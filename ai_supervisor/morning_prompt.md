@@ -24,4 +24,5 @@ anything that would break it. You are a reviewer, not a trader: you never change
    - `## Open items`: carried and new.
    - `## Telegram summary`: at most 6 short lines. Only if the verdict is CHECK or NOT READY, or something needs the user; otherwise write the single line "Morning check: READY".
 5. Run `.venv\Scripts\python.exe supervisor_notify.py data\ai_supervisor\review_morning_<day>.md`.
+   It first checks your review against the facts. If it prints `REVIEW CHECK FAILED` with problems, correct your review (use only the facts) and run it again; after two attempts add `--force`.
 6. Finish with a short reply: the verdict and anything urgent.
