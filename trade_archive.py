@@ -271,6 +271,14 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
                 facts = supervisor_facts.evening(last, root)                        # the numbers the AI Supervisor reads for its evening review
                 (supervisor_facts.OUT / f"facts_evening_{last}.json").write_text(json.dumps(facts, indent=1, default=str), encoding="utf-8")
                 print(f"supervisor facts: data/ai_supervisor/facts_evening_{last}.json")
+                import os
+
+                if os.getenv("ANTHROPIC_API_KEY") and os.getenv("APLUS_AGENT_NIGHTLY", "1").strip().lower() not in {"0", "false", "no", "off"}:
+                    import agent_judge
+                    import agent_run
+
+                    res = agent_run.run(agent_judge.ClaudeJudge(), agent_run.load_trades(root), [last], root=root)         # the shadow AI trading agent: records only, capped per day
+                    print(f"AI agent (shadow): {res}")
             except Exception as exc:                       # noqa: BLE001 - must not hide the archive that was just written
                 print(f"never-in-profit record failed: {type(exc).__name__}: {str(exc)[:120]}")
     except Exception as exc:                               # noqa: BLE001

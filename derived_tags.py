@@ -96,6 +96,26 @@ def exit_variants(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, 
 
 
 _LABELS: dict[str, dict[str, str]] = {}
+_AGENT: dict[str, dict[str, str]] = {}
+
+
+def ai_skip_tag(trade: Mapping[str, Any], root: Path = ROOT, agent: str = "claude") -> bool | None:
+    """True when the shadow AI trading agent (agent_run.py, ledger data/ai_agent/decisions.jsonl) said SKIP for this trade, False for TAKE, None when it has not judged it."""
+    key = f"{root}|{agent}"
+    if key not in _AGENT:
+        import json
+
+        decisions: dict[str, str] = {}
+        try:
+            for line in (root / "data" / "ai_agent" / "decisions.jsonl").read_text(encoding="utf-8").splitlines():
+                r = json.loads(line)
+                if r.get("agent") == agent and r.get("decision") in ("TAKE", "SKIP"):
+                    decisions[str(r.get("paper_trade_id"))] = r["decision"]
+        except (OSError, ValueError):
+            pass
+        _AGENT[key] = decisions
+    d = _AGENT[key].get(str(trade.get("paper_trade_id")))
+    return None if d is None else d == "SKIP"
 _OPENING: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
 
 
@@ -227,7 +247,7 @@ def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     wide = spread_wide(trade)
     ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
     block = momentum_block(trade, ticks)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root)}
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root), "dx_ai_skip": ai_skip_tag(trade, root)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out
