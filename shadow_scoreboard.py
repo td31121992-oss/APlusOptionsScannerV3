@@ -129,6 +129,8 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Enter only 11-30 minutes after the first entry-ready signal  [derived]": ("-", lambda t: _truthy(t.get("dx_lag_window_block"))),
     "Skip a quiet opening (the stock's first 5-minute volume below its 14-session average)  [derived]": ("-", lambda t: _truthy(t.get("dx_rvol_quiet_block"))),
     "Only stocks in play (first 5-minute volume at least 3x its 14-session average)  [derived]": ("-", lambda t: _truthy(t.get("dx_rvol3_block"))),
+    "4th or later trade of the day on the same side in one NSE sector (crowded sector)  [derived]": ("-", lambda t: _truthy(t.get("dx_crowd4"))),
+    "Entered before 09:35  [derived]": ("-", lambda t: _truthy(t.get("dx_early0935"))),
     "AI trading agent (shadow, sees only facts known at entry) says SKIP  [derived]": ("-", lambda t: _truthy(t.get("dx_ai_skip"))),
     "Fewer-better combo (any of: spread over 1%, clean score under 96, 6th+ entry of the day)": ("-", lambda t: None if _truthy(t.get("gs_q_pass")) is None else not _truthy(t.get("gs_q_pass"))),
 }

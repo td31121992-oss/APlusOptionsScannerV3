@@ -253,6 +253,30 @@ def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     return out
 
 
+CROWD_NTH = 4                                        # the 4th trade of a day on the same side in one NSE sector is "crowded" (replay 22 Sep - 12 Nov: 57 trades, -Rs 54k; 10 of 13 days lost)
+EARLY_BEFORE = "09:35"                               # entered before this = "too early" (replay: 106 trades, -Rs 96.9k, 25% wins)
+
+
+def crowd_tags(trades: Sequence[MutableMapping[str, Any]], root: Path = ROOT) -> None:
+    """dx_crowd4: this is the 4th+ trade of the day on the same side in the same NSE sector (earlier trades counted in entry order). dx_early0935: entered before 09:35.
+    Both are would-block shadow tags: nothing is blocked. Counted among the trades passed in, so the figure is exact for the full history and a lower bound for a partial list."""
+    try:
+        labels = _LABELS.setdefault(str(root), sector_labels(root))
+    except Exception:                                                       # noqa: BLE001
+        labels = {}
+    seen: dict[tuple[str, str, str], int] = {}
+    for t in sorted(trades, key=lambda x: str(x.get("entry_time") or "")):
+        day, hhmm = str(t.get("entry_time") or "")[:10], str(t.get("entry_time") or "")[11:16]
+        sector = labels.get(str(t.get("symbol") or ""))
+        if not day or not sector:
+            t["dx_crowd4"] = None
+        else:
+            key = (day, str(t.get("option_type") or ""), str(sector))
+            seen[key] = seen.get(key, 0) + 1
+            t["dx_crowd4"] = seen[key] >= CROWD_NTH
+        t["dx_early0935"] = (hhmm < EARLY_BEFORE) if hhmm else None
+
+
 def enrich(trades: Sequence[MutableMapping[str, Any]], root: Path = ROOT) -> None:
     """Add the derived tags to each trade dict in place. A trade whose tags cannot be worked out is left without them."""
     for t in trades:
@@ -260,3 +284,7 @@ def enrich(trades: Sequence[MutableMapping[str, Any]], root: Path = ROOT) -> Non
             t.update(tags_for(t, root))
         except Exception:                                    # noqa: BLE001 - a missing / damaged tick file must never stop the report
             continue
+    try:
+        crowd_tags(trades, root)
+    except Exception:                                        # noqa: BLE001
+        pass
