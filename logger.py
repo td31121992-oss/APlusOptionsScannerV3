@@ -14,6 +14,7 @@ Central logging for APlus Options Scanner V3.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from logging.handlers import TimedRotatingFileHandler  # noqa: F401  (kept for importers of this name)
 from pathlib import Path
@@ -77,13 +78,22 @@ def _supports_color() -> bool:
     return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
+def _running_tests() -> bool:
+    """True under `python -m unittest` / pytest, so test runs (which feed fake failures to the code) never write into the live logs/scanner.log."""
+    if os.getenv("APLUS_TEST_LOG_FILE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    first = (sys.argv[0] if sys.argv else "").replace("\\", "/").lower()
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in first or "/unittest/" in first or first.endswith("unittest")
+
+
 def setup_logging() -> None:
     global _INITIALIZED
     if _INITIALIZED:
         return
 
     log_dir: Path = CONFIG.logging.log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
+    if not _running_tests():
+        log_dir.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, CONFIG.logging.level.upper(), logging.INFO))
@@ -102,17 +112,18 @@ def setup_logging() -> None:
     # ------------------------------------------------
     backup_days = getattr(CONFIG.logging, "backup_days", 14)
 
-    file_handler = SafeTimedRotatingFileHandler(
-        log_dir / CONFIG.logging.log_file,
-        when="midnight",
-        interval=1,
-        backupCount=backup_days,
-        encoding="utf-8",
-        utc=False,
-    )
-    file_handler.suffix = "%Y-%m-%d"
-    file_handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATEFMT))
-    root.addHandler(file_handler)
+    if not _running_tests():
+        file_handler = SafeTimedRotatingFileHandler(
+            log_dir / CONFIG.logging.log_file,
+            when="midnight",
+            interval=1,
+            backupCount=backup_days,
+            encoding="utf-8",
+            utc=False,
+        )
+        file_handler.suffix = "%Y-%m-%d"
+        file_handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATEFMT))
+        root.addHandler(file_handler)
 
     _INITIALIZED = True
 
