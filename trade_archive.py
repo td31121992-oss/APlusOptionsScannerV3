@@ -289,7 +289,15 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
 
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    return run(args[0] if args else None, backfill="--backfill" in sys.argv)
+    rc = run(args[0] if args else None, backfill="--backfill" in sys.argv)
+    try:                                                   # copy the small irreplaceable files to the private backup repo (backup_to_github.py); never affects the archive result
+        import backup_to_github
+
+        res = backup_to_github.run()
+        print(f"backup to private repo: {res['message']}")
+    except Exception as exc:                               # noqa: BLE001
+        print(f"backup to private repo failed: {type(exc).__name__}: {str(exc)[:120]}")
+    return rc
 
 
 if __name__ == "__main__":
