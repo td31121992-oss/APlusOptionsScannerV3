@@ -114,7 +114,7 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
     cycle = float(os.getenv("APLUS_UPSTOX_CHAIN_SECONDS", "300") or 300)
     threads = int(os.getenv("APLUS_UPSTOX_CHAIN_THREADS", "4") or 4)
     base = out_root or root / "data" / "options_intelligence_upstox"
-    client = UpstoxClient()
+    client = UpstoxClient(priority="low")                   # data only: pauses first when the shared Upstox allowance runs low
     expiries: dict[str, str] = {}
     cycles = 0
     flow = None

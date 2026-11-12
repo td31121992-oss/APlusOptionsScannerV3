@@ -2151,6 +2151,8 @@ class OpeningMomentumScanner:
             try:
                 return self._fetch_one_symbol_cached(quote, now)
             except Exception as exc:                       # noqa: BLE001
+                if type(exc).__name__ == "UpstoxLimit":    # out of requests: a second request for the same stock would only use more of the shared allowance
+                    raise
                 logger.info("HISTORY_CACHE fallback to the full request for %s: %s: %s", quote.symbol, type(exc).__name__, exc)
                 if hasattr(self, "_hist_past"):
                     self._hist_past.pop(quote.symbol, None)

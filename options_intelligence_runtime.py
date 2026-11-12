@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
@@ -84,6 +85,7 @@ def _health(path: Path, **updates: object) -> None:
 
 
 def main() -> int:
+    os.environ.setdefault("APLUS_UPSTOX_PRIORITY", "low")      # data only: pauses first when the shared Upstox allowance runs low (core/upstox_client.py)
     parser = argparse.ArgumentParser(description="Run the isolated APlus Options Intelligence collector.")
     parser.add_argument("--max-symbols", type=int, default=10)
     parser.add_argument("--symbols", default="")

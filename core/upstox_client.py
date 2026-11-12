@@ -16,6 +16,8 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import sqlite3
+import sys
 import threading
 import time
 from collections import deque
@@ -61,7 +63,8 @@ def _f(v: Any) -> float:
 class _Budget:
     """Sliding-window request budget: Upstox allows 50/s, 500/min and 2000 per 30 min; stay well inside."""
 
-    def __init__(self, per_second: float = 20.0, per_minute: int = 400, per_30min: int = 1700) -> None:
+    def __init__(self, per_second: float = 20.0, per_minute: int = 400, per_30min: int = 1700, shared: "_SharedLedger | None" = None, priority: str = "high") -> None:
+        self.shared, self.priority = shared, priority
         self.min_gap = 1.0 / per_second
         self.per_minute, self.per_30min = per_minute, per_30min
         self.calls: deque[float] = deque()
@@ -80,20 +83,101 @@ class _Budget:
             wait = self.min_gap - (now - self.last)
             if wait > 0:
                 time.sleep(wait)
+            if self.shared is not None:
+                self.shared.take(self.priority)                  # raises UpstoxLimit when all processes together are at this priority's cap
             self.last = time.time()
             self.calls.append(self.last)
 
 
+SHARED_LEDGER = ROOT / "data" / "cache" / "upstox_budget.sqlite3"
+# Upstox counts every call on one token together (500 a minute, 2000 per 30 min), whichever process makes it. "high" callers (scanner, position monitor, dashboards)
+# may use almost all of it; "low" callers (data collectors) stop earlier so trading always has room.
+SHARED_CAPS = {"high": (1900, 450), "low": (1300, 250)}          # (per 30 min, per minute)
+
+
+class _SharedLedger:
+    """Cross-process request counter: one small SQLite file every process on this machine records its Upstox calls in. Counting and recording happen in one
+    immediate transaction, so two processes cannot both take the last slot. Any problem with the file means 'no shared limit' for that call, never a failed call."""
+
+    def __init__(self, path: Path | str = SHARED_LEDGER, who: str | None = None) -> None:
+        self.path = str(path)
+        self.who = who or (os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "python")
+        self._conn: sqlite3.Connection | None = None
+        self._n = 0
+        self._broken_until = 0.0
+
+    def _open(self) -> sqlite3.Connection:
+        if self._conn is None:
+            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.path, timeout=2.0, isolation_level=None, check_same_thread=False)
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.Error:
+                pass
+            conn.execute("CREATE TABLE IF NOT EXISTS calls (ts REAL NOT NULL, who TEXT NOT NULL, pid INTEGER NOT NULL)")
+            conn.execute("CREATE INDEX IF NOT EXISTS calls_ts ON calls (ts)")
+            self._conn = conn
+        return self._conn
+
+    def take(self, priority: str, now: float | None = None) -> None:
+        """Record one call, or raise UpstoxLimit when the combined use already reached this priority's cap."""
+        now = time.time() if now is None else now
+        if now < self._broken_until:
+            return
+        cap30, cap60 = SHARED_CAPS.get(priority, SHARED_CAPS["high"])
+        try:
+            conn = self._open()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                n30, n60 = conn.execute("SELECT COUNT(*), COALESCE(SUM(ts > ?), 0) FROM calls WHERE ts > ?", (now - 60, now - 1800)).fetchone()
+                if n30 >= cap30 or n60 >= cap60:
+                    conn.execute("ROLLBACK")
+                    raise UpstoxLimit(f"shared Upstox budget ({priority}) used up: {n30}/30min, {n60}/min across all processes")
+                conn.execute("INSERT INTO calls (ts, who, pid) VALUES (?, ?, ?)", (now, self.who, os.getpid()))
+                self._n += 1
+                if self._n % 200 == 0:
+                    conn.execute("DELETE FROM calls WHERE ts < ?", (now - 3600,))
+                conn.execute("COMMIT")
+            except UpstoxLimit:
+                raise
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+        except UpstoxLimit:
+            raise
+        except Exception:                                    # noqa: BLE001 - a broken ledger must not stop trading data: skip the shared check for a minute
+            self._conn = None
+            self._broken_until = now + 60.0
+
+    def usage(self, now: float | None = None) -> dict[str, Any]:
+        """Calls in the last 30 minutes / minute, and per process name (for diagnosing a 429)."""
+        now = time.time() if now is None else now
+        conn = self._open()
+        rows = conn.execute("SELECT who, COUNT(*), COALESCE(SUM(ts > ?), 0) FROM calls WHERE ts > ? GROUP BY who ORDER BY 2 DESC", (now - 60, now - 1800)).fetchall()
+        return {"last_30min": sum(r[1] for r in rows), "last_minute": int(sum(r[2] for r in rows)), "by_process": {r[0]: {"30min": r[1], "1min": int(r[2])} for r in rows}}
+
+
+def _shared_enabled() -> bool:
+    return os.getenv("APLUS_UPSTOX_SHARED_BUDGET", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 class UpstoxClient:
     def __init__(self, token: str | None = None, session: Any = None, master: list[dict[str, Any]] | None = None,
-                 budget: _Budget | None = None, batch_size: int = 150) -> None:
+                 budget: _Budget | None = None, batch_size: int = 150, priority: str | None = None) -> None:
         self.token = (token or os.getenv("UPSTOX_ANALYTICS_TOKEN", "") or os.getenv("UPSTOX_ACCESS_TOKEN", "")).strip()
         self._session = session
         self._pooled: Any = None
         self._master = master
         self._maps: dict[str, dict[str, str]] | None = None
         self._reverse: dict[str, tuple[str, str]] = {}
-        self.budget = budget or _Budget()
+        if budget is None:
+            prio = (priority or os.getenv("APLUS_UPSTOX_PRIORITY", "high")).strip().lower()
+            # only a real client (no injected test session) joins the machine-wide counter, so tests never touch the live one
+            budget = _Budget(shared=_SharedLedger() if (session is None and _shared_enabled()) else None, priority="low" if prio == "low" else "high")
+        self.budget = budget
         self.batch_size = max(1, batch_size)
 
     # ------------------------------------------------------------------ instrument mapping
