@@ -31,6 +31,16 @@ INCLUDE = [
     "data/leadership_v6_4_shadow", "data/event_days", "data/stock_study", "ai_supervisor",
 ]
 INCLUDE_FILES = ["data/portfolio_state.json", "data/_v2_blocked_feat_1012.json", "data/pipeline_health.json"]
+CALPHA = ROOT.parent / "CAlphaTrader"                       # the sister project: its small irreplaceable data goes under calpha/ in the same private repo (its CODE needs its own repo: git remote)
+CALPHA_INCLUDE = [
+    "journal", "data/mcx_energy", "data/futures_paper", "data/futures_paper_replay", "data/futures_paper_replay_v11", "data/futures_paper_replay_v12", "data/signal_outcomes",
+    "data/chart_intel", "data/dataset", "data/futures_delta", "data/flow_gauge", "data/mcx_mini", "data/live_orders", "data/manual_orders", "data/level_breakout", "data/trend_flip",
+    "data/dip_reclaim", "data/reversal_gate", "data/trail_shadow", "data/fast_shadow", "data/oi_watch", "data/outlook", "data/digests", "data/monitor_latency", "data/exit_quality",
+    "data/chase_watch", "data/day_follow", "data/mini_option_shadow", "data/limit_entry_shadow", "data/ladder_shadow", "data/chain_fast", "data/pattern_backtest", "data/snapshots",
+    "data/dashboard", "data/tradingview", "data/index_constituents", "data/raw",
+]
+CALPHA_FILES = ["data/paper_trades.json", "data/global_news_history.jsonl", "data/breadth_state.json", "data/intraday_oi_state.json", "data/vix_history.json", "data/phase3_latest.json"]
+CALPHA_SKIP_PARTS = {"__pycache__", ".git", "eod_forensic"}  # eod_forensic holds one day's raw copies (tens of MB, rebuildable)
 EXTRA_DIRS = [Path("E:/APlusData/top_movers_study")]       # small result files only (csv/txt/json/md)
 EXTRA_SUFFIXES = {".csv", ".txt", ".json", ".md"}
 SECRET_NAME = re.compile(r"(^\.env|secret|token|password|passwd|credential|\.pem$|\.key$|\.pfx$|id_rsa)", re.I)
@@ -53,7 +63,7 @@ def _walk(src: Path, suffixes: set[str] | None = None):
                 yield p
 
 
-def plan(root: Path = ROOT, extra_dirs: list[Path] | None = None) -> tuple[list[tuple[Path, str]], list[str]]:
+def plan(root: Path = ROOT, extra_dirs: list[Path] | None = None, calpha: Path | None = None) -> tuple[list[tuple[Path, str]], list[str]]:
     """[(source file, path inside the backup repo)] and the list of things skipped with the reason."""
     items: list[tuple[Path, str]] = []
     skipped: list[str] = []
@@ -79,6 +89,15 @@ def plan(root: Path = ROOT, extra_dirs: list[Path] | None = None) -> tuple[list[
                 add(p, p.relative_to(root).as_posix())
     for f in INCLUDE_FILES:
         add(root / f, f)
+    if calpha is not None and calpha.exists():
+        for d in CALPHA_INCLUDE:
+            src = calpha / d
+            if src.exists():
+                for p in _walk(src):
+                    if not (CALPHA_SKIP_PARTS & set(p.relative_to(calpha).parts)) and p.suffix.lower() not in {".py", ".pyc"}:   # journal/*.py is code, in the code repo
+                        add(p, "calpha/" + p.relative_to(calpha).as_posix())
+        for f in CALPHA_FILES:
+            add(calpha / f, "calpha/" + f)
     for src in (EXTRA_DIRS if extra_dirs is None else extra_dirs):
         if src.exists():
             for p in _walk(src, EXTRA_SUFFIXES):
@@ -95,8 +114,8 @@ def export_tasks(dest: Path) -> int:
     if os.name != "nt":
         return 0
     try:
-        ps = ("Get-ScheduledTask | Where-Object { $_.TaskName -like 'APlus*' } | ForEach-Object { $n = $_.TaskName; "
-              "Export-ScheduledTask -TaskName $n -TaskPath $_.TaskPath | Out-File -Encoding utf8 (Join-Path '" + str(dest) + "' ($n + '.xml')) }")
+        ps = ("Get-ScheduledTask | Where-Object { $_.TaskName -like 'APlus*' -or $_.TaskName -like 'CAlpha*' } | ForEach-Object { $n = $_.TaskName; "
+              "Export-ScheduledTask -TaskName $n -TaskPath $_.TaskPath | Out-File -Encoding utf8 (Join-Path '" + str(dest) + "' (($n -replace ' ','_') + '.xml')) }")
         dest.mkdir(parents=True, exist_ok=True)
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=90)
         return len(list(dest.glob("*.xml")))
@@ -109,7 +128,8 @@ RESTORE = """# Restoring the APlus scanner on a new PC
 This repo holds the DATA only (journal, closed-trade archive, experiment and supervisor state, study results, scheduled-task XML). The code is in the GitHub repo APlusOptionsScannerV3.
 
 1. Install Python 3.13 and git. `git clone` APlusOptionsScannerV3 to the Desktop; create `.venv` and `pip install -r requirements.txt`.
-2. Copy this repo's `data/` folder over the project's `data/` and `ai_supervisor/` over the project's `ai_supervisor/` (these are newer than the code repo's copies).
+2. (CAlphaTrader) its code is in its own GitHub repo; copy `calpha/data` and `calpha/journal` from here over CAlphaTrader's `data/` and `journal/`.
+2b. Copy this repo's `data/` folder over the project's `data/` and `ai_supervisor/` over the project's `ai_supervisor/` (these are newer than the code repo's copies).
 3. Recreate `.env` from your USB copy (it is deliberately NOT here): Upstox token, Telegram keys, dashboard login.
 4. Scheduled tasks: for each file in `tasks/` run `schtasks /create /tn <name> /xml tasks\\<name>.xml` from an elevated prompt (fix paths if the user name changed).
 5. `python upstox_budget_status.py` and `python preflight` checks, then start the scanner as usual.
@@ -127,7 +147,7 @@ def run(root: Path = ROOT, repo: Path | None = None, dry: bool = False, extra_di
             out["message"] = "switched off (APLUS_BACKUP=0)"
             return out
         repo = Path(os.getenv("APLUS_BACKUP_DIR", "") or repo or DEFAULT_DIR)
-        items, skipped = plan(root, extra_dirs)
+        items, skipped = plan(root, extra_dirs, CALPHA if root == ROOT else None)
         out["skipped"] = skipped
         if dry:
             out.update(ok=True, copied=len(items), message=f"dry run: {len(items)} files, {sum(p.stat().st_size for p, _ in items) / 1048576:.1f} MB, {len(skipped)} skipped")

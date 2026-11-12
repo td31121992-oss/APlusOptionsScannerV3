@@ -62,6 +62,23 @@ class BackupTests(unittest.TestCase):
         self.assertTrue(r["pushed"], r)
         self.assertIn("3,4", git(self.remote, "show", "main:data/trade_archive/history.csv").stdout)
 
+    def test_calpha_data_goes_under_calpha_and_skips_code_secrets_and_big_folders(self):
+        ca = Path(self.tmp.name) / "CAlpha"
+        (ca / "journal").mkdir(parents=True)
+        (ca / "journal" / "trades.csv").write_text("x")
+        (ca / "journal" / "trade_journal.py").write_text("code")
+        (ca / "data").mkdir()
+        (ca / "data" / "paper_trades.json").write_text("{}")
+        (ca / "data" / "backtest5y").mkdir()
+        (ca / "data" / "backtest5y" / "big.csv").write_text("x")
+        (ca / ".env").write_text("KEY=secret")
+        items, _ = b.plan(self.root, [], ca)
+        rels = {r for _, r in items}
+        self.assertIn("calpha/journal/trades.csv", rels)
+        self.assertIn("calpha/data/paper_trades.json", rels)
+        self.assertNotIn("calpha/journal/trade_journal.py", rels)
+        self.assertFalse([r for r in rels if "backtest5y" in r or ".env" in r])
+
     def test_oversize_file_is_skipped(self):
         old = b.MAX_FILE
         b.MAX_FILE = 5
