@@ -105,7 +105,7 @@ def plan(root: Path = ROOT, extra_dirs: list[Path] | None = None, calpha: Path |
     return items, skipped
 
 
-CODE_REPOS = [CALPHA]                                        # git repos whose already-committed work is pushed to their own GitHub remote every night
+CODE_REPOS = [ROOT, CALPHA]                                        # git repos whose already-committed work is pushed to their own GitHub remote every night
 
 
 def push_code(repo: Path) -> str:
