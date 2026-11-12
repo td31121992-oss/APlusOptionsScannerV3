@@ -105,6 +105,37 @@ def plan(root: Path = ROOT, extra_dirs: list[Path] | None = None, calpha: Path |
     return items, skipped
 
 
+CODE_REPOS = [CALPHA]                                        # git repos whose already-committed work is pushed to their own GitHub remote every night
+
+
+def push_code(repo: Path) -> str:
+    """Push commits that already exist in `repo` to its upstream. It never commits anything (uncommitted work is left alone) and never raises; returns a one-line status."""
+    try:
+        if not (repo / ".git").exists():
+            return f"{repo.name}: not a git repo"
+        if not _git(repo, "remote").stdout.strip():
+            return f"{repo.name}: no remote set (git remote add origin <private repo URL>)"
+        branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if not branch or branch == "HEAD":
+            return f"{repo.name}: detached HEAD, not pushed"
+        up = _git(repo, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
+        if up.returncode != 0:
+            return f"{repo.name}: branch {branch} has no upstream (git push -u origin {branch})"
+        _git(repo, "fetch", "-q", timeout=120)
+        counts = _git(repo, "rev-list", "--left-right", "--count", f"{up.stdout.strip()}...HEAD").stdout.split()
+        behind, ahead = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (0, 0)
+        if behind:
+            return f"{repo.name}: remote has {behind} commit(s) this PC lacks - not pushed, needs a look"
+        if not ahead:
+            return f"{repo.name}: code already on GitHub"
+        r = _git(repo, "push", timeout=300)
+        dirty = len([ln for ln in _git(repo, "status", "--porcelain").stdout.splitlines() if not ln.startswith("??")])
+        note = f"; {dirty} uncommitted file(s) not included" if dirty else ""
+        return (f"{repo.name}: pushed {ahead} commit(s)" if r.returncode == 0 else f"{repo.name}: push failed: " + (r.stderr or r.stdout).strip()[:140]) + note
+    except Exception as exc:                                 # noqa: BLE001
+        return f"{repo.name}: {type(exc).__name__}: {str(exc)[:120]}"
+
+
 def _git(repo: Path, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout)
 
@@ -139,8 +170,18 @@ Last backup: {when}
 """
 
 
-def run(root: Path = ROOT, repo: Path | None = None, dry: bool = False, extra_dirs: list[Path] | None = None, tasks: bool = True) -> dict:
-    """Copy the plan into the backup repo, commit and push. Returns a status dict; never raises."""
+def run(root: Path = ROOT, repo: Path | None = None, dry: bool = False, extra_dirs: list[Path] | None = None, tasks: bool = True, code_repos: list[Path] | None = None) -> dict:
+    """Copy the plan into the backup repo, commit and push, then push the code repos' committed work. Returns a status dict; never raises."""
+    out = _run_data(root, repo, dry, extra_dirs, tasks)
+    if not dry and os.getenv("APLUS_BACKUP", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        repos = code_repos if code_repos is not None else (CODE_REPOS if root == ROOT else [])
+        out["code"] = [push_code(r) for r in repos]
+        if out["code"]:
+            out["message"] += " | code: " + "; ".join(out["code"])
+    return out
+
+
+def _run_data(root: Path, repo: Path | None, dry: bool, extra_dirs: list[Path] | None, tasks: bool) -> dict:
     out: dict = {"ok": False, "copied": 0, "skipped": [], "pushed": False, "message": ""}
     try:
         if os.getenv("APLUS_BACKUP", "1").strip().lower() in {"0", "false", "no", "off"}:

@@ -79,6 +79,32 @@ class BackupTests(unittest.TestCase):
         self.assertNotIn("calpha/journal/trade_journal.py", rels)
         self.assertFalse([r for r in rels if "backtest5y" in r or ".env" in r])
 
+    def test_push_code_pushes_only_committed_work(self):
+        code = Path(self.tmp.name) / "code"
+        remote = Path(self.tmp.name) / "coderemote.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(code)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            git(code, "config", k, v)
+        self.assertIn("no remote", b.push_code(code))
+        (code / "a.txt").write_text("1")
+        git(code, "add", "-A")
+        git(code, "commit", "-q", "-m", "one")
+        git(code, "remote", "add", "origin", str(remote))
+        self.assertIn("no upstream", b.push_code(code))
+        git(code, "push", "-q", "-u", "origin", "main")
+        self.assertIn("already on GitHub", b.push_code(code))
+        (code / "a.txt").write_text("2")
+        git(code, "commit", "-qam", "two")
+        (code / "wip.txt").write_text("uncommitted")                 # untracked: never added
+        (code / "a.txt").write_text("3")                              # modified, uncommitted: never committed
+        msg = b.push_code(code)
+        self.assertIn("pushed 1 commit", msg)
+        self.assertIn("1 uncommitted", msg)
+        self.assertEqual(git(remote, "log", "--oneline", "main").stdout.count("one") + git(remote, "log", "--oneline", "main").stdout.count("two"), 2)
+        self.assertEqual(git(remote, "show", "main:a.txt").stdout.strip(), "2")
+        self.assertIn("not a git repo", b.push_code(Path(self.tmp.name) / "nope"))
+
     def test_oversize_file_is_skipped(self):
         old = b.MAX_FILE
         b.MAX_FILE = 5
