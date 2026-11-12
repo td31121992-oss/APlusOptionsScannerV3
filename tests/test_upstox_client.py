@@ -403,3 +403,38 @@ class PooledSessionTests(unittest.TestCase):
     def test_injected_session_is_still_used(self):
         s = object()
         self.assertIs(UpstoxClient(token="t", session=s, master=[])._http(), s)
+
+
+class LongRangeCandleTests(unittest.TestCase):
+    def test_a_range_longer_than_a_month_is_asked_in_pieces_and_merged_in_time_order(self):
+        import re
+        from datetime import datetime
+
+        def answer(url, params):
+            m = re.search(r"/minutes/5/(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})", url)
+            to_day, from_day = m.group(1), m.group(2)
+            # one candle at the start of each window: the window's first day at 09:15
+            return Resp(200, {"status": "success", "data": {"candles": [[f"{from_day}T09:15:00+05:30", 1, 2, 0.5, 1.5, 100]]}})
+
+        session = FakeSession({"historical-candle/NSE_EQ": answer})
+        c = UpstoxClient(token="t", session=session, master=MASTER, budget=_Budget(per_second=1000))
+        out = c.get_intraday_candles(security_id=11536, segment="NSE_EQ", instrument="EQUITY", interval=5, from_datetime=datetime(2026, 9, 1, 9, 0), to_datetime=datetime(2026, 11, 9, 15, 30))
+        spans = []
+        for url, _, _ in session.calls:
+            m = re.search(r"/minutes/5/(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})", url)
+            if m:
+                a, b = datetime.fromisoformat(m.group(2)), datetime.fromisoformat(m.group(1))
+                spans.append((b - a).days + 1)
+        self.assertEqual(len(spans), 3)                                          # 1 Sep - 9 Nov = 70 days -> 28 + 28 + 14
+        self.assertLessEqual(max(spans), 28)
+        self.assertEqual(sum(spans), 70)
+        self.assertEqual(len(out["timestamp"]), 3)
+        self.assertEqual(out["timestamp"], sorted(out["timestamp"]))
+
+    def test_a_short_range_is_still_one_request(self):
+        from datetime import datetime
+
+        session = FakeSession({"historical-candle/NSE_EQ": Resp(200, {"status": "success", "data": {"candles": []}})})
+        c = UpstoxClient(token="t", session=session, master=MASTER, budget=_Budget(per_second=1000))
+        c.get_intraday_candles(security_id=11536, segment="NSE_EQ", instrument="EQUITY", interval=5, from_datetime=datetime(2026, 11, 3, 9, 0), to_datetime=datetime(2026, 11, 9, 15, 30))
+        self.assertEqual(len([u for u, _, _ in session.calls if "/minutes/5/" in u]), 1)

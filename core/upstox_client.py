@@ -38,6 +38,7 @@ INDEX_KEYS = {
     "43": "NSE_INDEX|Nifty Infra", "30": "NSE_INDEX|Nifty Media", "40": "NSE_INDEX|Nifty Consumption", "41": "NSE_INDEX|Nifty PSE",
     "37": "NSE_INDEX|NIFTY MIDCAP 100", "22": "NSE_INDEX|NIFTY SMLCAP 50", "51": "BSE_INDEX|SENSEX",
 }
+MINUTE_RANGE_DAYS = 28                                    # the longest span of days asked of the minute-candle endpoint in one request (29 days works, 40 does not)
 _SEGMENT_TO_MASTER = {"NSE_EQ": "NSE_EQ", "NSE_FNO": "NSE_FO"}
 
 
@@ -330,9 +331,12 @@ class UpstoxClient:
         start_day = from_datetime.date()
         if start_day < today:                               # completed sessions
             end_day = min(to_datetime.date(), today - timedelta(days=1))
-            if end_day >= start_day:
-                body = self._get(f"/v3/historical-candle/{key}/minutes/{interval}/{end_day.isoformat()}/{start_day.isoformat()}", {}, auth=False)
+            window_start = start_day
+            while window_start <= end_day:                  # Upstox rejects a longer minute-candle range than about a month (HTTP 400 UDAPI1148 "Invalid date range"): ask in pieces
+                window_end = min(window_start + timedelta(days=MINUTE_RANGE_DAYS - 1), end_day)
+                body = self._get(f"/v3/historical-candle/{key}/minutes/{interval}/{window_end.isoformat()}/{window_start.isoformat()}", {}, auth=False)
                 add((body.get("data") or {}).get("candles") or [])
+                window_start = window_end + timedelta(days=1)
         if to_datetime.date() >= today:                     # today's session so far
             body = self._get(f"/v3/historical-candle/intraday/{key}/minutes/{interval}", {}, auth=False)
             add((body.get("data") or {}).get("candles") or [])
