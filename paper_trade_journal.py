@@ -523,6 +523,61 @@ class PaperTradeJournal:
         except Exception:
             return
 
+    # APLUS_POST_EXIT_TAPE_V1: keep recording the price of an option after the paper trade left it (research: what would a wider stop / other exit have done?).
+    # ZERO extra API calls: fast_monitor adds these option ids to the batched quote request it already makes for the open positions.
+    POST_EXIT_TAPE_UNTIL = (15, 25)
+    POST_EXIT_MAX_IDS = 40
+    POST_EXIT_EVERY_SECONDS = 15.0
+
+    def _post_exit_trades(self, when: datetime) -> list[dict[str, Any]]:
+        if (when.hour, when.minute) >= self.POST_EXIT_TAPE_UNTIL:
+            return []
+        day = when.date().isoformat()
+        out = []
+        for t in self.trades:
+            if str(t.get("status") or "").upper() != "CLOSED" or not t.get("option_security_id"):
+                continue
+            if str(t.get("exit_reason") or "").upper().startswith("SESSION_END"):
+                continue
+            if str(t.get("exit_time") or "")[:10] != day:
+                continue
+            out.append(t)
+        return out[-self.POST_EXIT_MAX_IDS:]
+
+    def post_exit_watch_ids(self, when: datetime) -> list[str]:
+        """Option ids of today's already-closed trades to add to an option-quote request that is being made anyway (empty from 15:25)."""
+        ids: list[str] = []
+        for t in self._post_exit_trades(when):
+            sid = str(t.get("option_security_id"))
+            if sid not in ids:
+                ids.append(sid)
+        return ids
+
+    def record_post_exit(self, option_quotes: Mapping[str, Any], when: datetime) -> int:
+        """Append the latest price of each watched closed trade to its tape (status POST_EXIT), at most every POST_EXIT_EVERY_SECONDS per trade. Returns rows written."""
+        written = 0
+        last = self.__dict__.setdefault("_post_exit_last", {})
+        for t in self._post_exit_trades(when):
+            tid = str(t.get("trade_id") or t.get("paper_trade_id") or "")
+            sid = str(t.get("option_security_id"))
+            if not tid or (when.timestamp() - last.get(tid, 0.0)) < self.POST_EXIT_EVERY_SECONDS:
+                continue
+            raw = option_quotes.get(sid)
+            if raw is None:
+                try:
+                    raw = option_quotes.get(int(sid))
+                except (TypeError, ValueError):
+                    raw = None
+            try:
+                price = self._quote_price(raw)
+            except Exception:                                    # noqa: BLE001 - research recording must never disturb trading
+                continue
+            if price > 0:
+                self._append_option_tape({**t, "status": "POST_EXIT"}, when, price)
+                last[tid] = when.timestamp()
+                written += 1
+        return written
+
     def update_open_positions(
         self, *, option_quotes: Mapping[str, Any], when: datetime,
         force_close: bool = False, force_close_reason: str = "SESSION_END",

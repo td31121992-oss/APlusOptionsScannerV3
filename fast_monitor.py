@@ -77,8 +77,20 @@ class FastPositionMonitor:
         if not ids:
             return []
         self.stats["ticks"] += 1
-        quotes = self._fetch(ids)
+        extra: list[str] = []
+        try:                                                      # today's already-closed options ride along in the SAME batched request (no extra call) so their tape continues to 15:25
+            watch = getattr(self.journal, "post_exit_watch_ids", None)
+            extra = [i for i in (watch(now) if watch else []) if i not in ids][: max(0, 100 - len(ids))]
+        except Exception:                                         # noqa: BLE001
+            extra = []
+        quotes = self._fetch(ids + extra)
         closed = self.journal.update_open_positions(option_quotes=quotes, when=now, force_close=False)
+        try:
+            rec = getattr(self.journal, "record_post_exit", None)
+            if rec and extra:
+                rec(quotes, now)
+        except Exception:                                         # noqa: BLE001
+            pass
         if closed:
             self.stats["closed"] += len(closed)
             self.journal.flush()                                # a fast exit is saved at once, not at the next scan cycle
