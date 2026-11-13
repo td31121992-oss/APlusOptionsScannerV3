@@ -215,7 +215,28 @@ def sector_tags(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, bool |
     return dict(zip(names, (block("open", None), block("open", 5), block("open", 3), block("open", None, True), block("prev", None), block("prev", 5))))
 
 
-FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5",)
+SHADOW_EXIT_VARIANTS: dict[str, tuple[str, str]] = {          # name -> (live shadow exit rule recorded in the journal, first day it was recorded)
+    "dx_x_secfade": ("secfade", "2026-10-15"),
+    "dx_x_peak8_a20": ("peak8_a20", "2026-10-12"),
+}
+FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5",) + tuple(SHADOW_EXIT_VARIANTS)
+
+
+def shadow_exit_variants(trade: Mapping[str, Any]) -> dict[str, float | None]:
+    """Rs the trade would have made had the named shadow exit rule (recorded live in the journal as shadow_<rule>_exit_price) been the real exit: its recorded exit price when it fired,
+    otherwise the real result. None for trades from before the rule was recorded."""
+    entry, qty, net = _f(trade.get("entry_price")), _f(trade.get("quantity")), _f(trade.get("net_pnl"))
+    day = str(trade.get("entry_time") or "")[:10]
+    gross = _f(trade.get("gross_pnl"))
+    cost = gross - net if gross is not None and net is not None else 214.0
+    out: dict[str, float | None] = {}
+    for name, (rule, since) in SHADOW_EXIT_VARIANTS.items():
+        if net is None or not entry or not qty or day < since:
+            out[name] = None
+            continue
+        px = _f(trade.get(f"shadow_{rule}_exit_price"))
+        out[name] = round((px - entry) * qty - cost, 2) if px and px > 0 else round(net, 2)
+    return out
 
 
 def wait5_pnl(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, float]] | None, wait: int = WAIT_MINUTES) -> float | None:
@@ -247,7 +268,7 @@ def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     wide = spread_wide(trade)
     ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
     block = momentum_block(trade, ticks)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root), "dx_ai_skip": ai_skip_tag(trade, root)}
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), **shadow_exit_variants(trade), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root), "dx_ai_skip": ai_skip_tag(trade, root)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out

@@ -116,6 +116,22 @@
    "key": "Entered before 09:35  [derived]",
    "registered": "2026-11-12",
    "note": "Requested 12 Nov. Replay 22 Sep-12 Nov (in-sample): 106 trades, -Rs 96,852, 25% wins, 19 of 24 days lost. Overlaps the 09:45 sector gates."
+  },
+  {
+   "id": "V04",
+   "kind": "variant",
+   "key": "dx_x_peak8_a20",
+   "name": "Peak-drop exit: once the option is up 20%, sell when it falls 8% below its highest price",
+   "registered": "2026-11-12",
+   "note": "Hindsight (12 Oct - 12 Nov, 476 trades): +Rs 28k, better on only 10 of 21 days. Tracked forward from 13 Nov; the exit price is the one the journal's live shadow rule recorded."
+  },
+  {
+   "id": "V05",
+   "kind": "variant",
+   "key": "dx_x_secfade",
+   "name": "Sector-fade exit: sell when the sector index gives back 0.4% from its best since entry while the stock is below entry",
+   "registered": "2026-11-12",
+   "note": "Hindsight (15 Oct - 12 Nov, 437 trades): +Rs 43k, better on 12 of 18 days but -Rs 14k over the last 10. Tracked forward from 13 Nov."
   }
  ]
 }

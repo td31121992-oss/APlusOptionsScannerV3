@@ -91,6 +91,63 @@ def trades_day(day: str, history: Sequence[Mapping[str, Any]]) -> dict[str, Any]
             "opt5_recorded": sum(1 for t in closed if t.get("opt5")), "sector_labels": Counter(t.get("sf_sector") for t in closed).most_common(4)}
 
 
+def blackouts(day: str, root: Path = ROOT, gap_seconds: int = 30) -> dict[str, Any]:
+    """Minutes during which at least one OPEN position received no price (gaps over `gap_seconds` between consecutive OPEN rows of the per-trade option tape)."""
+    spans: list[tuple[datetime, datetime]] = []
+    folder = root / "data" / "option_trade_tape" / day
+    for f in sorted(folder.glob("*.csv")) if folder.is_dir() else []:
+        prev = None
+        try:
+            with f.open(encoding="utf-8-sig", newline="") as h:
+                for r in csv.DictReader(h):
+                    if str(r.get("status")).upper() != "OPEN":
+                        prev = None
+                        continue
+                    t = datetime.fromisoformat(r["timestamp"])
+                    if prev is not None and (t - prev).total_seconds() > gap_seconds:
+                        spans.append((prev, t))
+                    prev = t
+        except (OSError, ValueError, KeyError):
+            continue
+    spans.sort()
+    merged: list[list[datetime]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    mins = sum((b - a).total_seconds() for a, b in merged) / 60
+    return {"windows": len(merged), "minutes": round(mins), "share_of_session_pct": round(100 * mins / 375), "longest_min": round(max(((b - a).total_seconds() / 60 for a, b in merged), default=0), 1),
+            "windows_list": [f"{a.strftime('%H:%M')}-{b.strftime('%H:%M')}" for a, b in merged[:20]]}
+
+
+def capture_day(day: str, history: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Peak profit vs kept, split so that it can be acted on: winners vs losers, and give-back by exit reason. (A single 'kept %' over all trades is misleading: a loser's peak can rarely be captured.)
+    Also the stop fall-through (stop price minus fill, for plain stop-loss exits) and the three biggest give-backs."""
+    rows = [t for t in history if str(t.get("entry_time"))[:10] == day and str(t.get("status")).upper() == "CLOSED" and _f(t.get("net_pnl")) is not None]
+    if not rows:
+        return {}
+    peak = lambda t: max(0.0, _f(t.get("mfe_amount")) or 0.0)           # noqa: E731
+    wins, loss = [t for t in rows if float(t["net_pnl"]) > 0], [t for t in rows if float(t["net_pnl"]) <= 0]
+    wpk, wnet = sum(peak(t) for t in wins), sum(float(t["net_pnl"]) for t in wins)
+    by: dict[str, list[float]] = defaultdict(lambda: [0, 0.0, 0.0])
+    for t in rows:
+        b = by[str(t.get("exit_reason"))]
+        b[0] += 1
+        b[1] += peak(t)
+        b[2] += float(t["net_pnl"])
+    slip = 0.0
+    for t in rows:
+        stop, fill, qty = _f(t.get("option_stop")), _f(t.get("exit_price")), _f(t.get("quantity"))
+        if t.get("exit_reason") == "OPTION_STOP_LOSS" and stop and fill and qty and fill < stop:
+            slip += (stop - fill) * qty
+    worst = sorted(rows, key=lambda t: peak(t) - float(t["net_pnl"]), reverse=True)[:3]
+    return {"winners_peak": round(wpk), "winners_kept": round(wnet), "winners_kept_pct": round(100 * wnet / wpk) if wpk else None,
+            "losers": len(loss), "losers_peak": round(sum(peak(t) for t in loss)), "losers_net": round(sum(float(t["net_pnl"]) for t in loss)),
+            "giveback_by_exit": [{"exit": k, "trades": int(v[0]), "peaks": round(v[1]), "net": round(v[2]), "given_back": round(v[1] - v[2])} for k, v in sorted(by.items(), key=lambda x: x[1][2] - x[1][1])],
+            "stop_fall_through_rs": round(slip), "biggest_giveback": [{"symbol": t.get("symbol"), "peak": round(peak(t)), "net": round(float(t["net_pnl"])), "exit": t.get("exit_reason")} for t in worst]}
+
+
 def history_summary(history: Sequence[Mapping[str, Any]], upto: str, sessions: int = 10) -> dict[str, Any]:
     by: dict[str, float] = defaultdict(float)
     for t in history:
@@ -235,7 +292,7 @@ def evening(day: str, root: Path = ROOT) -> dict[str, Any]:
 
     history = trade_archive.load_history(root / "data" / "reports" / "paper_trade_history.json")
     return {"kind": "evening", "day": day, "generated_at": datetime.now().isoformat(timespec="seconds"), "calendar": calendar(day), "scanner": scanner_day(day, root),
-            "trades": trades_day(day, history), "history": history_summary(history, day), "experiments": experiments_status(root),
+            "trades": trades_day(day, history), "capture": capture_day(day, history), "price_blackouts": blackouts(day, root), "history": history_summary(history, day), "experiments": experiments_status(root),
             "pipeline": pipeline(datetime.now(), root), "system": system(root)}
 
 
