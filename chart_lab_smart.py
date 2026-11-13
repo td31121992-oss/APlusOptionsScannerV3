@@ -6,7 +6,7 @@ Everything is calculated in the browser from the candles already on the chart an
     BOS / CHoCH    swing structure breaks (continuation / change of character), with the swing level that was broken
     Support / Resistance  zones where swing highs/lows cluster (2+ touches); green below price, red above, darker = more touches
     Liquidity      equal highs / equal lows that price has not swept yet
-    Key levels     previous day high / low / close, today's open, opening range (09:15-09:30) high / low
+    Key levels     previous day high / low / close, today's open, today's high / low with the time each was made, opening range (09:15-09:30) high / low
     Volume profile today's volume by price with POC and the 70% value area
     Patterns       engulfing, hammer, shooting star markers
     Order flow     markers on the candles with the heaviest buying / selling delta (needs recorded ticks) and a CVD pane
@@ -53,6 +53,8 @@ function smAnalyze(cs,daily){var n=cs.length,o={fvg:[],ob:[],ev:[],liq:[],lvl:[]
   if(P){var pd=cs.slice(P.i0,P.i1+1);o.lvl.push({p:Math.max.apply(null,pd.map(function(x){return x.h})),label:"PDH",col:"#f5b942"},{p:Math.min.apply(null,pd.map(function(x){return x.l})),label:"PDL",col:"#f5b942"},{p:pd[pd.length-1].c,label:"PDC",col:"#8ea0bd"})}
   var td=cs.slice(T.i0,T.i1+1),orb=td.filter(function(x){return (tnum(x.t)%86400)/60<9*60+30});o.lvl.push({p:td[0].o,label:"Open",col:"#c084fc"});
   if(orb.length){o.lvl.push({p:Math.max.apply(null,orb.map(function(x){return x.h})),label:"OR high",col:"#4c8dff"},{p:Math.min.apply(null,orb.map(function(x){return x.l})),label:"OR low",col:"#4c8dff"})}
+  var hiI=0,loI=0;td.forEach(function(x,i){if(x.h>td[hiI].h)hiI=i;if(x.l<td[loI].l)loI=i});function hm(t){return typeof t==="number"?new Date(t*1000).toISOString().slice(11,16):""}
+  o.lvl.push({p:td[hiI].h,label:"Day high "+hm(td[hiI].t),col:"#2ecc71",at:td[hiI].t},{p:td[loI].l,label:"Day low "+hm(td[loI].t),col:"#ff6363",at:td[loI].t});o.dayHL={hi:td[hiI].h,hiT:hm(td[hiI].t),lo:td[loI].l,loT:hm(td[loI].t)};
   o.lvlFrom=cs[T.i0].t;
   var lo=Math.min.apply(null,td.map(function(x){return x.l})),hi=Math.max.apply(null,td.map(function(x){return x.h})),B=40,bins=[];for(var u=0;u<B;u++)bins.push(0);var st=(hi-lo)/B||1;
   td.forEach(function(x){var a=Math.max(0,Math.floor((x.l-lo)/st)),b=Math.min(B-1,Math.floor((x.h-lo)/st)),w=x.v/(b-a+1);for(var u2=a;u2<=b;u2++)bins[u2]+=w});
@@ -72,7 +74,7 @@ function smAnalyze(cs,daily){var n=cs.length,o={fvg:[],ob:[],ev:[],liq:[],lvl:[]
  var below=zs.filter(function(q){return q.z.hi<=last}).sort(function(a,b){return b.z.hi-a.z.hi})[0],above=zs.filter(function(q){return q.z.lo>=last}).sort(function(a,b){return a.z.lo-b.z.lo})[0];
  if(below)bits.push("nearest open "+(below.z.up?"bull ":"bear ")+below.k+" below "+below.z.lo.toFixed(2)+"-"+below.z.hi.toFixed(2));if(above)bits.push("above "+(above.z.up?"bull ":"bear ")+above.k+" "+above.z.lo.toFixed(2)+"-"+above.z.hi.toFixed(2));
  var rs=o.sr.filter(function(z){return z.res})[0],ss=o.sr.filter(function(z){return !z.res})[0];if(ss)bits.push("support "+ss.lo.toFixed(2)+"-"+ss.hi.toFixed(2)+" ("+ss.n+" touches)");if(rs)bits.push("resistance "+rs.lo.toFixed(2)+"-"+rs.hi.toFixed(2)+" ("+rs.n+" touches)");
- if(o.liq.length)bits.push(o.liq.length+" untaken liquidity level(s)");if(o.vp)bits.push("today POC "+(o.vp.lo+(o.vp.poc+.5)*o.vp.st).toFixed(2));
+ if(o.liq.length)bits.push(o.liq.length+" untaken liquidity level(s)");if(o.dayHL)bits.push("today high "+o.dayHL.hi.toFixed(2)+" at "+o.dayHL.hiT+", low "+o.dayHL.lo.toFixed(2)+" at "+o.dayHL.loT);if(o.vp)bits.push("today POC "+(o.vp.lo+(o.vp.poc+.5)*o.vp.st).toFixed(2));
  o.note=bits.join(" · ");return o}
 function smWhen(t){return typeof t==="string"?t:new Date(t*1000).toISOString().slice(11,16)}
 function smKey(){var cs=S.data[S.tf]||[],last=cs.length?cs[cs.length-1]:{};return [S.sym,S.tf,cs.length,last.c,S.delta?S.delta.bars.length:0].join("|")}
@@ -97,7 +99,7 @@ function smRedraw(){var main=S.main,cd=S.candle,cs=S.data[S.tf];if(!main||!cd||!
   if(xb>0&&xb<RR){x.fillStyle=col;x.font="bold 10px Segoe UI,sans-serif";x.textAlign="center";x.fillText(e.kind,(Math.max(0,xa)+Math.min(RR,xb))/2,e.up?y-4:y+12);x.textAlign="left"}});
  if(SM.on.sr)A.sr.forEach(function(z){var c=z.res?"255,99,99":"46,204,113",a=Math.min(.32,.10+.05*z.n);box(z.t,z.lo,z.hi,null,"rgba("+c+","+a+")","rgba("+c+",.85)",(z.res?"R x":"S x")+z.n)});
  if(SM.on.liq)A.liq.forEach(function(q){hl(q.p,q.t,q.up?"#ff9f43":"#48dbfb",q.label,[2,3])});
- if(SM.on.lvl)A.lvl.forEach(function(q){hl(q.p,A.lvlFrom,q.col,q.label)});
+ if(SM.on.lvl)A.lvl.forEach(function(q){hl(q.p,A.lvlFrom,q.col,q.label);if(q.at!=null){var mx=X(q.at),my=Y(q.p);if(mx!=null&&my!=null&&mx>0&&mx<RR){x.fillStyle=q.col;x.beginPath();x.arc(mx,my,3.5,0,6.283);x.fill()}}});
  if(SM.on.vp&&A.vp){var v=A.vp,mw=Math.min(150,RR*.22);v.bins.forEach(function(b,i){var ya=Y(v.lo+(i+1)*v.st),yb=Y(v.lo+i*v.st);if(ya==null||yb==null)return;var inVA=(v.lo+i*v.st)>=v.val-1e-9&&(v.lo+(i+1)*v.st)<=v.vah+1e-9;x.fillStyle=i===v.poc?"rgba(245,185,66,.55)":inVA?"rgba(76,141,255,.30)":"rgba(142,160,189,.22)";var bw=b/v.max*mw;x.fillRect(RR-bw,ya,bw,Math.max(1,yb-ya-1))});
   hl(v.lo+(v.poc+.5)*v.st,null,"#f5b942","POC",[3,3]);hl(v.vah,null,"#4c8dff","VAH",[1,4]);hl(v.val,null,"#4c8dff","VAL",[1,4])}
  SM.draw.concat(SM.pend?[SM.pend]:[]).forEach(function(d){var col="#ffd166";
