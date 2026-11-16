@@ -198,6 +198,54 @@ def whatif(off: frozenset[str], root: Path = ROOT, stock: str | None = None, p: 
     return "\n".join(lines)
 
 
+PUT_RELEASE_KEY = "dx_x_lvwap_put"                         # forward variant: the late-VWAP-extension wait rule switched off for PUTS only (registered 13 Nov 2026 as experiment V06)
+
+
+def release_trades(off: frozenset[str], direction: str | None, root: Path = ROOT, only_days: Sequence[str] | None = None) -> list[dict[str, Any]]:
+    """Stock-days that would newly pass the A+ gate with `off` rules disabled (only `direction` when given), each followed on its nearest-the-money option with the live ladder.
+    Only candidates that did not pass anyway that day and have option prices are returned. Shadow only: nothing here trades."""
+    import late_runner
+
+    out: list[dict[str, Any]] = []
+    for d in only_days or days(root):
+        rows = load(d, root)
+        if not rows:
+            continue
+        held = [r for r in rows if recorded(r) in off and (direction is None or r.get("direction") == direction)]
+        first: dict[tuple[str, str], dict[str, str]] = {}
+        for r in held:
+            if evaluate(r, off) == "PASSED":
+                first.setdefault((r["symbol"], r["direction"]), r)
+        actual_pass = {(r["symbol"], r["direction"]) for r in rows if recorded(r) == "PASSED"}
+        if not first:
+            continue
+        chain = late_runner._chain(root, d, {k[0] for k in first})
+        for (sym, dirn), r in first.items():
+            if (sym, dirn) in actual_pass:
+                continue
+            res = outcome(chain.get(sym, []), dirn, r["time"][11:16])
+            if res.get("net_rs") is not None:
+                out.append({"day": d, "symbol": sym, "direction": dirn, "time": r["time"][11:16], **res})
+    return out
+
+
+def put_release_rows(root: Path = ROOT) -> list[list[Any]]:
+    """Rows for trade_archive's exit_variants.csv: [day, variant, trades, real_net, variant_net]. These trades were NOT taken, so the live net is 0 and the variant net is what they would have added."""
+    trades = release_trades(frozenset({"LATE_VWAP_EXTENSION"}), "BEARISH", root)
+    folder = root / "data" / "gate_whatif"
+    folder.mkdir(parents=True, exist_ok=True)
+    cols = ["day", "symbol", "direction", "time", "entry", "exit", "why", "gross_pct", "peak_pct", "net_rs"]
+    with (folder / "lvwap_put_release_trades.csv").open("w", encoding="utf-8", newline="") as h:
+        w = csv.writer(h)
+        w.writerow(cols)
+        for r in sorted(trades, key=lambda r: (r["day"], r["time"])):
+            w.writerow([round(r[c], 2) if isinstance(r.get(c), float) else r.get(c) for c in cols])
+    by: dict[str, list[float]] = defaultdict(list)
+    for r in trades:
+        by[r["day"]].append(float(r["net_rs"]))
+    return [[d, PUT_RELEASE_KEY, len(v), 0.0, round(sum(v), 2)] for d, v in sorted(by.items())]
+
+
 VARIANTS = (("late_10m_off", frozenset({"LATE_10M_OVERHEAT"})), ("late_10m_and_vwap_off", frozenset({"LATE_10M_OVERHEAT", "LATE_VWAP_EXTENSION"})))
 
 # The quality release found on 21 - 26 Oct (stable leave-one-day-out, still only 4 days): the late rules relaxed (10-minute move 1.8 %, VWAP distance 2.2 %, session / close extension off) but only for

@@ -96,6 +96,7 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Big-player gate (not against big prints)": ("APLUS_BIGPLAYER_GATE_MODE", lambda t: None if _truthy(t.get("bp_ok")) is None else not _truthy(t.get("bp_ok"))),
     "IV not expensive (ATM IV rank < 80 and IV < 1.5x realised volatility)": ("-", lambda t: None if _truthy(t.get("iv_expensive")) is None else bool(_truthy(t.get("iv_expensive")))),
     "Pullback-only entries (block everything but HEALTHY_PULLBACK / wait-for-retest)": ("-", lambda t: None if not t.get("setup_family") else str(t.get("setup_family")) != "HEALTHY_PULLBACK"),
+    "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)": ("-", lambda t: None if not t.get("setup_family") or t.get("spread_percent") in (None, "") else (str(t.get("setup_family")) != "HEALTHY_PULLBACK" or float(t.get("spread_percent")) > 1.0)),
     "No early non-pullback entry (before 09:45 unless HEALTHY_PULLBACK)": ("-", lambda t: None if not t.get("setup_family") or not t.get("entry_time") else (str(t.get("setup_family")) != "HEALTHY_PULLBACK" and str(t.get("entry_time"))[11:16] < "09:45")),
     "No entry before 09:45 (any setup)": ("-", lambda t: None if not t.get("entry_time") else str(t.get("entry_time"))[11:16] < "09:45"),
     "No ESTABLISHED_TREND setup": ("-", lambda t: None if not t.get("setup_family") else str(t.get("setup_family")).upper() == "ESTABLISHED_TREND"),

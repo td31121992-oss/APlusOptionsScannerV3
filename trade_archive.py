@@ -247,6 +247,12 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
 
             derived_tags.enrich(trades, root)
             xrows = exit_variant_rows(trades)
+            try:                                           # shadow release of the late-VWAP rule for puts: trades that were NOT taken, so live net 0 (see gate_whatif.put_release_rows)
+                import gate_whatif
+
+                xrows += gate_whatif.put_release_rows(root)
+            except Exception as exc:                       # noqa: BLE001 - a research extra must never block the archive
+                print(f"put-release shadow skipped: {type(exc).__name__}: {exc}")
             write_exit_variants(xrows, root / "data" / "trade_archive" / "exit_variants.csv")
             (root / "data" / "trade_archive" / "exit_variants.md").write_text(render_exit_variants(root / "data" / "trade_archive" / "exit_variants.csv"), encoding="utf-8")
             keep = {t["paper_trade_id"]: {k: v for k, v in t.items() if k.startswith("dx_")} for t in trades if t.get("_day") == last and t.get("paper_trade_id")}

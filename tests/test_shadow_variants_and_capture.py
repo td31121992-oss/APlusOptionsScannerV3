@@ -64,5 +64,23 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(out["minutes"], 8)
 
 
+class PutReleaseTests(unittest.TestCase):
+    def test_rows_have_zero_live_net_and_sum_the_released_trades(self):
+        import gate_whatif as g
+
+        fake = [{"day": "2026-11-14", "symbol": "A", "direction": "BEARISH", "time": "10:00", "net_rs": 500.0},
+                {"day": "2026-11-14", "symbol": "B", "direction": "BEARISH", "time": "10:05", "net_rs": -200.0},
+                {"day": "2026-11-17", "symbol": "C", "direction": "BEARISH", "time": "11:00", "net_rs": 50.0}]
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = g.release_trades
+            g.release_trades = lambda *a, **k: fake
+            try:
+                rows = g.put_release_rows(Path(tmp))
+            finally:
+                g.release_trades = orig
+            self.assertEqual(rows, [["2026-11-14", "dx_x_lvwap_put", 2, 0.0, 300.0], ["2026-11-17", "dx_x_lvwap_put", 1, 0.0, 50.0]])
+            self.assertTrue(Path(tmp, "data", "gate_whatif", "lvwap_put_release_trades.csv").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

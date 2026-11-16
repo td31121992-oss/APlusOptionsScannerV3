@@ -598,6 +598,7 @@ tr:hover{background:#18233b}.pill{padding:3px 8px;border-radius:999px;font-size:
 <a href="/fno-market-watch" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">F&amp;O MARKET WATCH</a>
 <a href="/stock-analysis" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STOCK ANALYSIS</a>
 <a href="/chart-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CHART LAB</a>
+<a href="/ask" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">ASK APLUS</a>
 <a href="/contract-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">CONTRACT LAB</a>
 <a href="/greeks-lab" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">GREEKS LAB</a>
 <a href="/strategy-builder" style="padding:9px 14px;border:1px solid #27334d;border-radius:9px;color:#e7eefc;text-decoration:none;font-weight:800;background:#121a2d">STRATEGY BUILDER</a>
@@ -1249,6 +1250,11 @@ class Handler(BaseHTTPRequestHandler):
                     out = {"ok": True, "symbols": chart_lab.symbols()}
                 body = json.dumps(out).encode("utf-8"); ctype = "application/json"
             self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path == "/ask":
+            import ask_aplus
+            body = ask_aplus.PAGE_HTML.encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
         if path in ("/manual-paper", "/api/manual-paper", "/api/manual-paper-contracts", "/api/manual-paper-quote", "/api/manual-paper-chain"):
             import manual_paper
             try:
@@ -1538,6 +1544,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 return reply(400, {"ok": False, "message": "Could not save the note."})
         route = self.path.split("?", 1)[0]
+        if route == "/api/ask":
+            try:
+                import ask_aplus
+                length = min(int(self.headers.get("Content-Length") or 0), 20000)
+                req = json.loads(self.rfile.read(length) or b"{}")
+                return reply(200, ask_aplus.ask(str(req.get("question") or ""), list(req.get("history") or [])))
+            except Exception as exc:  # noqa: BLE001
+                return reply(400, {"ok": False, "answer": f"{type(exc).__name__}: {str(exc)[:120]}"})
         if route in ("/api/manual-paper-open", "/api/manual-paper-close", "/api/manual-paper-stop", "/api/manual-paper-ladder", "/api/manual-paper-cancel"):
             try:
                 import manual_paper

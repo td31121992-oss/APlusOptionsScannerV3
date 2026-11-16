@@ -132,6 +132,30 @@
    "name": "Sector-fade exit: sell when the sector index gives back 0.4% from its best since entry while the stock is below entry",
    "registered": "2026-11-12",
    "note": "Hindsight (15 Oct - 12 Nov, 437 trades): +Rs 43k, better on 12 of 18 days but -Rs 14k over the last 10. Tracked forward from 13 Nov."
+  },
+  {
+   "id": "V06",
+   "kind": "variant",
+   "key": "dx_x_lvwap_put",
+   "name": "Release the late-VWAP-extension wait rule for PUTS only (shadow: trades that were not taken, replayed with the live ladder)",
+   "registered": "2026-11-13",
+   "note": "Hindsight 21 Oct - 12 Nov: 86 put trades, -Rs 20.9k (mean about +1.8% at the close but negative with the live ladder); calls are not part of this test. Live net is 0 because these trades were not taken, so 'change' = what they would have added. Forward from 14 Nov; 'positive days' counts days the released puts made money."
+  },
+  {
+   "id": "G22",
+   "kind": "gate",
+   "name": "Pullback-only entries (block every setup except HEALTHY_PULLBACK)",
+   "key": "Pullback-only entries (block everything but HEALTHY_PULLBACK / wait-for-retest)",
+   "registered": "2026-11-13",
+   "note": "Hindsight 22 Sep - 13 Nov: HEALTHY_PULLBACK 193 trades +Rs 49.9k (36% wins); every other setup family negative (-Rs 96.9k, -107k, -28.7k). Shadow only; forward from 14 Nov."
+  },
+  {
+   "id": "G23",
+   "kind": "gate",
+   "name": "Pullback-only AND option spread 1% or less (combined)",
+   "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
+   "registered": "2026-11-13",
+   "note": "Combination of G22 and the spread cap G01, tracked as one rule so the overlap is not double counted. Hindsight only before 14 Nov."
   }
  ]
 }
