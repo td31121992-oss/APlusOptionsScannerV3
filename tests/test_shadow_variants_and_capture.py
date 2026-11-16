@@ -82,5 +82,29 @@ class PutReleaseTests(unittest.TestCase):
             self.assertTrue(Path(tmp, "data", "gate_whatif", "lvwap_put_release_trades.csv").exists())
 
 
+class RegimePutTests(unittest.TestCase):
+    def test_rows_zero_live_net_and_sum_the_blocked_puts(self):
+        import gate_whatif as g
+
+        fake = [{"day": "2026-11-16", "symbol": "A", "direction": "BEARISH", "time": "10:00", "net_rs": 400.0},
+                {"day": "2026-11-16", "symbol": "B", "direction": "BEARISH", "time": "10:05", "net_rs": -150.0}]
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = g.regime_put_rows(Path(tmp), fake)
+            self.assertEqual(rows, [["2026-11-16", "dx_x_regime_put", 2, 0.0, 250.0]])
+            self.assertTrue(Path(tmp, "data", "gate_whatif", "regime_put_trades.csv").exists())
+
+    def test_regime_lookup_uses_the_last_recorded_minute(self):
+        import gate_whatif as g
+
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp, "data", "market_context")
+            d.mkdir(parents=True)
+            rows = ["time,regime", "2026-11-16T09:15:00+05:30,BULL", "2026-11-16T09:29:00+05:30,CHOP"]
+            (d / "2026-11-16.csv").write_text(chr(10).join(rows) + chr(10), encoding="utf-8")
+            self.assertEqual(g._regime_at("2026-11-16", "09:20", Path(tmp)), "BULL")
+            self.assertEqual(g._regime_at("2026-11-16", "09:40", Path(tmp)), "CHOP")
+            self.assertEqual(g._regime_at("2026-11-17", "09:40", Path(tmp)), "")
+
+
 if __name__ == "__main__":
     unittest.main()

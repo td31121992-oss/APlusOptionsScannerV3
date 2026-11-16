@@ -246,6 +246,72 @@ def put_release_rows(root: Path = ROOT) -> list[list[Any]]:
     return [[d, PUT_RELEASE_KEY, len(v), 0.0, round(sum(v), 2)] for d, v in sorted(by.items())]
 
 
+REGIME_PUT_KEY = "dx_x_regime_put"                           # forward variant: bearish candidates that passed every A+ gate but were dropped by the market-regime filter (Nifty BULL), followed on their option
+
+
+def _regime_at(day: str, hhmm: str, root: Path) -> str:
+    """The market regime recorded at or just before hh:mm on `day` ('' when nothing recorded)."""
+    try:
+        with (root / "data" / "market_context" / f"{day}.csv").open(encoding="utf-8", newline="") as h:
+            last = ""
+            for r in csv.DictReader(h):
+                if str(r.get("time") or "")[11:16] <= hhmm:
+                    last = str(r.get("regime") or "")
+                else:
+                    break
+            return last
+    except OSError:
+        return ""
+
+
+def regime_put_trades(root: Path = ROOT, only_days: Sequence[str] | None = None, taken: set[tuple[str, str]] | None = None) -> list[dict[str, Any]]:
+    """First PASSED_ALL_GATES bearish snapshot per stock-day recorded while the regime was BULL (the regime filter's drop rule), not traded as a put that day,
+    followed on its nearest-the-money put with the live ladder. Shadow only: nothing here trades. `taken` = {(day, symbol)} of puts really taken (tests may pass it)."""
+    import late_runner
+
+    if taken is None:
+        taken = set()
+        try:
+            import agent_run
+
+            for t in agent_run.load_trades(root):
+                if str(t.get("option_type")) == "PE":
+                    taken.add((str(t.get("entry_time"))[:10], str(t.get("symbol"))))
+        except Exception:                              # noqa: BLE001
+            pass
+    out: list[dict[str, Any]] = []
+    for d in only_days or days(root):
+        first: dict[str, dict[str, str]] = {}
+        for r in load(d, root):
+            if r.get("direction") == "BEARISH" and recorded(r) == "PASSED" and (d, r["symbol"]) not in taken and r["symbol"] not in first                     and _regime_at(d, r["time"][11:16], root) == "BULL":
+                first[r["symbol"]] = r
+        if not first:
+            continue
+        chain = late_runner._chain(root, d, set(first))
+        for sym, r in first.items():
+            res = outcome(chain.get(sym, []), "BEARISH", r["time"][11:16])
+            if res.get("net_rs") is not None:
+                out.append({"day": d, "symbol": sym, "direction": "BEARISH", "time": r["time"][11:16], **res})
+    return out
+
+
+def regime_put_rows(root: Path = ROOT, trades: Sequence[dict[str, Any]] | None = None) -> list[list[Any]]:
+    """Rows for exit_variants.csv: [day, variant, trades, real_net, variant_net]; live net is 0 (these puts were blocked), variant net = what they would have added."""
+    trades = list(trades) if trades is not None else regime_put_trades(root)
+    folder = root / "data" / "gate_whatif"
+    folder.mkdir(parents=True, exist_ok=True)
+    cols = ["day", "symbol", "direction", "time", "entry", "exit", "why", "gross_pct", "peak_pct", "net_rs"]
+    with (folder / "regime_put_trades.csv").open("w", encoding="utf-8", newline="") as h:
+        w = csv.writer(h)
+        w.writerow(cols)
+        for r in sorted(trades, key=lambda r: (r["day"], r["time"])):
+            w.writerow([round(r[c], 2) if isinstance(r.get(c), float) else r.get(c) for c in cols])
+    by: dict[str, list[float]] = defaultdict(list)
+    for r in trades:
+        by[r["day"]].append(float(r["net_rs"]))
+    return [[d, REGIME_PUT_KEY, len(v), 0.0, round(sum(v), 2)] for d, v in sorted(by.items())]
+
+
 VARIANTS = (("late_10m_off", frozenset({"LATE_10M_OVERHEAT"})), ("late_10m_and_vwap_off", frozenset({"LATE_10M_OVERHEAT", "LATE_VWAP_EXTENSION"})))
 
 # The quality release found on 21 - 26 Oct (stable leave-one-day-out, still only 4 days): the late rules relaxed (10-minute move 1.8 %, VWAP distance 2.2 %, session / close extension off) but only for

@@ -251,6 +251,7 @@ def run(day: str | None = None, root: Path = ROOT, backfill: bool = False) -> in
                 import gate_whatif
 
                 xrows += gate_whatif.put_release_rows(root)
+                xrows += gate_whatif.regime_put_rows(root)         # same idea for bearish candidates the market-regime filter dropped
             except Exception as exc:                       # noqa: BLE001 - a research extra must never block the archive
                 print(f"put-release shadow skipped: {type(exc).__name__}: {exc}")
             write_exit_variants(xrows, root / "data" / "trade_archive" / "exit_variants.csv")

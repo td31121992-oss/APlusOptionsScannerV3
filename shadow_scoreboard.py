@@ -99,6 +99,7 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)": ("-", lambda t: None if not t.get("setup_family") or t.get("spread_percent") in (None, "") else (str(t.get("setup_family")) != "HEALTHY_PULLBACK" or float(t.get("spread_percent")) > 1.0)),
     "No early non-pullback entry (before 09:45 unless HEALTHY_PULLBACK)": ("-", lambda t: None if not t.get("setup_family") or not t.get("entry_time") else (str(t.get("setup_family")) != "HEALTHY_PULLBACK" and str(t.get("entry_time"))[11:16] < "09:45")),
     "No entry before 09:45 (any setup)": ("-", lambda t: None if not t.get("entry_time") else str(t.get("entry_time"))[11:16] < "09:45"),
+    "No entry before 10:00 (any setup)": ("-", lambda t: None if not t.get("entry_time") else str(t.get("entry_time"))[11:16] < "10:00"),
     "No ESTABLISHED_TREND setup": ("-", lambda t: None if not t.get("setup_family") else str(t.get("setup_family")).upper() == "ESTABLISHED_TREND"),
     "Entry rules (10:00 start, with Nifty, side cap)": ("APLUS_ENTRY_RULES_MODE", lambda t: None if not t.get("rule_verdict") else t.get("rule_verdict") == "WOULD_BLOCK"),
     "Settle window (nothing before 10:00)": ("APLUS_SETTLE_MODE", lambda t: _truthy(t.get("settle_would_block"))),
