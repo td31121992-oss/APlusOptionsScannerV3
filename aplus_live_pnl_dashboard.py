@@ -1250,6 +1250,18 @@ class Handler(BaseHTTPRequestHandler):
                     out = {"ok": True, "symbols": chart_lab.symbols()}
                 body = json.dumps(out).encode("utf-8"); ctype = "application/json"
             self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if path in ("/home", "/api/home"):
+            import home_page
+            if path == "/home":
+                body, ctype = home_page.PAGE_HTML.encode("utf-8"), "text/html; charset=utf-8"
+            else:
+                try:
+                    out = home_page.payload(snapshot, _entries_state)
+                except Exception as exc:  # noqa: BLE001 - the page shows the message instead of a blank screen
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                body, ctype = json.dumps(out, default=str).encode("utf-8"), "application/json"
+            self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
         if path == "/ask":
             import ask_aplus
             body = ask_aplus.PAGE_HTML.encode("utf-8")
