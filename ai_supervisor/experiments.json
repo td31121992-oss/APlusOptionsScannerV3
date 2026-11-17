@@ -172,6 +172,14 @@
       "key": "No entry before 10:00 (any setup)",
       "registered": "2026-11-16",
       "note": "Hindsight 22 Sep - 16 Nov by entry time: 09:15-09:44 -Rs 76.3k (214 trades), 09:45-09:59 -Rs 52.2k (88), 10:00-10:59 +Rs 21.1k (163), 11:00-12:59 -Rs 72.7k, 13:00+ -Rs 10.4k. On 16 Nov the 13 trades entered before 10:00 lost about Rs 20.6k, the 9 later ones made about Rs 12.8k. Shadow only; forward from 17 Nov. Time buckets are one of several groupings tried, so only forward sessions count."
+    },
+    {
+      "id": "G25",
+      "kind": "gate",
+      "name": "Sector focus till 10:30, looser (sector in either top-2 gaining / losing list)",
+      "key": "Sector focus till 10:30, looser (sector in either top-2 list)",
+      "registered": "2026-11-16",
+      "note": "On 16 Nov the rule would have blocked 8 of 22 calls (all entered 09:31-09:58, 1 winner of 8, net -Rs 20,069), leaving +Rs 12,239; hindsight, one day, the three NBFC losers are one sector. The tag (sf_focus_any_block) is already recorded on every trade, so no code change: this entry only starts the forward count from 17 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
     }
   ]
 }
