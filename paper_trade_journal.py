@@ -64,7 +64,10 @@ STOCK_BURST_ARM_PCT = 0.5
 # Volatility-sized initial stop (SHADOW): the real exit logic, but the first stop is 2 x the stock's recent 5-minute range x 23 (8%..20%)
 # instead of a flat 20%. volstop30 uses the last 30 minutes, volstop60 the last 60.
 VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_stop60_pct"}
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS
+# "early8" shadow (added 17 Nov 2026): for the first 5 minutes after entry, exit at -8% from entry (the live first stop is about 15-20% away). Tick replay of 388 trades (26 Oct-17 Nov):
+# +Rs 42.8k vs the live ladder, positive in both halves, better on 13 of 15 days, but it was the best of ~40 settings tried and neighbouring settings are much weaker - forward evidence only.
+EARLY_STOP_SHADOW = ("early8", 300.0, 0.92)       # name, seconds after entry, fraction of the entry price
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS + (EARLY_STOP_SHADOW[0],)
 
 
 def _first_lock_pct() -> float:
@@ -1132,6 +1135,12 @@ class PaperTradeJournal:
             pct = self._number(trade.get(field))
             if entry > 0 and 0 < pct < 20.0:
                 floors[name] = max(entry * (1.0 - pct / 100.0), float(protected_stop or 0.0))
+        try:
+            elapsed = (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds()
+        except (TypeError, ValueError):
+            elapsed = None
+        if elapsed is not None and 0 <= elapsed < EARLY_STOP_SHADOW[1] and entry > 0:
+            floors[EARLY_STOP_SHADOW[0]] = entry * EARLY_STOP_SHADOW[2]
         self._record_half10_shadow(trade, entry, high, price, when)
         for name, pct in TARGET_SHADOWS.items():
             if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):

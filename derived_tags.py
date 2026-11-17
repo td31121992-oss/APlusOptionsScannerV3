@@ -218,6 +218,7 @@ def sector_tags(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, bool |
 SHADOW_EXIT_VARIANTS: dict[str, tuple[str, str]] = {          # name -> (live shadow exit rule recorded in the journal, first day it was recorded)
     "dx_x_secfade": ("secfade", "2026-10-15"),
     "dx_x_peak8_a20": ("peak8_a20", "2026-10-12"),
+    "dx_x_early8": ("early8", "2026-11-18"),
 }
 FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5",) + tuple(SHADOW_EXIT_VARIANTS)
 

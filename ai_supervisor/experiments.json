@@ -180,6 +180,30 @@
       "key": "Sector focus till 10:30, looser (sector in either top-2 list)",
       "registered": "2026-11-16",
       "note": "On 16 Nov the rule would have blocked 8 of 22 calls (all entered 09:31-09:58, 1 winner of 8, net -Rs 20,069), leaving +Rs 12,239; hindsight, one day, the three NBFC losers are one sector. The tag (sf_focus_any_block) is already recorded on every trade, so no code change: this entry only starts the forward count from 17 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
+    },
+    {
+      "id": "G26",
+      "kind": "gate",
+      "name": "Pullback-only + spread cap (HEALTHY_PULLBACK setup AND option spread 1% or less)",
+      "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
+      "registered": "2026-11-17",
+      "note": "Keeps PNB 147 CE (+Rs 13,043 on 17 Nov, spread 0.89%). 17 Nov hindsight: passes 2 of 17 (PNB, POLYCAB), blocks the other 15. History to 16 Nov (544 trades): passed 64 trades +Rs 8,352 (+Rs 130 each), blocked 480 trades -Rs 1.91 lakh; random blocking of the same size is beaten 84% of draws (short of 95%). The setup family was chosen after seeing this history, so in-sample. Tags already recorded; forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
+    },
+    {
+      "id": "G27",
+      "kind": "gate",
+      "name": "Pullback-only + no entry before 10:00 (HEALTHY_PULLBACK setup AND entered 10:00 or later)",
+      "key": "Pullback-only + no entry before 10:00 together (HEALTHY_PULLBACK and entered 10:00 or later)",
+      "registered": "2026-11-17",
+      "note": "Best pair from a search of 2,109 gate combinations over 603 trades (22 Sep-16 Nov): passes 64 trades, +Rs 40,280 (+Rs 629 each, 42% won), positive in both halves, but about half of the other 119 'profitable' combos are this same pair and chance alone would give ~155 such hits. Without its top 3 trades it is +Rs 7,553; Sep +10.9k, Oct +30.0k, Nov -0.6k (22 trades); 48% positive days. It blocks PNB (09:32, +Rs 13,043 on 17 Nov). Forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
+    },
+    {
+      "id": "V08",
+      "kind": "variant",
+      "name": "Early stop: exit at -8% from entry during the first 5 minutes (live first stop is ~15-20% away)",
+      "key": "dx_x_early8",
+      "registered": "2026-11-17",
+      "note": "Tick replay of 388 trades (26 Oct-17 Nov): +Rs 42.8k vs the live ladder, positive in both halves (+30.4k / +12.4k), better on 13 of 15 days. Best of ~40 settings tried: -5% gave +30.5k but only +0.6k in the 2nd half, -10% +5.3k, a 10-minute window was negative in the 2nd half, so treat as a lead. Replay assumes fills at the tick price; real fast moves and wide spreads will fill worse. Exit-if-below-entry-at-N-minutes variants all lost money and are not part of this. Recorded live as shadow_early8_exit_price by paper_trade_journal from the first session after registration (18 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
     }
   ]
 }
