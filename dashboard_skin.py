@@ -78,7 +78,7 @@ BODY = """<script id="aplus-skin-js">
   var btn=document.createElement("button");btn.className="viewBtn";btn.textContent=compact?"Classic view":"Compact view";
   btn.onclick=function(){try{localStorage.setItem("aplus_view",compact?"classic":"compact")}catch(e){}location.reload()};
   if(!compact){btn.style.cssText="float:right;margin:8px 14px;font:600 12px sans-serif;color:#8ea0bd;background:#121a2d;border:1px solid #27334d;border-radius:7px;padding:5px 10px;cursor:pointer";nav.appendChild(btn);return}
-  var MAIN=["/","/control-room","/decision-desk","/live-scanner","/journal","/money-flow","/chart-lab"],links=[].slice.call(nav.querySelectorAll(":scope>a")),here=location.pathname;
+  var MAIN=["/","/home","/control-room","/decision-desk","/live-scanner","/journal","/money-flow","/chart-lab"],links=[].slice.call(nav.querySelectorAll(":scope>a")),here=location.pathname;
   var wrap=document.createElement("div");wrap.className="moreWrap";var mb=document.createElement("button");mb.className="moreBtn";mb.innerHTML="More &#9662;";var menu=document.createElement("div");menu.className="moreMenu";wrap.appendChild(mb);wrap.appendChild(menu);
   links.forEach(function(a){var h=a.getAttribute("href")||"";if(h===here||(h!=="/"&&here.indexOf(h)===0))a.classList.add("cur");a.textContent=a.textContent.replace(/\\s+/g," ").trim().toLowerCase().replace(/(^|\\s)\\S/g,function(c){return c.toUpperCase()}).replace("F&o","F&O");
    if(MAIN.indexOf(h)<0){menu.appendChild(a)}});

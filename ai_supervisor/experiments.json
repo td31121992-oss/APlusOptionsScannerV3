@@ -204,6 +204,30 @@
       "key": "dx_x_early8",
       "registered": "2026-11-17",
       "note": "Tick replay of 388 trades (26 Oct-17 Nov): +Rs 42.8k vs the live ladder, positive in both halves (+30.4k / +12.4k), better on 13 of 15 days. Best of ~40 settings tried: -5% gave +30.5k but only +0.6k in the 2nd half, -10% +5.3k, a 10-minute window was negative in the 2nd half, so treat as a lead. Replay assumes fills at the tick price; real fast moves and wide spreads will fill worse. Exit-if-below-entry-at-N-minutes variants all lost money and are not part of this. Recorded live as shadow_early8_exit_price by paper_trade_journal from the first session after registration (18 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+    },
+    {
+      "id": "V09",
+      "kind": "variant",
+      "name": "Late trail: once the option is up 40%, exit if it falls back to keep only 60% of its best gain",
+      "key": "dx_x_lt40",
+      "registered": "2026-11-19",
+      "note": "Tick replay of 421 trades (26 Oct-18 Nov): +Rs 20.2k vs the live exits (positive in both halves, +11.1k / +9.1k), but only 25 trades changed and days were 4 better / 5 worse; in the replay every trail arming at +10% to +30% lost money (-Rs 12k to -Rs 108k) and selling part of the position below +30% also lost, because winners dip before they run. Variants around it: keep 70% +26.8k, keep 50% +14.0k, keep 30% +6.2k. Replay assumes fills at the tick price. Recorded live as shadow_lt40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+    },
+    {
+      "id": "G28",
+      "kind": "gate",
+      "name": "Stricter chase check: stock already up 0.45% or more our way in the last 15 minutes (separate from the 0.30% gate)",
+      "key": "Stricter chase check (stock already up 0.45% or more our way in the last 15 minutes)",
+      "registered": "2026-11-19",
+      "note": "On 481 trades with entry-context tags (mid-Oct to 18 Nov) it blocks 100 trades (21%) that net -Rs 120.5k (24% won, avg -Rs 1,280), so enforcing would have been +Rs 120.5k: +75.0k / +45.5k by half, positive on 18 of 22 days, better than random blocking of 100 trades in 100% of 2,000 draws, but it also blocks 24 winners (best +Rs 16.1k). Threshold 0.45% was picked after looking at quintiles and the older 0.30% chase gate was written on overlapping mid-Oct data, so treat as a lead. Reads the ctx_last15_pct tag already on every trade (signed in our direction); no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
+    },
+    {
+      "id": "V10",
+      "kind": "variant",
+      "name": "Puts only: wait 2 minutes after the signal and buy at the ask only if the option is up 2% or more (calls unchanged)",
+      "key": "dx_e_wait2_put",
+      "registered": "2026-11-19",
+      "note": "Tick replay of 423 trades (26 Oct-18 Nov): puts lost -Rs 120k as taken, and kept only when the option was up 2%+ after 2 minutes they were -Rs 10.9k (21 of the put trades kept); calls made +Rs 75.8k unfiltered and every confirmation rule REDUCED them, so calls are left alone. Combined (calls as is, puts confirmed) ~ +Rs 65k vs -Rs 44k real. Best of ~15 confirmation settings tried (2 min / up 2% was +Rs 42k all-trades; up 5% was negative), 16 days of one market phase, and even confirmed puts stay negative - a lead only. Replay buys at the ask at t0+2min and sells at the real exit. Recorded live as opt2 / opt2_price / opt2_ask by paper_trade_journal.record_opt2 from 20 Nov; a put whose trade was over before 2 minutes counts as not taken (0). Nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
     }
   ]
 }

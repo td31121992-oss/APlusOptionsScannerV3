@@ -92,6 +92,7 @@ GATES: dict[str, tuple[str, Callable[[Mapping[str, Any]], bool | None]]] = {
     "Quality gate (score >= 6 of 7, max 6 a day)": ("APLUS_QUALITY_GATE_MODE", lambda t: None if _truthy(t.get("q_pass")) is None else not _truthy(t.get("q_pass"))),
     "Weak-market call gate (no CE into a weak market unless news / big buying)": ("APLUS_WEAKMKT_CE_MODE", lambda t: None if _truthy(t.get("wk_ok")) is None else not _truthy(t.get("wk_ok"))),
     "Do-not-chase check (stock already ran our way / extended market)": ("APLUS_CHASE_GATE_MODE", lambda t: None if _truthy(t.get("cg_ok")) is None else not _truthy(t.get("cg_ok"))),
+    "Stricter chase check (stock already up 0.45% or more our way in the last 15 minutes)": ("-", lambda t: None if _f(t.get("ctx_last15_pct")) is None else _f(t.get("ctx_last15_pct")) >= 0.45),
     "Event gate (results within 3 trading days / bonus-split ex-date)": ("APLUS_EVENT_GATE_MODE", lambda t: None if _truthy(t.get("evg_ok")) is None else not _truthy(t.get("evg_ok"))),
     "Big-player gate (not against big prints)": ("APLUS_BIGPLAYER_GATE_MODE", lambda t: None if _truthy(t.get("bp_ok")) is None else not _truthy(t.get("bp_ok"))),
     "IV not expensive (ATM IV rank < 80 and IV < 1.5x realised volatility)": ("-", lambda t: None if _truthy(t.get("iv_expensive")) is None else bool(_truthy(t.get("iv_expensive")))),

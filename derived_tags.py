@@ -34,6 +34,7 @@ Nothing here blocks anything; shadow_scoreboard.py lists them as rules ("would b
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
@@ -219,8 +220,10 @@ SHADOW_EXIT_VARIANTS: dict[str, tuple[str, str]] = {          # name -> (live sh
     "dx_x_secfade": ("secfade", "2026-10-15"),
     "dx_x_peak8_a20": ("peak8_a20", "2026-10-12"),
     "dx_x_early8": ("early8", "2026-11-18"),
+    "dx_x_lt40": ("lt40", "2026-11-20"),
 }
-FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5",) + tuple(SHADOW_EXIT_VARIANTS)
+FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5", "dx_e_wait2_put") + tuple(SHADOW_EXIT_VARIANTS)
+WAIT2_PUT_SINCE = "2026-11-20"                       # first full session in which the journal records opt2 (V10)
 
 
 def shadow_exit_variants(trade: Mapping[str, Any]) -> dict[str, float | None]:
@@ -264,12 +267,34 @@ def wait5_pnl(trade: Mapping[str, Any], ticks: Sequence[tuple[float, float, floa
     return round((exit_px - after[0][2]) * qty - cost, 2) if after else None
 
 
+def wait2_put_pnl(trade: Mapping[str, Any]) -> float | None:
+    """V10: puts only - wait 2 minutes after the signal and buy at the ask only if the option is then up 2% or more; calls are left exactly as they were.
+    Rs the trade would have made: the real result for a call; 0.0 for a put the rule would not have taken; None for trades from before opt2 was recorded or when it cannot be told."""
+    entry, qty, exit_px, net, gross = (_f(trade.get(k)) for k in ("entry_price", "quantity", "exit_price", "net_pnl", "gross_pnl"))
+    if str(trade.get("entry_time") or "")[:10] < WAIT2_PUT_SINCE or net is None or not entry or not qty:
+        return None
+    if not str(trade.get("option_type") or "").upper().startswith("P"):
+        return round(net, 2)
+    cost = gross - net if gross is not None else 214.0
+    live = str(trade.get("opt2") or "").upper()
+    if live == "FAILED":
+        return 0.0
+    if live == "HELD":
+        ask = _f(trade.get("opt2_ask")) or _f(trade.get("opt2_price"))
+        return round((exit_px - ask) * qty - cost, 2) if ask and exit_px else None
+    try:                                               # never recorded: the trade was over before the 2-minute check, so the rule would not have taken it
+        secs = (datetime.fromisoformat(str(trade.get("exit_time"))) - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    return 0.0 if secs < 120 else None
+
+
 def tags_for(trade: Mapping[str, Any], root: Path = ROOT) -> dict[str, Any]:
     day = str(trade.get("entry_time") or "")[:10]
     wide = spread_wide(trade)
     ticks = load_ticks(str(trade.get("option_security_id")), day, root) if day else None
     block = momentum_block(trade, ticks)
-    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), **shadow_exit_variants(trade), "dx_e_wait5": wait5_pnl(trade, ticks), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root), "dx_ai_skip": ai_skip_tag(trade, root)}
+    out: dict[str, Any] = {"dx_spread_wide": wide, "dx_mom5_block": block, **exit_variants(trade, ticks), **shadow_exit_variants(trade), "dx_e_wait5": wait5_pnl(trade, ticks), "dx_e_wait2_put": wait2_put_pnl(trade), **sector_tags(trade, root), **lag_tags(trade, root), **rvol_tags(trade, root), "dx_ai_skip": ai_skip_tag(trade, root)}
     known = [v for v in (wide, block) if v is not None]
     out["dx_would_block"] = None if not known else any(known)
     return out

@@ -275,7 +275,7 @@ def render(day: str, rows: list[dict], health: str = "") -> str:
                   "secfade": "Sector fade: sector index gave back 0.4% from its best since entry while the stock is below entry",
                   "moverover": "Movement over: option was up 8%+, is back near cost (<= +3%) and the stock gave back half its move / fell below entry / stalled 10 min",
                   "volstop30": "Volatility-sized first stop (2 x last-30-min stock range x 23, 8-20%)", "volstop60": "Volatility-sized first stop (2 x last-60-min stock range x 23, 8-20%)",
-                  "early8": "Early stop: exit at -8% from entry during the first 5 minutes",
+                  "early8": "Early stop: exit at -8% from entry during the first 5 minutes", "lt40": "Late trail: once up 40%, exit if the gain falls to 60% of its best",
                   "cash10": "Cash everything at +10% and leave", "cash15": "Cash everything at +15% and leave", "cash20": "Cash everything at +20% and leave"}
         out += ["", "**Exit-rule comparison (shadow, nothing traded)** - rupees versus the real exits above, summed over today's trades", "",
                 "| Rule | Trades where it acted | Extra Rs vs real |", "|---|---|---|"]

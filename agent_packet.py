@@ -29,7 +29,7 @@ PACKET_FIELDS = (
     "day_entry_rank", "nt_wins", "nt_losses",
 )
 DERIVED = ("sector", "entry_minute", "weekday", "days_to_expiry", "opening_volume_x", "minutes_since_first_signal", "sector_in_0945_picks")
-FORBIDDEN_PREFIXES = ("shadow_", "confirm", "opt5", "dx_x_", "dx_e_", "dx_mom", "mfe", "mae", "exit", "net_", "gross", "realized", "unrealized", "total_pnl", "highest", "lowest",
+FORBIDDEN_PREFIXES = ("shadow_", "confirm", "opt5", "opt2", "dx_x_", "dx_e_", "dx_mom", "mfe", "mae", "exit", "net_", "gross", "realized", "unrealized", "total_pnl", "highest", "lowest",
                       "stock_move", "stock_fav", "runner", "target1_hit", "target2_hit", "target3_hit", "holding", "return_percent", "result", "last_", "watch", "alert_")
 
 

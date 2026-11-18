@@ -67,7 +67,10 @@ VOL_STOP_SHADOWS = {"volstop30": "ctx_vol_stop30_pct", "volstop60": "ctx_vol_sto
 # "early8" shadow (added 17 Nov 2026): for the first 5 minutes after entry, exit at -8% from entry (the live first stop is about 15-20% away). Tick replay of 388 trades (26 Oct-17 Nov):
 # +Rs 42.8k vs the live ladder, positive in both halves, better on 13 of 15 days, but it was the best of ~40 settings tried and neighbouring settings are much weaker - forward evidence only.
 EARLY_STOP_SHADOW = ("early8", 300.0, 0.92)       # name, seconds after entry, fraction of the entry price
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS + (EARLY_STOP_SHADOW[0],)
+# "lt40" shadow (added 19 Nov 2026): once the option has been up 40%, exit if it falls back so that only 60% of the gain is kept (entry + 0.6 x (best - entry)).
+# Tick replay of 421 trades (26 Oct-18 Nov): +Rs 20k vs the live exits, positive in both halves, but only 25 trades changed. Earlier or tighter trails (from +10..+30%) all lost money - forward evidence only.
+LATE_TRAIL_SHADOW = ("lt40", 0.40, 0.60)          # name, gain that arms the trail, share of the gain kept
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS + (EARLY_STOP_SHADOW[0], LATE_TRAIL_SHADOW[0])
 
 
 def _first_lock_pct() -> float:
@@ -112,6 +115,23 @@ def record_opt5(trade: dict[str, Any], entry: float, price: float, when: datetim
         trade["opt5_price"] = round(price, 4)
         trade["opt5_ask"] = round(ask, 4) if ask > 0 else ""
         trade["opt5_at"] = when.isoformat()
+    except (TypeError, ValueError):
+        return
+
+
+def record_opt2(trade: dict[str, Any], entry: float, price: float, when: datetime) -> None:
+    """SHADOW only (19 Nov 2026), the 2-minute version of record_opt5 for forward test V10: on the first update 2 or more minutes after entry, record the option's price, the ask
+    and whether the option is up 2% or more on our entry price (opt2 = HELD / FAILED). Nothing reads it for a real decision. Set once per trade."""
+    try:
+        if trade.get("opt2") or entry <= 0 or price <= 0:
+            return
+        if (when - datetime.fromisoformat(str(trade.get("entry_time")))).total_seconds() < 120:
+            return
+        ask = float(trade.get("last_ask") or 0)
+        trade["opt2"] = "HELD" if price >= entry * 1.02 else "FAILED"
+        trade["opt2_price"] = round(price, 4)
+        trade["opt2_ask"] = round(ask, 4) if ask > 0 else ""
+        trade["opt2_at"] = when.isoformat()
     except (TypeError, ValueError):
         return
 
@@ -645,6 +665,7 @@ class PaperTradeJournal:
             trade["position_lifecycle_status"] = "OPEN"
             self._append_option_tape(trade, when, price)
             self._record_quote_depth(trade, when, price, raw)
+            record_opt2(trade, entry, price, when)                      # SHADOW: option vs entry price 2 minutes after the signal (V10)
             record_opt5(trade, entry, price, when)                      # SHADOW: option vs entry price 5 minutes after the signal (see record_opt5)
             prev_high = self._number(trade.get("highest_option_price"))
             high = max(prev_high, price)
@@ -1141,6 +1162,8 @@ class PaperTradeJournal:
             elapsed = None
         if elapsed is not None and 0 <= elapsed < EARLY_STOP_SHADOW[1] and entry > 0:
             floors[EARLY_STOP_SHADOW[0]] = entry * EARLY_STOP_SHADOW[2]
+        if entry > 0 and high >= entry * (1.0 + LATE_TRAIL_SHADOW[1]):
+            floors[LATE_TRAIL_SHADOW[0]] = entry + (high - entry) * LATE_TRAIL_SHADOW[2]
         self._record_half10_shadow(trade, entry, high, price, when)
         for name, pct in TARGET_SHADOWS.items():
             if entry > 0 and not trade.get(f"shadow_{name}_exit_at") and high >= entry * (1.0 + pct):
