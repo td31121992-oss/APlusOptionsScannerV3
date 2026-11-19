@@ -13,6 +13,7 @@ options map by token; indices use the small explicit table below.
 
 from __future__ import annotations
 
+import contextvars
 import gzip
 import json
 import os
@@ -92,7 +93,36 @@ class _Budget:
 SHARED_LEDGER = ROOT / "data" / "cache" / "upstox_budget.sqlite3"
 # Upstox counts every call on one token together (500 a minute, 2000 per 30 min), whichever process makes it. "high" callers (scanner, position monitor, dashboards)
 # may use almost all of it; "low" callers (data collectors) stop earlier so trading always has room.
-SHARED_CAPS = {"high": (1900, 450), "low": (1300, 250)}          # (per 30 min, per minute)
+# "monitor" = the open-position price check (fast_monitor): it keeps the top slice nobody else may use, so stops always get prices. The scanner ("high") stops
+# 150 calls earlier; collectors ("low") stop earlier still, and much earlier in the opening 45 minutes when the scanner needs the most (19 Nov: budget ran dry at 09:33).
+SHARED_CAPS = {"monitor": (1990, 495), "high": (1750, 420), "low": (1300, 250)}          # (per 30 min, per minute)
+LOW_OPEN_CAP = (900, 150)                                          # "low" callers between 09:15 and 10:00 IST
+_PRIORITY_OVERRIDE: "contextvars.ContextVar[str | None]" = contextvars.ContextVar("upstox_priority_override", default=None)
+
+
+class priority_scope:
+    """`with priority_scope("monitor"):` - calls made inside count against that priority instead of the client's own (this thread only)."""
+
+    def __init__(self, priority: str) -> None:
+        self.priority = priority
+
+    def __enter__(self) -> "priority_scope":
+        self._tok = _PRIORITY_OVERRIDE.set(self.priority)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        _PRIORITY_OVERRIDE.reset(self._tok)
+
+
+def _cap_for(priority: str, now: float) -> tuple[int, int]:
+    if priority == "low":
+        try:
+            t = datetime.fromtimestamp(now, timezone(timedelta(hours=5, minutes=30)))
+            if t.weekday() < 5 and (9, 15) <= (t.hour, t.minute) < (10, 0):
+                return LOW_OPEN_CAP
+        except Exception:                                  # noqa: BLE001
+            pass
+    return SHARED_CAPS.get(priority, SHARED_CAPS["high"])
 
 
 class _SharedLedger:
@@ -124,7 +154,8 @@ class _SharedLedger:
         now = time.time() if now is None else now
         if now < self._broken_until:
             return
-        cap30, cap60 = SHARED_CAPS.get(priority, SHARED_CAPS["high"])
+        priority = _PRIORITY_OVERRIDE.get() or priority
+        cap30, cap60 = _cap_for(priority, now)
         try:
             conn = self._open()
             conn.execute("BEGIN IMMEDIATE")

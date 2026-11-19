@@ -155,7 +155,7 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
     cycle = float(os.getenv("APLUS_FUTURES_SECONDS", "60") or 60)
     min_days = int(os.getenv("APLUS_FUTURES_MIN_DAYS", "2") or 2)
     base = out_root or root / "data" / "futures"
-    client = UpstoxClient()
+    client = UpstoxClient(priority="low")                   # data only: pauses before the scanner and position monitor
     contracts = pick_contracts(client._load_master(), uni, date.today(), min_days)
     if not contracts:
         print("no futures found in the instrument master")

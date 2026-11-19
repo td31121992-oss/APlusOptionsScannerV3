@@ -23,6 +23,8 @@ import time
 from datetime import datetime, time as clock_time, timedelta, timezone
 from typing import Any, Callable, Mapping
 
+from core.upstox_client import priority_scope
+
 logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -56,7 +58,8 @@ class FastPositionMonitor:
         for source in (self.dhan, self.client):
             try:
                 self.stats["quote_calls"] += 1
-                seg = source.get_market_quotes({"NSE_FNO": ids}, mode="quote").get("NSE_FNO", {})
+                with priority_scope("monitor"):                   # position prices keep the reserved top slice of the shared Upstox allowance
+                    seg = source.get_market_quotes({"NSE_FNO": ids}, mode="quote").get("NSE_FNO", {})
                 if isinstance(seg, Mapping) and seg:
                     return seg
             except Exception as exc:                          # noqa: BLE001 - try the next source
