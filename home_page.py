@@ -239,7 +239,7 @@ def payload(snapshot_fn: Callable[[], Mapping[str, Any]], entries_fn: Callable[[
     for r in sorted(rows, key=lambda x: str(x.get("entry_time") or "")):
         age = tape_age(str(r.get("id") or ""), today, now)
         ages.append(age)
-        positions.append({"symbol": r.get("symbol"), "side": r.get("side"), "entry_time": r.get("entry_time"), "entry": r.get("entry"), "last": r.get("last"), "pnl": r.get("pnl"),
+        positions.append({"symbol": r.get("symbol"), "side": r.get("side"), "entry_time": r.get("entry_time"), "entry": r.get("entry"), "last": r.get("last"), "pnl": r.get("pnl"), "capital": r.get("capital"),
                           "return_pct": r.get("return_pct"), "stop": r.get("ladder_stop") or r.get("sl"), "age_s": None if age is None else round(age),
                           "age_text": _age_text(age), "stale": bool(age is not None and age > PRICE_BAD_S and market_open(now))})
     try:
@@ -251,6 +251,7 @@ def payload(snapshot_fn: Callable[[], Mapping[str, Any]], entries_fn: Callable[[
         _CACHE["tests"], _CACHE["t"] = shadow_tests(today), time.time()
     return {"ok": True, "now": now.strftime("%H:%M:%S"), "date": now.strftime("%a %d %b %Y"), "health": h,
             "today": {k: snap.get(k) for k in ("trade_count", "open_count", "closed_count", "wins", "losses", "win_rate", "total_pnl", "closed_pnl", "open_pnl")},
+            "capital_open": round(sum(float(p.get("capital") or 0) for p in positions), 2),   # money tied up in trades that are still open: falls as soon as one closes
             "positions": positions, "tests": _CACHE["tests"]}
 
 
@@ -295,11 +296,11 @@ function render(D){
  if(!D||!D.ok){var e=document.getElementById("banner");e.className="bad";e.textContent="The home page could not build its data: "+((D&&D.error)||"no answer");return}
  var H=D.health;document.getElementById("clock").textContent=D.date+"  "+D.now;
  var b=document.getElementById("banner");b.className=H.level;b.textContent=H.message;
- var T=D.today;document.getElementById("cards").innerHTML=[["Today total",rs(T.total_pnl),cl(T.total_pnl)],["Realised",rs(T.closed_pnl),cl(T.closed_pnl)],["Open now",rs(T.open_pnl),cl(T.open_pnl)],
+ var T=D.today;document.getElementById("cards").innerHTML=[["Today total",rs(T.total_pnl),cl(T.total_pnl)],["Realised",rs(T.closed_pnl),cl(T.closed_pnl)],["Open now",rs(T.open_pnl),cl(T.open_pnl)],["Capital in open trades",rs(D.capital_open),""],
   ["Trades",(T.trade_count||0)+" ("+(T.open_count||0)+" open)",""],["Won / lost",(T.wins||0)+" / "+(T.losses||0),""],["Win rate",(T.win_rate||0)+"%",""]]
   .map(function(c){return '<div class="card"><div class="k">'+c[0]+'</div><div class="v '+c[2]+'">'+c[1]+'</div></div>'}).join("");
- var P=D.positions;document.getElementById("pos").innerHTML=P.length?'<table><thead><tr><th>Stock</th><th>Side</th><th>In</th><th>Entry</th><th>Last</th><th>P&amp;L</th><th>%</th><th>Stop</th><th>Price age</th></tr></thead><tbody>'+
-  P.map(function(p){return '<tr class="'+(p.stale?"stale":"")+'"><td><b>'+esc(p.symbol)+'</b></td><td>'+esc(p.side)+'</td><td>'+esc(p.entry_time)+'</td><td>'+Number(p.entry).toFixed(2)+'</td><td>'+Number(p.last).toFixed(2)+'</td><td class="'+cl(p.pnl)+'">'+rs(p.pnl)+
+ var P=D.positions;document.getElementById("pos").innerHTML=P.length?'<table><thead><tr><th>Stock</th><th>Side</th><th>In</th><th>Entry</th><th>Capital</th><th>Last</th><th>P&amp;L</th><th>%</th><th>Stop</th><th>Price age</th></tr></thead><tbody>'+
+  P.map(function(p){return '<tr class="'+(p.stale?"stale":"")+'"><td><b>'+esc(p.symbol)+'</b></td><td>'+esc(p.side)+'</td><td>'+esc(p.entry_time)+'</td><td>'+Number(p.entry).toFixed(2)+'</td><td>'+rs(p.capital)+'</td><td>'+Number(p.last).toFixed(2)+'</td><td class="'+cl(p.pnl)+'">'+rs(p.pnl)+
   '</td><td class="'+cl(p.return_pct)+'">'+Number(p.return_pct).toFixed(1)+'%</td><td>'+(p.stop?Number(p.stop).toFixed(2):"-")+'</td><td class="'+(p.stale?"r":(p.age_s!=null&&p.age_s>20?"a":"m"))+'">'+esc(p.age_text)+'</td></tr>'}).join("")+'</tbody></table>':'<span class="m">No open positions.</span>';
  document.getElementById("checks").innerHTML=H.checks.map(function(c){return '<div class="chk"><div class="dot '+c.status+'"></div><div><b>'+esc(c.name)+'</b><span>'+esc(c.detail)+'</span></div></div>'}).join("");
  var X=D.tests;document.getElementById("tests").innerHTML=X.length?'<table><thead><tr><th>ID</th><th class="l">Test</th><th>Since</th><th>Sessions</th><th>Trades</th><th>Change if enforced</th><th>Positive days</th><th>Progress</th></tr></thead><tbody>'+

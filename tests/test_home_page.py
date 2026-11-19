@@ -56,6 +56,16 @@ class HomeHealthTests(unittest.TestCase):
         self.assertEqual(hp._age_text(300), "5 min")
         self.assertEqual(hp._age_text(None), "unknown")
 
+    def test_capital_is_shown_per_open_trade_and_closed_trades_drop_out(self):
+        rows = [{"id": "a", "symbol": "X", "status": "OPEN", "capital": 12000.0, "entry_time": "09:50"},
+                {"id": "b", "symbol": "Y", "status": "OPEN", "capital": 8000.0, "entry_time": "09:55"},
+                {"id": "c", "symbol": "Z", "status": "CLOSED", "capital": 5000.0}]
+        p = hp.payload(lambda: {"rows": rows}, None, now=SAT)
+        self.assertEqual([x["capital"] for x in p["positions"]], [12000.0, 8000.0])
+        self.assertEqual(p["capital_open"], 20000.0)
+        rows[0]["status"] = "CLOSED"
+        self.assertEqual(hp.payload(lambda: {"rows": rows}, None, now=SAT)["capital_open"], 8000.0)
+
     def test_payload_survives_missing_pieces(self):
         p = hp.payload(lambda: {"rows": [], "trade_count": 0}, None, now=SAT)
         self.assertTrue(p["ok"])
