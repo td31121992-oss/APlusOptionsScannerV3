@@ -23,7 +23,7 @@ import time
 from datetime import datetime, time as clock_time, timedelta, timezone
 from typing import Any, Callable, Mapping
 
-from core.upstox_client import priority_scope
+from core.upstox_client import _SharedLedger, priority_scope
 
 logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -40,6 +40,21 @@ def interval_seconds() -> float:
         return 3.0
 
 
+def slow_at() -> int:
+    """Shared Upstox calls per 30 minutes above which the price check slows down (default 1500 of the scanner's 1750 cap)."""
+    try:
+        return int(os.getenv("APLUS_FAST_MONITOR_SLOW_AT", "1500"))
+    except ValueError:
+        return 1500
+
+
+def slow_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("APLUS_FAST_MONITOR_SLOW_SECONDS", "6")))
+    except ValueError:
+        return 6.0
+
+
 class FastPositionMonitor:
     def __init__(self, journal: Any, client: Any, *, interval: float = 3.0, is_session: Callable[[datetime], bool] | None = None, clock: Callable[[], datetime] | None = None) -> None:
         self.journal = journal
@@ -52,6 +67,8 @@ class FastPositionMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_logged_error = 0.0
+        self._pressure_at, self._pressure = 0.0, False
+        self._ledger: _SharedLedger | None = None
 
     def _fetch(self, ids: list[str]) -> Mapping[str, Any]:
         last: Exception | None = None
@@ -100,8 +117,25 @@ class FastPositionMonitor:
             logger.info("FAST_MONITOR closed %s", ", ".join(f"{t.get('symbol')} {t.get('exit_reason')} {t.get('exit_price')}" for t in closed))
         return list(closed)
 
+    def _under_pressure(self) -> bool:
+        """True while all processes together use more than slow_at() calls per 30 minutes. Checked at most every 10 s; a broken ledger counts as no pressure."""
+        now = time.monotonic()
+        if now - self._pressure_at >= 10.0:
+            self._pressure_at = now
+            try:
+                if self._ledger is None:
+                    self._ledger = _SharedLedger(who="fast_monitor_probe")
+                self._pressure = self._ledger.used_30m() >= slow_at()
+            except Exception:                                 # noqa: BLE001
+                self._pressure = False
+        return self._pressure
+
+    def current_interval(self) -> float:
+        """Normal cadence, stretched to slow_seconds() only while the shared allowance is nearly used (so exits are never slowed on a quiet day)."""
+        return max(self.interval, slow_seconds()) if self._under_pressure() else self.interval
+
     def _run(self) -> None:
-        while not self._stop.wait(self.interval):
+        while not self._stop.wait(self.current_interval()):
             try:
                 self.tick()
             except Exception as exc:                            # noqa: BLE001 - a failed check just waits for the next one

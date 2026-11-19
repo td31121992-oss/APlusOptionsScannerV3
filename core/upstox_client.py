@@ -183,6 +183,14 @@ class _SharedLedger:
             self._conn = None
             self._broken_until = now + 60.0
 
+    def used_30m(self, now: float | None = None) -> int:
+        """Calls recorded by all processes in the last 30 minutes (0 when the ledger cannot be read)."""
+        now = time.time() if now is None else now
+        try:
+            return int(self._open().execute("SELECT COUNT(*) FROM calls WHERE ts > ?", (now - 1800,)).fetchone()[0])
+        except Exception:                                    # noqa: BLE001
+            return 0
+
     def usage(self, now: float | None = None) -> dict[str, Any]:
         """Calls in the last 30 minutes / minute, and per process name (for diagnosing a 429)."""
         now = time.time() if now is None else now

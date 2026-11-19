@@ -20,6 +20,14 @@ def T(m, s=0):
     return datetime(2026, 10, 14, 10, m, s, tzinfo=IST)
 
 
+class FakeLedger:
+    def __init__(self, n):
+        self.n = n
+
+    def used_30m(self):
+        return self.n
+
+
 class FakeClient:
     def __init__(self, prices):
         self.prices = list(prices)
@@ -38,6 +46,7 @@ def make(prices, **kw):
     j = _journal(tmp.name, "2026-10-14", [_open_trade(entry_time="2026-10-14T10:00:00+05:30", option_stop=9.0, option_target1=50.0)])
     client = FakeClient(prices)
     mon = fm.FastPositionMonitor(j, client, interval=1, is_session=lambda now: True, **kw)
+    mon._ledger = FakeLedger(0)                    # never read the live shared ledger in tests
     return tmp, j, client, mon
 
 
@@ -117,6 +126,26 @@ class FastMonitorTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(hasattr(j, "_lock"))
         self.assertIn("update_open_positions", pj.PaperTradeJournal.LOCKED_METHODS)
+
+    def test_slows_down_only_under_budget_pressure(self):
+        tmp, j, client, mon = make([10.5])
+        self.addCleanup(tmp.cleanup)
+        mon.interval = 3.0
+        self.assertEqual(mon.current_interval(), 3.0)             # quiet: normal cadence
+        mon._ledger, mon._pressure_at = FakeLedger(fm.slow_at() + 1), 0.0
+        self.assertEqual(mon.current_interval(), fm.slow_seconds())   # nearly out of allowance: stretched
+        mon._ledger, mon._pressure_at = FakeLedger(10), 0.0
+        self.assertEqual(mon.current_interval(), 3.0)             # pressure gone: back to normal
+
+    def test_a_broken_ledger_never_slows_the_monitor(self):
+        tmp, j, client, mon = make([10.5])
+        self.addCleanup(tmp.cleanup)
+
+        class Broken:
+            def used_30m(self):
+                raise RuntimeError("x")
+        mon._ledger, mon._pressure_at = Broken(), 0.0
+        self.assertEqual(mon.current_interval(), mon.interval)
 
     def test_thread_starts_and_stops(self):
         tmp, j, client, mon = make([10.5])
