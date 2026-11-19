@@ -228,6 +228,14 @@
       "key": "dx_e_wait2_put",
       "registered": "2026-11-19",
       "note": "Tick replay of 423 trades (26 Oct-18 Nov): puts lost -Rs 120k as taken, and kept only when the option was up 2%+ after 2 minutes they were -Rs 10.9k (21 of the put trades kept); calls made +Rs 75.8k unfiltered and every confirmation rule REDUCED them, so calls are left alone. Combined (calls as is, puts confirmed) ~ +Rs 65k vs -Rs 44k real. Best of ~15 confirmation settings tried (2 min / up 2% was +Rs 42k all-trades; up 5% was negative), 16 days of one market phase, and even confirmed puts stay negative - a lead only. Replay buys at the ask at t0+2min and sells at the real exit. Recorded live as opt2 / opt2_price / opt2_ask by paper_trade_journal.record_opt2 from 20 Nov; a put whose trade was over before 2 minutes counts as not taken (0). Nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+    },
+    {
+      "id": "V11",
+      "kind": "variant",
+      "name": "Cash out at +40%: sell the whole position the first time the option is up 40%",
+      "key": "dx_x_cash40",
+      "registered": "2026-11-19",
+      "note": "Tick replay of 421 trades (26 Oct-18 Nov): selling everything at +40% beat the live exits by +Rs 61.8k (total +Rs 18.1k vs -Rs 43.7k), positive in both halves (+34.1k / +27.7k), better on 11 of 15 days. The same replay for +10% / +15% / +20% / +25% / +30% lost Rs 108.5k / 68.9k / 42.9k / 17.5k / 0.7k vs live, because only 60% / 47% / 38% of options ever reach +10% / +15% / +20% and the rest still take the full stop, so small fixed targets raise the win rate (56% at +10%) but lose money. In-sample and assumes a fill at exactly +40%; real fills on fast moves will be a little worse. Recorded live as shadow_cash40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
     }
   ]
 }

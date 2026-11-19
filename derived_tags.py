@@ -221,6 +221,7 @@ SHADOW_EXIT_VARIANTS: dict[str, tuple[str, str]] = {          # name -> (live sh
     "dx_x_peak8_a20": ("peak8_a20", "2026-10-12"),
     "dx_x_early8": ("early8", "2026-11-18"),
     "dx_x_lt40": ("lt40", "2026-11-20"),
+    "dx_x_cash40": ("cash40", "2026-11-20"),
 }
 FORWARD_VARIANTS = tuple(EXIT_VARIANTS) + ("dx_e_wait5", "dx_e_wait2_put") + tuple(SHADOW_EXIT_VARIANTS)
 WAIT2_PUT_SINCE = "2026-11-20"                       # first full session in which the journal records opt2 (V10)

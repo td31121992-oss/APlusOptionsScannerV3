@@ -46,7 +46,7 @@ BIGPEAK_VARIANTS = [(act, gb) for act in (3000, 4000) for gb in (0.25, 0.30)]
 BIGPEAK_NAMES = tuple(f"bigpeak{int(round(gb * 100))}_r{act}" for act, gb in BIGPEAK_VARIANTS)
 # "Cash it and leave" shadows: the whole position is sold the moment the option first reaches +X% (limit fill at exactly +X%).
 # Tests the burst-scalping idea (catch a 10-20% option move, then look for the next trade) on real trades, next to the stop-based exits.
-TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20}
+TARGET_SHADOWS = {"cash10": 0.10, "cash15": 0.15, "cash20": 0.20, "cash40": 0.40}   # cash40 = forward test V11
 # "The STOCK's burst is over" shadows (recorded in record_stock_response from the stock's own favourable move since entry):
 #   sbg40 / sbg60: the stock moved >= 0.5% our way, then gave back 40% / 60% of that best move
 #   sstall10:      the stock moved >= 0.5% our way and has made no new best for 10 minutes
