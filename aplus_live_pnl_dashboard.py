@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import csv
 import json
 import os
+os.environ.setdefault("APLUS_UPSTOX_PRIORITY", "low")   # the dashboard's Upstox calls (stock analysis, charts, probes) use the LOW share so open browser pages never starve the scanner
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from stock_chart_dashboard_module import STOCK_CHART_HTML, symbols_payload, chart_payload, parse_query

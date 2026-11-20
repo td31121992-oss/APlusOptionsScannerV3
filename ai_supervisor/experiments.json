@@ -236,6 +236,14 @@
       "key": "dx_x_cash40",
       "registered": "2026-11-19",
       "note": "Tick replay of 421 trades (26 Oct-18 Nov): selling everything at +40% beat the live exits by +Rs 61.8k (total +Rs 18.1k vs -Rs 43.7k), positive in both halves (+34.1k / +27.7k), better on 11 of 15 days. The same replay for +10% / +15% / +20% / +25% / +30% lost Rs 108.5k / 68.9k / 42.9k / 17.5k / 0.7k vs live, because only 60% / 47% / 38% of options ever reach +10% / +15% / +20% and the rest still take the full stop, so small fixed targets raise the win rate (56% at +10%) but lose money. In-sample and assumes a fill at exactly +40%; real fills on fast moves will be a little worse. Recorded live as shadow_cash40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+    },
+    {
+      "id": "G29",
+      "kind": "gate",
+      "name": "Regime 60%: only trade the side that more than 60% of F&O stocks are on (calls when 60%+ are up, puts when 60%+ are down)",
+      "key": "Regime 60% (the majority side must hold more than 60% of stocks)",
+      "registered": "2026-11-19",
+      "note": "On 380 trades with the regime tag (29 Oct-19 Nov, 14 days) it blocks 203 (53%) that net -Rs 48.4k, so enforcing would have been +Rs 48.4k: +38.7k / +9.6k by half, positive on 8 of 13 days with an effect (about 62%), better than random blocking of 203 trades in 91.9% of 2,000 draws (short of 95%), but it also blocks 76 winners (best +Rs 18.8k). Worst day -Rs 36.0k (6 Nov, blocked winners), best +Rs 42.1k (4 Nov); 19 Nov +Rs 38.2k because it blocked every put on a call-only day. The second half is much weaker than the first, and it works as 'trade with the market', so a reversal day would block the good side - treat as a lead. Compare with Regime-only (same idea at >50%: +Rs 50.6k, 7 of 13 days) and Breadth 70% (blocks 79% of trades, kills 30 Oct) which were not registered. Reads the rgs_regime60_ok tag already on every trade; no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 30 blocked trades over 8+ days, change > 0, helped on 60%+ of the blocked days, and compare with random blocking of the same size."
     }
   ]
 }

@@ -55,7 +55,7 @@ def _client(root: Path = ROOT):
         load_dotenv(root / ".env")
         from core.upstox_client import UpstoxClient
 
-        _STATE["client"] = UpstoxClient()
+        _STATE["client"] = UpstoxClient(priority="low")   # page refreshes use the low share of the shared Upstox allowance
     return _STATE["client"]
 
 
