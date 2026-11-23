@@ -32,6 +32,36 @@ FIELDS = ["time", "symbol", "ltp", "volume", "last_qty", "buy_qty", "sell_qty", 
           "depth_buy5", "depth_sell5", "imbalance", "avg_price"]
 
 
+_STATUS = {"bad_since": None, "last_note": 0.0}
+
+
+def _note(message: str) -> None:
+    """One line in data/order_book/recorder_status.log (timestamped). Used only for refusals / recovery so a silent gap in the minute readings can be explained afterwards."""
+    try:
+        OUT.mkdir(parents=True, exist_ok=True)
+        with (OUT / "recorder_status.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def _failed(reason: str) -> None:
+    """A minute with no reading: log the first one at once, then at most one reminder every 5 minutes while it keeps failing."""
+    now = time.time()
+    if _STATUS["bad_since"] is None:
+        _STATUS["bad_since"], _STATUS["last_note"] = now, now
+        _note(f"NO READING: {reason}")
+    elif now - _STATUS["last_note"] >= 300:
+        _STATUS["last_note"] = now
+        _note(f"STILL NO READING after {int((now - _STATUS['bad_since']) / 60)} min: {reason}")
+
+
+def _recovered() -> None:
+    if _STATUS["bad_since"] is not None:
+        _note(f"READINGS RESUMED after {int((time.time() - _STATUS['bad_since']) / 60)} min without data")
+        _STATUS["bad_since"] = None
+
+
 def _f(value: Any) -> float:
     try:
         out = float(value)
@@ -108,6 +138,7 @@ def main() -> int:
                     universe = _universe()
                     by_id = {v: k for k, v in universe.items()}
                 data = None
+                refusal = ""
                 if os.getenv("APLUS_DATA_PROVIDER", "DHAN").strip().upper() == "UPSTOX":
                     try:                                         # Upstox first: one quote call for every stock, already in the Dhan shape (core/upstox_client.py)
                         if upstox is None:
@@ -115,8 +146,9 @@ def main() -> int:
 
                             upstox = UpstoxClient(priority="low")
                         data = (upstox.get_market_quotes({"NSE_EQ": list(universe.values())}, mode="quote").get("NSE_EQ") or {}) if upstox.token else None
-                    except Exception:                            # noqa: BLE001 - fall back to Dhan for this minute
+                    except Exception as exc:                     # noqa: BLE001 - fall back to Dhan for this minute
                         data = None
+                        refusal = f"{type(exc).__name__}: {exc}"[:300]
                 if not data and os.getenv("APLUS_DHAN_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"} or (not data and os.getenv("APLUS_DATA_PROVIDER", "DHAN").strip().upper() != "UPSTOX"):
                     cid = os.getenv("DHAN_CLIENT_ID", "").strip()
                     token = resolve_access_token(project_root=ROOT, client_id=cid, env_token=os.getenv("DHAN_ACCESS_TOKEN", "").strip())
@@ -129,8 +161,11 @@ def main() -> int:
                     rows = [book_row(by_id.get(int(k), str(k)), v, stamp) for k, v in data.items() if v]
                     if rows:
                         append_rows(rows, now.date().isoformat())
-        except Exception:                                # noqa: BLE001 - recorder must never crash the supervisor loop
-            pass
+                        _recovered()
+                else:
+                    _failed(refusal or "the quote call returned no data")
+        except Exception as exc:                         # noqa: BLE001 - recorder must never crash the supervisor loop
+            _failed(f"{type(exc).__name__}: {exc}"[:300])
         time.sleep(max(5.0, INTERVAL - (time.time() - started)))
 
 
