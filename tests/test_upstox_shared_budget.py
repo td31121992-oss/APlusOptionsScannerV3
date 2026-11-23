@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS, FLOOR_OWN_CAP, CHART_OWN_CAP
+from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS, FLOOR_OWN_CAP, CHART_OWN_CAP, CHAIN_OWN_CAP
 
 
 class SharedBudgetTests(unittest.TestCase):
@@ -95,6 +95,29 @@ class SharedBudgetTests(unittest.TestCase):
             dash.take("high", now=t + i * 5.0)                    # lots of ordinary dashboard calls
         dash.take("chart", now=t + 1000.0)                        # the chart allowance is untouched
 
+    def test_chain_runs_when_low_is_starved_but_never_pushes_the_total_past_the_scanners_room(self):
+        t = 10_000_000.0
+        scanner = _SharedLedger(self.db, who="main.py")
+        coll = _SharedLedger(self.db, who="upstox_chain_collector.py")
+        for i in range(1500):                                     # the scanner and others have used 1,500: far past the low cap (1,300)
+            scanner.take("high", now=t + i * (1500.0 / 1500))
+        now = t + 1500
+        with self.assertRaises(UpstoxLimit):
+            coll.take("low", now=now)                             # the old way: locked out
+        for i in range(150):
+            coll.take("chain", now=now + i * 0.5)                 # the chain tier works up to the 1,650 total ...
+        with self.assertRaises(UpstoxLimit):
+            coll.take("chain", now=now + 100.0)
+        scanner.take("high", now=now + 101.0)                     # ... and the scanner still has its room (cap 1,750)
+
+    def test_chain_stops_at_its_own_cap(self):
+        t = 11_000_000.0
+        coll = _SharedLedger(self.db, who="upstox_chain_collector.py")
+        for i in range(CHAIN_OWN_CAP):
+            coll.take("chain", now=t + i * (1500.0 / CHAIN_OWN_CAP))
+        with self.assertRaises(UpstoxLimit):
+            coll.take("chain", now=t + 1500.0)
+
     def test_high_priority_stops_at_its_cap(self):
         led = _SharedLedger(self.db, who="x")
         t = 2_000_000.0
@@ -165,6 +188,7 @@ class ClientWiringTests(unittest.TestCase):
         self.assertEqual(UpstoxClient(token="t", priority="low").budget.priority, "low")
         self.assertEqual(UpstoxClient(token="t", priority="floor").budget.priority, "floor")
         self.assertEqual(UpstoxClient(token="t", priority="chart").budget.priority, "chart")
+        self.assertEqual(UpstoxClient(token="t", priority="chain").budget.priority, "chain")
         os.environ["APLUS_UPSTOX_PRIORITY"] = "low"
         try:
             self.assertEqual(UpstoxClient(token="t").budget.priority, "low")

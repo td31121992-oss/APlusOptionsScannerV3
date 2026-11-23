@@ -104,7 +104,11 @@ FLOOR_OWN_CAP = 200                                                # calls per 3
 # for the whole half hour plus switching. Only the chart calls of that process count against it (they are recorded as "<process>#chart").
 SHARED_CAPS["chart"] = (1990, 495)
 CHART_OWN_CAP = 150
-OWN_CAPS = {"floor": FLOOR_OWN_CAP, "chart": CHART_OWN_CAP}
+# "chain" = the option-chain collector (about 60-100 stocks every 15 minutes = 120-200 calls per 30 minutes). It had been locked out all morning because it shared the "low" cap (1,300), which the scanner alone
+# exceeds. It now has its own allowance, but it stops when ALL processes together reach 1,650, i.e. 100 calls before the scanner's own 1,750 cap, so the collector can never be what starves the scanner.
+SHARED_CAPS["chain"] = (1650, 420)
+CHAIN_OWN_CAP = 200
+OWN_CAPS = {"floor": FLOOR_OWN_CAP, "chart": CHART_OWN_CAP, "chain": CHAIN_OWN_CAP}
 LOW_OPEN_CAP = (900, 150)                                          # "low" callers between 09:15 and 10:00 IST
 _PRIORITY_OVERRIDE: "contextvars.ContextVar[str | None]" = contextvars.ContextVar("upstox_priority_override", default=None)
 
@@ -231,7 +235,7 @@ class UpstoxClient:
         if budget is None:
             prio = (priority or os.getenv("APLUS_UPSTOX_PRIORITY", "high")).strip().lower()
             # only a real client (no injected test session) joins the machine-wide counter, so tests never touch the live one
-            budget = _Budget(shared=_SharedLedger() if (session is None and _shared_enabled()) else None, priority=prio if prio in ("low", "floor", "chart") else "high")
+            budget = _Budget(shared=_SharedLedger() if (session is None and _shared_enabled()) else None, priority=prio if prio in ("low", "floor", "chart", "chain") else "high")
         self.budget = budget
         self.batch_size = max(1, batch_size)
 

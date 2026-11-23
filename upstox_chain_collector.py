@@ -141,7 +141,7 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
     cycle = float(os.getenv("APLUS_UPSTOX_CHAIN_SECONDS", "300") or 300)
     threads = int(os.getenv("APLUS_UPSTOX_CHAIN_THREADS", "4") or 4)
     base = out_root or root / "data" / "options_intelligence_upstox"
-    client = UpstoxClient(priority="low")                   # data only: pauses first when the shared Upstox allowance runs low
+    client = UpstoxClient(priority="chain")                 # data only: its own allowance (core/upstox_client.py CHAIN_OWN_CAP) but it stops at 1,650 calls in total, before the scanner ever feels it
     expiries: dict[str, str] = {}
     cycles = 0
     flow = None
