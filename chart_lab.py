@@ -25,6 +25,31 @@ _CACHE: dict[tuple, tuple[float, Any]] = {}
 _STATE: dict[str, Any] = {"client": None, "uni": None}
 
 
+_FAILED: dict[tuple, float] = {}
+RETRY_AFTER_FAILURE = 10.0         # seconds: after a failed fetch, serve the held data instead of asking Upstox again straight away
+
+
+def _ttl_meta(key: tuple, seconds: float, fetch):
+    """Like _ttl but returns (value, fetched_at, stale, note). When the fetch fails (budget used up, outage) and an older copy is held, that copy is returned marked stale with the reason,
+    never silently as if it were fresh; with nothing held the error is raised as before."""
+    hit = _CACHE.get(key)
+    now = time.time()
+    if hit and now - hit[0] < seconds:
+        return hit[1], hit[0], False, ""
+    if hit and now - _FAILED.get(key, 0.0) < RETRY_AFTER_FAILURE:
+        return hit[1], hit[0], True, "refresh failing, showing the last good data"
+    try:
+        val = fetch()
+    except Exception as exc:                               # noqa: BLE001
+        _FAILED[key] = now
+        if hit:
+            return hit[1], hit[0], True, f"{type(exc).__name__}: {str(exc)[:110]}"
+        raise
+    _FAILED.pop(key, None)
+    _CACHE[key] = (now, val)
+    return val, now, False, ""
+
+
 def _ttl(key: tuple, seconds: float, fetch):
     hit = _CACHE.get(key)
     if hit and time.time() - hit[0] < seconds:
@@ -55,7 +80,7 @@ def _client(root: Path = ROOT):
         load_dotenv(root / ".env")
         from core.upstox_client import UpstoxClient
 
-        _STATE["client"] = UpstoxClient(priority="low")   # page refreshes use the low share of the shared Upstox allowance
+        _STATE["client"] = UpstoxClient(priority="chart")   # page refreshes use their own small reserved share (core/upstox_client.py CHART_OWN_CAP), so charts keep loading when the scanner is busy
     return _STATE["client"]
 
 
@@ -104,6 +129,11 @@ def _daily(symbol: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _freshness(fetched_at: float, stale: bool, note: str) -> dict[str, Any]:
+    """When this data was really fetched (not when it was served from the cache), how old it is now, and whether it is an old copy shown because the refresh failed."""
+    return {"updated": datetime.fromtimestamp(fetched_at, IST).strftime("%H:%M:%S"), "fetched_at": round(fetched_at, 1), "age_s": max(0, round(time.time() - fetched_at)), "stale": bool(stale), "note": note}
+
+
 def candles(symbol: str, tf: str) -> dict[str, Any]:
     symbol = str(symbol or "").upper()
     if symbol not in symbols():
@@ -112,15 +142,15 @@ def candles(symbol: str, tf: str) -> dict[str, Any]:
         return {"ok": False, "error": "timeframe must be 1m, 5m, 15m, 30m, 1h or 1d"}
     try:
         if tf == "1d":
-            rows = _ttl(("d", symbol), 300, lambda: _daily(symbol))
-            return {"ok": True, "symbol": symbol, "tf": tf, "daily": True, "candles": rows[-500:]}
+            rows, at, stale, note = _ttl_meta(("d", symbol), 300, lambda: _daily(symbol))
+            return {"ok": True, "symbol": symbol, "tf": tf, "daily": True, "candles": rows[-500:], **_freshness(at, stale, note)}
         if tf == "1m":
-            rows = _ttl(("1m", symbol), 20, lambda: _intraday(symbol, 1, 4))
+            rows, at, stale, note = _ttl_meta(("1m", symbol), 20, lambda: _intraday(symbol, 1, 4))
         else:
-            base = _ttl(("5m", symbol), 20, lambda: _intraday(symbol, 5, 14))
+            base, at, stale, note = _ttl_meta(("5m", symbol), 20, lambda: _intraday(symbol, 5, 14))
             rows = base if tf == "5m" else resample(base, TFS[tf])
         rows = [{"t": r["t"] + SHIFT, "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": r["v"]} for r in rows]
-        return {"ok": True, "symbol": symbol, "tf": tf, "daily": False, "candles": rows[-1600:], "updated": datetime.now(IST).strftime("%H:%M:%S")}
+        return {"ok": True, "symbol": symbol, "tf": tf, "daily": False, "candles": rows[-1600:], **_freshness(at, stale, note)}
     except Exception as exc:                               # noqa: BLE001 - the page shows the message
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
@@ -171,7 +201,7 @@ input[type=number]{width:62px}#sym{width:130px;text-transform:uppercase;font-wei
 .sub{color:var(--muted);font-size:12px}#legend{position:absolute;left:10px;top:6px;z-index:6;font-size:12px;pointer-events:none;text-shadow:0 0 3px #000}.rel{position:relative}
 </style></head><body>
 <div class="top"><a href="/">&larr; Dashboard</a><input id="sym" list="syms" value="" placeholder="symbol"><datalist id="syms"></datalist>
-<span id="tfs"></span><span class="sub" id="meta">loading...</span></div>
+<span id="tfs"></span><span class="sub" id="meta">loading...</span> <span class="sub" id="fresh" style="font-weight:700"></span></div>
 <div class="bar"><b>Add indicator</b>
 <select id="itype"><option>EMA</option><option>SMA</option><option>VWAP</option><option>Bollinger</option><option>SuperTrend</option><option>RSI</option><option>MACD</option><option>ATR</option><option>Volume</option><option>Delta</option><option>CVD</option></select>
 <span id="ip"></span><label class="sub">on timeframe <select id="itf"><option value="chart">same as chart</option><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select></label>
@@ -201,7 +231,13 @@ function vwap(cs){var o=[],pv=0,vv=0,d="";cs.forEach(function(x){var dd=x.day||d
 function boll(c,n,m){var mid=sma(c,n),u=[],lo=[];for(var i=0;i<c.length;i++){if(mid[i]==null){u.push(null);lo.push(null);continue}var s=0;for(var j=i-n+1;j<=i;j++)s+=Math.pow(c[j]-mid[i],2);var sd=Math.sqrt(s/n);u.push(mid[i]+m*sd);lo.push(mid[i]-m*sd)}return {mid:mid,u:u,l:lo}}
 function pick(i,k){var p=i.p;for(var j=0;j<p.length;j++)if(p[j].k===k)return +p[j].v;return 0}
 function norm(d){return d.daily?d.candles.map(function(r){return {t:r.d,day:r.d,o:r.o,h:r.h,l:r.l,c:r.c,v:r.v}}):d.candles.map(function(r){return {t:r.t,day:day(r.t),o:r.o,h:r.h,l:r.l,c:r.c,v:r.v}})}
-function need(tf){return fetch("/api/chart-lab?symbol="+S.sym+"&tf="+tf,{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){if(!d.ok)throw new Error(d.error||"no data");S.data[tf]=norm(d);return S.data[tf]})}
+function need(tf){return fetch("/api/chart-lab?symbol="+S.sym+"&tf="+tf,{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){if(!d.ok)throw new Error(d.error||"no data");S.data[tf]=norm(d);S.fx=S.fx||{};S.fx[tf]={age0:d.age_s||0,got:Date.now()/1000,stale:!!d.stale,note:d.note||"",at:d.updated||""};S.fail=null;return S.data[tf]})}
+function fresh(){var el=document.getElementById("fresh");if(!el)return;var fx=S.fx&&S.fx[S.tf];if(!fx){el.textContent=S.fail?"⚠ refresh failing: "+S.fail:"";el.style.color=S.fail?"#ff6b6b":"";return}
+ var age=fx.age0+(Date.now()/1000-fx.got),txt,col;function t(a){return a<90?Math.round(a)+"s":Math.round(a/60)+" min"}
+ if(S.fail||fx.stale||age>120){txt="⚠ DATA "+t(age)+" OLD (last updated "+fx.at+")"+(S.fail?" - "+S.fail:fx.note?" - "+fx.note:"");col="#ff6b6b"}
+ else if(age>60){txt="● "+t(age)+" old (updated "+fx.at+")";col="#f5b942"}
+ else{txt="● live - updated "+fx.at+" ("+t(age)+" ago)";col="#3ddc97"}
+ el.textContent=txt;el.style.color=col}
 function getTF(tf){return S.data[tf]?Promise.resolve(S.data[tf]):need(tf)}
 function tnum(t){return typeof t==="string"?Date.parse(t+"T00:00:00Z")/1000:t}
 function mapHTF(vals,htf,chart){ // value of the last COMPLETED higher-timeframe bar for every chart bar (no repaint)
@@ -257,7 +293,7 @@ function go(){var v=document.getElementById("sym").value.trim().toUpperCase();if
  document.getElementById("sym").addEventListener("change",go);document.getElementById("itype").onchange=params;params();
  document.getElementById("iadd").onclick=function(){var t=document.getElementById("itype").value,p=[];document.querySelectorAll("#ip input").forEach(function(i){p.push({k:i.dataset.k,v:+i.value})});S.inds.push({type:t,p:p,tf:document.getElementById("itf").value,col:document.getElementById("icol").value,show:true});ls("cl_inds",S.inds);chips();render()};
  fetch("/api/chart-lab-symbols").then(function(r){return r.json()}).then(function(d){document.getElementById("syms").innerHTML=(d.symbols||[]).map(function(s){return '<option value="'+s+'">'}).join("")});
- chips();load();setInterval(function(){if(document.hidden||S.tf==="1d")return;var t=S.tf;need(t).then(function(){render()}).catch(function(){})},30000)})();
+ chips();load();setInterval(fresh,1000);setInterval(function(){if(document.hidden||S.tf==="1d")return;var t=S.tf;need(t).then(function(){render()}).catch(function(e){S.fail=String(e&&e.message||e).slice(0,120)})},30000)})();
 </script><!--SMART_JS--></body></html>"""
 
 import chart_lab_smart as _smart  # noqa: E402

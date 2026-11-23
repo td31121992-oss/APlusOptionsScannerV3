@@ -100,6 +100,11 @@ SHARED_CAPS = {"monitor": (1990, 495), "high": (1750, 420), "low": (1300, 250)} 
 # whole token is at the top cap, or when this one process has itself made FLOOR_OWN_CAP calls in 30 minutes (so a runaway recorder cannot eat the allowance).
 SHARED_CAPS["floor"] = (1990, 495)
 FLOOR_OWN_CAP = 75                                                 # calls per 30 minutes for any one floor process (a once-a-minute recorder needs 30)
+# "chart" = the Chart Lab page (chart_lab.py): the same idea for something you look at. One open chart costs about 3 calls a minute (a 20 s cache), so 150 per 30 minutes covers one chart open
+# for the whole half hour plus switching. Only the chart calls of that process count against it (they are recorded as "<process>#chart").
+SHARED_CAPS["chart"] = (1990, 495)
+CHART_OWN_CAP = 150
+OWN_CAPS = {"floor": FLOOR_OWN_CAP, "chart": CHART_OWN_CAP}
 LOW_OPEN_CAP = (900, 150)                                          # "low" callers between 09:15 and 10:00 IST
 _PRIORITY_OVERRIDE: "contextvars.ContextVar[str | None]" = contextvars.ContextVar("upstox_priority_override", default=None)
 
@@ -168,12 +173,14 @@ class _SharedLedger:
                 if n30 >= cap30 or n60 >= cap60:
                     conn.execute("ROLLBACK")
                     raise UpstoxLimit(f"shared Upstox budget ({priority}) used up: {n30}/30min, {n60}/min across all processes")
-                if priority == "floor":
-                    own = conn.execute("SELECT COUNT(*) FROM calls WHERE ts > ? AND who = ?", (now - 1800, self.who)).fetchone()[0]
-                    if own >= FLOOR_OWN_CAP:
+                who = f"{self.who}#chart" if priority == "chart" else self.who         # chart calls are tagged so their own cap counts only them, not the rest of the dashboard process
+                own_cap = OWN_CAPS.get(priority)
+                if own_cap is not None:
+                    own = conn.execute("SELECT COUNT(*) FROM calls WHERE ts > ? AND who = ?", (now - 1800, who)).fetchone()[0]
+                    if own >= own_cap:
                         conn.execute("ROLLBACK")
-                        raise UpstoxLimit(f"floor Upstox budget used up for {self.who}: {own}/30min of its own")
-                conn.execute("INSERT INTO calls (ts, who, pid) VALUES (?, ?, ?)", (now, self.who, os.getpid()))
+                        raise UpstoxLimit(f"{priority} Upstox budget used up for {who}: {own}/30min of its own")
+                conn.execute("INSERT INTO calls (ts, who, pid) VALUES (?, ?, ?)", (now, who, os.getpid()))
                 self._n += 1
                 if self._n % 200 == 0:
                     conn.execute("DELETE FROM calls WHERE ts < ?", (now - 3600,))
@@ -224,7 +231,7 @@ class UpstoxClient:
         if budget is None:
             prio = (priority or os.getenv("APLUS_UPSTOX_PRIORITY", "high")).strip().lower()
             # only a real client (no injected test session) joins the machine-wide counter, so tests never touch the live one
-            budget = _Budget(shared=_SharedLedger() if (session is None and _shared_enabled()) else None, priority=prio if prio in ("low", "floor") else "high")
+            budget = _Budget(shared=_SharedLedger() if (session is None and _shared_enabled()) else None, priority=prio if prio in ("low", "floor", "chart") else "high")
         self.budget = budget
         self.batch_size = max(1, batch_size)
 

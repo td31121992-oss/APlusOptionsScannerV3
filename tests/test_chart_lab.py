@@ -61,5 +61,67 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(cl.delta_payload("INFY", root)["bars"], [])
 
 
+class FreshnessTests(unittest.TestCase):
+    def setUp(self):
+        cl._CACHE.clear()
+        cl._FAILED.clear()
+
+    def test_a_cached_copy_keeps_its_real_fetch_time(self):
+        calls = []
+        with mock.patch.object(cl.time, "time", side_effect=[1000.0, 1000.0, 1010.0]):
+            v1 = cl._ttl_meta(("k",), 20, lambda: calls.append(1) or "A")
+            v2 = cl._ttl_meta(("k",), 20, lambda: calls.append(1) or "B")
+        self.assertEqual(v1, ("A", 1000.0, False, ""))
+        self.assertEqual(v2, ("A", 1000.0, False, ""))                                 # served from the cache: still stamped with the fetch time, not "now"
+        self.assertEqual(len(calls), 1)
+
+    def test_failed_refresh_serves_the_old_copy_marked_stale_with_the_reason(self):
+        cl._CACHE[("k",)] = (1000.0, "OLD")
+
+        def boom():
+            raise RuntimeError("shared Upstox budget (chart) used up")
+
+        with mock.patch.object(cl.time, "time", return_value=1100.0):
+            val, at, stale, note = cl._ttl_meta(("k",), 20, boom)
+        self.assertEqual((val, at, stale), ("OLD", 1000.0, True))
+        self.assertIn("budget", note)
+        with mock.patch.object(cl.time, "time", return_value=1103.0):                  # inside the retry pause: Upstox is not asked again
+            calls = []
+            val, at, stale, note = cl._ttl_meta(("k",), 20, lambda: calls.append(1) or "NEW")
+        self.assertEqual((val, stale, calls), ("OLD", True, []))
+        with mock.patch.object(cl.time, "time", return_value=1120.0):                  # after the pause it tries again and recovers
+            val, at, stale, note = cl._ttl_meta(("k",), 20, lambda: "NEW")
+        self.assertEqual((val, at, stale, note), ("NEW", 1120.0, False, ""))
+
+    def test_nothing_held_means_the_error_is_raised(self):
+        def boom():
+            raise RuntimeError("down")
+
+        with self.assertRaises(RuntimeError):
+            cl._ttl_meta(("k",), 20, boom)
+
+    def test_candles_reports_age_and_stale_flag(self):
+        rows = [bar((2026, 10, 22), 9, 15, 100, 101, 99, 100)]
+        with mock.patch.object(cl, "symbols", return_value=["TCS"]):
+            with mock.patch.object(cl, "_intraday", return_value=rows):
+                fresh = cl.candles("TCS", "5m")
+            self.assertTrue(fresh["ok"] and not fresh["stale"])
+            self.assertLessEqual(fresh["age_s"], 2)
+            key = ("5m", "TCS")
+            cl._CACHE[key] = (cl._CACHE[key][0] - 300, cl._CACHE[key][1])               # the held copy is now 5 minutes old
+            with mock.patch.object(cl, "_intraday", side_effect=RuntimeError("UpstoxLimit: used up")):
+                old = cl.candles("TCS", "5m")
+        self.assertTrue(old["ok"])
+        self.assertTrue(old["stale"])
+        self.assertGreaterEqual(old["age_s"], 299)
+        self.assertIn("UpstoxLimit", old["note"])
+        self.assertEqual(old["candles"], fresh["candles"])                             # the chart keeps drawing, with a warning
+
+    def test_page_has_the_freshness_label_and_surfaces_refresh_failures(self):
+        self.assertIn('id="fresh"', cl.CHART_LAB_HTML)
+        self.assertIn("function fresh()", cl.CHART_LAB_HTML)
+        self.assertIn("S.fail=", cl.CHART_LAB_HTML)
+
+
 if __name__ == "__main__":
     unittest.main()

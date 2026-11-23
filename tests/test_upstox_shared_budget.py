@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS, FLOOR_OWN_CAP
+from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS, FLOOR_OWN_CAP, CHART_OWN_CAP
 
 
 class SharedBudgetTests(unittest.TestCase):
@@ -70,6 +70,30 @@ class SharedBudgetTests(unittest.TestCase):
             led.take("monitor", now=t + i * (1500.0 / cap30))
         with self.assertRaises(UpstoxLimit):
             led.take("floor", now=t + 1500)
+
+    def test_chart_works_when_low_is_starved_and_only_its_own_calls_count(self):
+        t = 9_000_000.0
+        scanner = _SharedLedger(self.db, who="main.py")
+        dash = _SharedLedger(self.db, who="aplus_live_pnl_dashboard.py")
+        cap_low, _ = SHARED_CAPS["low"]
+        for i in range(cap_low + 100):                            # scanner has used more than the low cap
+            scanner.take("high", now=t + i * (1500.0 / (cap_low + 100)))
+        now = t + 1500
+        with self.assertRaises(UpstoxLimit):
+            dash.take("low", now=now)                             # the dashboard's other calls are locked out ...
+        for i in range(CHART_OWN_CAP):
+            dash.take("chart", now=now + i * 0.5)                 # ... its chart calls are not, up to their own cap
+        with self.assertRaises(UpstoxLimit):
+            dash.take("chart", now=now + CHART_OWN_CAP * 0.5)
+        u = dash.usage(now=now + CHART_OWN_CAP * 0.5 + 1)
+        self.assertEqual(u["by_process"]["aplus_live_pnl_dashboard.py#chart"]["30min"], CHART_OWN_CAP)
+
+    def test_other_dashboard_calls_do_not_use_up_the_chart_allowance(self):
+        t = 9_500_000.0
+        dash = _SharedLedger(self.db, who="aplus_live_pnl_dashboard.py")
+        for i in range(CHART_OWN_CAP + 20):
+            dash.take("high", now=t + i * 5.0)                    # lots of ordinary dashboard calls
+        dash.take("chart", now=t + 1000.0)                        # the chart allowance is untouched
 
     def test_high_priority_stops_at_its_cap(self):
         led = _SharedLedger(self.db, who="x")
@@ -140,6 +164,7 @@ class ClientWiringTests(unittest.TestCase):
         self.assertEqual(c.budget.priority, "high")
         self.assertEqual(UpstoxClient(token="t", priority="low").budget.priority, "low")
         self.assertEqual(UpstoxClient(token="t", priority="floor").budget.priority, "floor")
+        self.assertEqual(UpstoxClient(token="t", priority="chart").budget.priority, "chart")
         os.environ["APLUS_UPSTOX_PRIORITY"] = "low"
         try:
             self.assertEqual(UpstoxClient(token="t").budget.priority, "low")
