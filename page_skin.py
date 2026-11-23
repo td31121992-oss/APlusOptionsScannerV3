@@ -32,6 +32,8 @@ html.compact .wrap{padding:8px 12px!important}html.compact .tablewrap{padding:0 
 html.compact .cards,html.compact .grid{gap:8px!important}
 html.compact .card{padding:8px 12px!important;border-radius:10px!important}html.compact .card .value,html.compact .value{font-size:18px!important;margin-top:2px!important}html.compact .label{font-size:10.5px!important;text-transform:uppercase;letter-spacing:.4px}
 html.compact th,html.compact td{padding:6px 9px!important;font-size:12.5px!important}html.compact th{font-size:11px!important;text-transform:uppercase;letter-spacing:.35px}
+/* the chart library lays itself out in a <table>: the table padding above made every chart 24px taller than its box, pushing the time axis out of view (23 Nov) */
+html.compact .tv-lightweight-charts th,html.compact .tv-lightweight-charts td{padding:0!important;font-size:inherit!important;border:0!important;text-transform:none!important;letter-spacing:normal!important}
 html.compact .panel,html.compact .box,html.compact .sec{border-radius:10px!important}
 html.compact .bar,html.compact .toolbar,html.compact .filterbar{padding-top:6px!important;padding-bottom:6px!important}
 </style>

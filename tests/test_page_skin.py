@@ -20,6 +20,11 @@ class PageSkinTests(unittest.TestCase):
         self.assertIn('href="/chart-lab"', out)
         self.assertIn('href="http://192.168.1.5:8766"', ps.page_skin(PAGE, "192.168.1.5"))        # the technical-alerts link follows the host you opened the page on
 
+    def test_chart_library_tables_are_not_padded_by_the_table_skin(self):
+        """The skin pads every td by 6px 9px; the chart library draws itself in a <table>, so that made each chart 24px taller than its box and hid the time axis (23 Nov)."""
+        out = ps.page_skin(PAGE, "127.0.0.1")
+        self.assertIn("html.compact .tv-lightweight-charts td{padding:0!important", out)
+
     def test_every_rule_is_scoped_to_the_compact_class(self):
         css = ps.HEAD[ps.HEAD.index("<style"): ps.HEAD.index("</style>")]
         rules = [r.split("{")[0].strip() for r in css.split("}") if "{" in r]
