@@ -49,8 +49,9 @@ class CompareTests(unittest.TestCase):
 
 class TrackerTests(unittest.TestCase):
     def test_slot_boundaries(self):
-        self.assertEqual(cr.slot_of(at(10, 0)), cr.slot_of(at(10, 4, 59)))
-        self.assertNotEqual(cr.slot_of(at(10, 4)), cr.slot_of(at(10, 5)))
+        self.assertEqual(cr.slot_of(at(10, 0)), cr.slot_of(at(10, 4, 25)))          # the 10:00 candle is not completed until 10:04:30 ...
+        self.assertNotEqual(cr.slot_of(at(10, 4, 25)), cr.slot_of(at(10, 4, 35)))   # ... so a new slot (and a refetch) starts there
+        self.assertEqual(cr.slot_of(at(10, 4, 35)), cr.slot_of(at(10, 9, 25)))
 
     def test_fetch_once_per_slot_then_reuse(self):
         t = cr.Tracker()

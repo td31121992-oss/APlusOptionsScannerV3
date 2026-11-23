@@ -56,11 +56,11 @@ class SharedBudgetTests(unittest.TestCase):
         led = _SharedLedger(self.db, who="futures_recorder.py")
         t = 7_000_000.0
         for i in range(FLOOR_OWN_CAP):
-            led.take("floor", now=t + i * 20.0)                   # one call every 20 s, all inside 30 minutes
+            led.take("floor", now=t + i * (1500.0 / FLOOR_OWN_CAP))          # spread over 25 minutes, so all inside the 30-minute window
         with self.assertRaises(UpstoxLimit):
-            led.take("floor", now=t + FLOOR_OWN_CAP * 20.0)
+            led.take("floor", now=t + 1500.0)
         other = _SharedLedger(self.db, who="order_book_recorder.py")
-        other.take("floor", now=t + FLOOR_OWN_CAP * 20.0)         # another floor process has its own allowance
+        other.take("floor", now=t + 1500.0)         # another floor process has its own allowance
 
     def test_floor_stops_at_the_top_cap(self):
         led = _SharedLedger(self.db, who="order_book_recorder.py")

@@ -15,7 +15,7 @@ A "decision" is stage, shortlist and actionable. Score differences are counted s
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 SCORE_TOLERANCE = 0.05
@@ -30,8 +30,10 @@ def mode() -> str:
 
 
 def slot_of(now: datetime) -> int:
-    """Index of the 5-minute slot the time falls in (a new slot starts at hh:00, hh:05, ...)."""
-    return now.hour * 12 + now.minute // 5
+    """Index of the refresh slot the time falls in. The scanner counts a 5-minute candle as completed 4m30s after it opened, so the list of completed candles changes at hh:04:30, hh:09:30, ...
+    and a slot therefore starts then, not at hh:05 (23 Nov: with slots starting at hh:05, 82 of the 86 decision differences came in the last minute of a slot, when the held list lacked the candle that had just completed)."""
+    shifted = now + timedelta(seconds=30)
+    return shifted.hour * 12 + shifted.minute // 5
 
 
 def compare(stale: Any, fresh: Any) -> dict[str, Any]:

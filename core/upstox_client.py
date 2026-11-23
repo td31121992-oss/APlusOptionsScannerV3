@@ -99,7 +99,7 @@ SHARED_CAPS = {"monitor": (1990, 495), "high": (1750, 420), "low": (1300, 250)} 
 # "floor" = a few cheap recorders (order book, futures: about one call a minute each) that must not go blank. They are NOT squeezed by the scanner's use: they only stop when the
 # whole token is at the top cap, or when this one process has itself made FLOOR_OWN_CAP calls in 30 minutes (so a runaway recorder cannot eat the allowance).
 SHARED_CAPS["floor"] = (1990, 495)
-FLOOR_OWN_CAP = 75                                                 # calls per 30 minutes for any one floor process (a once-a-minute recorder needs 30)
+FLOOR_OWN_CAP = 200                                                # calls per 30 minutes for any one floor process. Measured 23 Nov: order book 2 calls a minute (60), futures 5 a minute (150); 75 cut the futures recorder off after 15 minutes
 # "chart" = the Chart Lab page (chart_lab.py): the same idea for something you look at. One open chart costs about 3 calls a minute (a 20 s cache), so 150 per 30 minutes covers one chart open
 # for the whole half hour plus switching. Only the chart calls of that process count against it (they are recorded as "<process>#chart").
 SHARED_CAPS["chart"] = (1990, 495)
