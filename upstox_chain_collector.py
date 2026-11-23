@@ -93,6 +93,33 @@ def capture(client: Any, universe: dict[str, int], strikes: int, threads: int, e
     return rows, failed, last_error
 
 
+def focus_symbols(root: Path, universe: dict[str, int], day: date | None = None, minimum: int = 30) -> dict[str, int]:
+    """The stocks worth a chain snapshot right now: every stock that has shown up in today's signal log (data/signal_snapshots/<day>.csv: the scanner's entry-ready candidates, which
+    includes everything it traded). Early in the session, before enough have appeared, the previous session's stocks are added so the most active names are never missed.
+    This is ~80-100 of the 218 F&O stocks, so a cycle costs about half the Upstox calls. APLUS_UPSTOX_CHAIN_FOCUS=OFF (or no readable log) means every stock, as before."""
+    day = day or date.today()
+    folder = root / "data" / "signal_snapshots"
+
+    def names(path: Path) -> set[str]:
+        out: set[str] = set()
+        try:
+            with path.open(encoding="utf-8-sig", newline="") as fh:
+                for r in csv.DictReader(fh):
+                    out.add(str(r.get("symbol") or "").strip().upper())
+        except (OSError, csv.Error):
+            return set()
+        out.discard("")
+        return out
+
+    want = names(folder / f"{day.isoformat()}.csv")
+    if len(want) < minimum:
+        earlier = sorted(p for p in folder.glob("20??-??-??.csv") if p.stem < day.isoformat())
+        if earlier:
+            want |= names(earlier[-1])
+    picked = {s: i for s, i in universe.items() if s in want}
+    return picked if len(picked) >= 10 else universe
+
+
 def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None, out_root: Path | None = None) -> int:
     sys.path.insert(0, str(root))
     from dotenv import load_dotenv
@@ -126,9 +153,11 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
     except Exception:                                       # noqa: BLE001 - the collector must never depend on it
         flow = None
     end = datetime.now(IST).replace(hour=END[0], minute=END[1], second=0, microsecond=0)
+    focus = os.getenv("APLUS_UPSTOX_CHAIN_FOCUS", "ON").strip().upper() not in {"OFF", "0", "NO", "FALSE"} and not symbols and not once
     while True:
         t0 = time.monotonic()
-        rows, failed, err = capture(client, uni, strikes, threads, expiries)
+        active = focus_symbols(root, uni) if focus else uni
+        rows, failed, err = capture(client, active, strikes, threads, expiries)
         append_rows(base / date.today().isoformat(), rows)
         if flow is not None and rows:
             try:
@@ -136,7 +165,7 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
             except Exception:                               # noqa: BLE001
                 pass
         cycles += 1
-        health = {"day": date.today().isoformat(), "updated": datetime.now(IST).isoformat(timespec="seconds"), "symbols": len(uni), "symbols_ok": len(uni) - failed,
+        health = {"day": date.today().isoformat(), "updated": datetime.now(IST).isoformat(timespec="seconds"), "symbols": len(active), "symbols_of_universe": len(uni), "symbols_ok": len(active) - failed,
                   "symbols_failed": failed, "rows_last_cycle": len(rows), "cycles": cycles, "seconds_last_cycle": round(time.monotonic() - t0, 1), "last_error": err}
         try:
             base.mkdir(parents=True, exist_ok=True)
@@ -146,7 +175,7 @@ def run(root: Path = ROOT, once: bool = False, symbols: list[str] | None = None,
         print(json.dumps(health), flush=True)
         if once or datetime.now(IST) >= end:
             return 0
-        if failed == len(uni):                              # nothing worked (token rejected, outage): wait longer before trying again
+        if failed == len(active):                           # nothing worked (token rejected, outage): wait longer before trying again
             time.sleep(60)
         time.sleep(max(1.0, cycle - (time.monotonic() - t0)))
         if datetime.now(IST) >= end:

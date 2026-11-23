@@ -144,7 +144,7 @@ def main() -> int:
                         if upstox is None:
                             from core.upstox_client import UpstoxClient
 
-                            upstox = UpstoxClient(priority="low")
+                            upstox = UpstoxClient(priority="floor")                     # about one call a minute: its own small reserve so Smart Flow never goes blank
                         data = (upstox.get_market_quotes({"NSE_EQ": list(universe.values())}, mode="quote").get("NSE_EQ") or {}) if upstox.token else None
                     except Exception as exc:                     # noqa: BLE001 - fall back to Dhan for this minute
                         data = None

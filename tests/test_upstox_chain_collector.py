@@ -2,6 +2,7 @@ import csv
 import gzip
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 import upstox_chain_collector as uc
@@ -58,6 +59,34 @@ class CollectorTests(unittest.TestCase):
                 got = list(csv.DictReader(h))
             self.assertEqual(len(got), 2 * len(rows))
             self.assertEqual(got[0]["symbol"], "TCS")
+
+
+class FocusTests(unittest.TestCase):
+    def snap(self, root, day, symbols):
+        d = Path(root) / "data" / "signal_snapshots"
+        d.mkdir(parents=True, exist_ok=True)
+        text = "time,symbol,direction\n" + "".join(f"t,{s},BULLISH\n" for s in symbols)
+        (d / f"{day}.csv").write_text(text, encoding="utf-8")
+
+    def test_only_stocks_in_todays_signal_log(self):
+        uni = {f"S{i}": i for i in range(100)}
+        with tempfile.TemporaryDirectory() as t:
+            self.snap(t, "2026-11-23", [f"S{i}" for i in range(40)])
+            got = uc.focus_symbols(Path(t), uni, day=date(2026, 11, 23))
+        self.assertEqual(set(got), {f"S{i}" for i in range(40)})
+
+    def test_early_session_adds_previous_day(self):
+        uni = {f"S{i}": i for i in range(100)}
+        with tempfile.TemporaryDirectory() as t:
+            self.snap(t, "2026-11-20", [f"S{i}" for i in range(50, 90)])
+            self.snap(t, "2026-11-23", ["S1", "S2"])
+            got = uc.focus_symbols(Path(t), uni, day=date(2026, 11, 23))
+        self.assertEqual(set(got), {"S1", "S2"} | {f"S{i}" for i in range(50, 90)})
+
+    def test_nothing_readable_means_every_stock(self):
+        uni = {f"S{i}": i for i in range(20)}
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(uc.focus_symbols(Path(t), uni, day=date(2026, 11, 23)), uni)
 
 
 if __name__ == "__main__":

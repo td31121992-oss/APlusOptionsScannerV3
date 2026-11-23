@@ -4,7 +4,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS
+from core.upstox_client import UpstoxClient, UpstoxLimit, _Budget, _SharedLedger, SHARED_CAPS, FLOOR_OWN_CAP
 
 
 class SharedBudgetTests(unittest.TestCase):
@@ -39,6 +39,37 @@ class SharedBudgetTests(unittest.TestCase):
         with self.assertRaises(UpstoxLimit):
             led.take("low", now=now)
         led.take("high", now=now)                                 # trading still has room
+
+    def test_floor_still_works_when_low_is_starved_but_stops_at_top_cap(self):
+        led = _SharedLedger(self.db, who="order_book_recorder.py")
+        scanner = _SharedLedger(self.db, who="main.py")
+        t = 6_000_000.0
+        cap_low, _ = SHARED_CAPS["low"]
+        for i in range(cap_low + 100):                            # the scanner has used more than the low cap (spread over 25 minutes)
+            scanner.take("high", now=t + i * (1500.0 / (cap_low + 100)))
+        now = t + 1500
+        with self.assertRaises(UpstoxLimit):
+            led.take("low", now=now)                              # a collector is locked out ...
+        led.take("floor", now=now)                                # ... but a floor recorder is not
+
+    def test_floor_stops_at_its_own_cap(self):
+        led = _SharedLedger(self.db, who="futures_recorder.py")
+        t = 7_000_000.0
+        for i in range(FLOOR_OWN_CAP):
+            led.take("floor", now=t + i * 20.0)                   # one call every 20 s, all inside 30 minutes
+        with self.assertRaises(UpstoxLimit):
+            led.take("floor", now=t + FLOOR_OWN_CAP * 20.0)
+        other = _SharedLedger(self.db, who="order_book_recorder.py")
+        other.take("floor", now=t + FLOOR_OWN_CAP * 20.0)         # another floor process has its own allowance
+
+    def test_floor_stops_at_the_top_cap(self):
+        led = _SharedLedger(self.db, who="order_book_recorder.py")
+        t = 8_000_000.0
+        cap30, _ = SHARED_CAPS["floor"]
+        for i in range(cap30):
+            led.take("monitor", now=t + i * (1500.0 / cap30))
+        with self.assertRaises(UpstoxLimit):
+            led.take("floor", now=t + 1500)
 
     def test_high_priority_stops_at_its_cap(self):
         led = _SharedLedger(self.db, who="x")
@@ -108,6 +139,7 @@ class ClientWiringTests(unittest.TestCase):
         self.assertIsNotNone(c.budget.shared)
         self.assertEqual(c.budget.priority, "high")
         self.assertEqual(UpstoxClient(token="t", priority="low").budget.priority, "low")
+        self.assertEqual(UpstoxClient(token="t", priority="floor").budget.priority, "floor")
         os.environ["APLUS_UPSTOX_PRIORITY"] = "low"
         try:
             self.assertEqual(UpstoxClient(token="t").budget.priority, "low")

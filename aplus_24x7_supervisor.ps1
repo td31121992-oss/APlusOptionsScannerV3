@@ -25,6 +25,7 @@ if (-not $script:Mutex.WaitOne(0, $false)) {
 
 $script:LastPreflight = $false
 $script:LastPreflightAt = $null
+$script:LastPreflightRunAt = $null
 $script:LastWatchdogAt = $null
 $script:LastOptionsTaskStartAt = $null
 $script:Cycle = 0
@@ -206,11 +207,17 @@ try {
 
         $script:LastPreflightAt = $now.ToString("o")
         if ($market) {
-            $script:LastPreflight = Test-DhanReadiness
-            if ($script:LastPreflight) {
-                Write-Log "Dhan readiness=PASS"
-            } else {
-                Write-Log "Dhan readiness=WAITING; scanner will not be force-started"
+            # The readiness check makes 2 live Upstox calls (a quote and a candle probe). Run every loop (about every 40 s) it used ~100 of the shared 2000-per-30-minute calls.
+            # A PASS is now trusted for 15 minutes; anything other than PASS is re-checked on every loop, exactly as before.
+            $preflightDue = (-not $script:LastPreflight) -or ($null -eq $script:LastPreflightRunAt) -or ((($now) - $script:LastPreflightRunAt).TotalMinutes -ge 15)
+            if ($preflightDue) {
+                $script:LastPreflight = Test-DhanReadiness
+                $script:LastPreflightRunAt = $now
+                if ($script:LastPreflight) {
+                    Write-Log "Dhan readiness=PASS"
+                } else {
+                    Write-Log "Dhan readiness=WAITING; scanner will not be force-started"
+                }
             }
         } else {
             $script:LastPreflight = $false
