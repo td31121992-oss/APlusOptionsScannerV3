@@ -60,7 +60,7 @@ class FactsTests(unittest.TestCase):
     def test_experiments_file_lists_every_experiment_with_a_key_and_a_registration_day(self):
         data = json.loads((sf.ROOT / "ai_supervisor" / "experiments.json").read_text(encoding="utf-8"))
         for e in data["experiments"]:
-            self.assertTrue(e["key"] and e["registered"] and e["kind"] in ("gate", "variant"))
+            self.assertTrue(e["key"] and e["registered"] and e["kind"] in ("gate", "variant", "signal"))
 
 
 if __name__ == "__main__":

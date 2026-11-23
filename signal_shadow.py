@@ -14,6 +14,11 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 
 
+EARLY_EXT = "EARLY_EXT_RELEASE"                         # S02 (23 Nov 2026): LATE_VWAP_EXTENSION / LATE_10M_OVERHEAT waits, first signal before 10:30
+EARLY_EXT_STATUSES = ("A_PLUS_WAIT_LATE_VWAP_EXTENSION", "A_PLUS_WAIT_LATE_10M_OVERHEAT")
+EARLY_EXT_BEFORE = "10:30"
+
+
 def group_of(status: str) -> str:
     s = str(status)
     if s == "PASSED_ALL_GATES":
@@ -33,10 +38,17 @@ def day_moves(day: str, group: str, direction: str) -> list[float]:
         return []
     s = pd.read_csv(f, usecols=["time", "symbol", "direction", "status"])
     s = s[s.direction == direction]
-    s = s[s.status.map(group_of) == group]
+    if group == EARLY_EXT:                               # S02: only these two held-back statuses, and only signals before 10:30
+        s = s[s.status.isin(EARLY_EXT_STATUSES)]
+    else:
+        s = s[s.status.map(group_of) == group]
     if s.empty:
         return []
     s["ts"] = pd.to_datetime(s.time.str[:19])
+    if group == EARLY_EXT:
+        s = s[s.ts.dt.time < pd.Timestamp(EARLY_EXT_BEFORE).time()]
+        if s.empty:
+            return []
     s = s.sort_values("ts").drop_duplicates("symbol")
     w = pd.read_csv(m, usecols=["timestamp", "symbol", "ltp"])
     w["ts"] = pd.to_datetime(w.timestamp.astype(str).str[:19])

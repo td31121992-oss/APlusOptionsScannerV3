@@ -26,7 +26,7 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parent
 FIRST_DAY = "2026-10-15"
-RULES = (("user_ladder", "Your ladder"), ("old_rules", "Old live rules (T1/T2/T3 + runner trail)"), ("two_step", "Two-step (+5% stop -15%, +10% cost)"), ("cost5", "Your ladder, first step at cost (+5% -> cost)"),("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
+RULES = (("user_ladder", "Your ladder"), ("old_rules", "Old live rules (T1/T2/T3 + runner trail)"), ("two_step", "Two-step (+5% stop -15%, +10% cost)"), ("cost5", "Your ladder, first step at cost (+5% -> cost)"), ("ladder2", "NEW ladder (+10% lock +3, +20% lock +12, +30% lock +22; shadow from 24 Nov)"),("sbg60", "Burst over (gave back 60%)"), ("sbg40", "Burst over (gave back 40%)"),
          ("sstall10", "Stock stalled 10 min"), ("half10", "Half booked at +10%"),
          ("skorb", "Stock breaks opening range (exit only then)"), ("sksw", "Stock breaks 30-min swing (exit only then)"))
 MIN_TRADES_DAY = 3

@@ -70,7 +70,7 @@ EARLY_STOP_SHADOW = ("early8", 300.0, 0.92)       # name, seconds after entry, f
 # "lt40" shadow (added 19 Nov 2026): once the option has been up 40%, exit if it falls back so that only 60% of the gain is kept (entry + 0.6 x (best - entry)).
 # Tick replay of 421 trades (26 Oct-18 Nov): +Rs 20k vs the live exits, positive in both halves, but only 25 trades changed. Earlier or tighter trails (from +10..+30%) all lost money - forward evidence only.
 LATE_TRAIL_SHADOW = ("lt40", 0.40, 0.60)          # name, gain that arms the trail, share of the gain kept
-STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS + (EARLY_STOP_SHADOW[0], LATE_TRAIL_SHADOW[0])
+STOP_SHADOW_NAMES = ("ladder", "trail60", "user_ladder", "two_step", "cost5", "old_rules", "ladder2") + PEAK_NAMES + BIGPEAK_NAMES + tuple(TARGET_SHADOWS) + tuple(STOCK_BURST_SHADOWS) + tuple(STOCK_STRUCTURE_SHADOWS) + tuple(VOL_STOP_SHADOWS) + SECTOR_SHADOWS + (EARLY_STOP_SHADOW[0], LATE_TRAIL_SHADOW[0])
 
 
 def _first_lock_pct() -> float:
@@ -100,6 +100,24 @@ def user_ladder_floor(entry: float, high: float) -> float:
     else:
         return 0.0
     return entry * (1.0 + lock / 100.0)
+
+def ladder2_floor(entry: float, high: float) -> float:
+    """The 24 Nov 2026 exit ladder (APLUS_EXIT_LADDER_MODE=ENFORCE2), driven by the highest price reached; the lock only ever moves up:
+    T1 +10% -> lock +3% | T2 +20% -> lock +12%, then +2 points for every further +5% | T3 +30% -> lock +22%, then +2 points for every further +5%.
+    Below +10% there is no step: the initial stop (-20%) stays. Returns the stop price, or 0.0 while the option has not reached +10%."""
+    if entry <= 0 or high <= 0:
+        return 0.0
+    gain = round((high / entry - 1.0) * 100.0, 6)
+    if gain >= 30.0:
+        lock = 22.0 + 2.0 * int((gain - 30.0) // 5.0)
+    elif gain >= 20.0:
+        lock = 12.0 + 2.0 * int((gain - 20.0) // 5.0)
+    elif gain >= 10.0:
+        lock = 3.0
+    else:
+        return 0.0
+    return entry * (1.0 + lock / 100.0)
+
 
 def record_opt5(trade: dict[str, Any], entry: float, price: float, when: datetime) -> None:
     """SHADOW only (10 Nov 2026): on the first update 5 or more minutes after entry, record the OPTION's price, the ask and whether the option is at or above our entry price
@@ -693,7 +711,10 @@ class PaperTradeJournal:
 
             original_stop = self._number(trade.get("option_stop"))
             protected_stop = original_stop
-            if self._exit_ladder_mode() == "ENFORCE":
+            if self._exit_ladder_mode() == "ENFORCE2":
+                protected_stop = max(original_stop, ladder2_floor(entry, high))          # +10% -> +3%, +20% -> +12%, +30% -> +22%, +2 per further +5%
+                trade["ladder_stop"] = round(protected_stop, 4)
+            elif self._exit_ladder_mode() == "ENFORCE":
                 protected_stop = max(original_stop, user_ladder_floor(entry, high))      # +5% -> -15%, +10% -> +3%, +20% -> +13%, +30% -> +22% ...
                 trade["ladder_stop"] = round(protected_stop, 4)
             else:
@@ -917,7 +938,9 @@ class PaperTradeJournal:
         (or the initial stop, whichever is higher), otherwise the old T1/T2/T3 rules; a manual stop only ever tightens."""
         initial = self._number(trade.get("option_stop"))
         ladder = user_ladder_floor(entry, high)
-        if self._exit_ladder_mode() == "ENFORCE":
+        if self._exit_ladder_mode() == "ENFORCE2":
+            real = max(initial, ladder2_floor(entry, high))
+        elif self._exit_ladder_mode() == "ENFORCE":
             real = max(initial, ladder)
         else:
             seen = dict(trade)                             # the targets are marked "hit" later in the same price check: read them from the peak so the alert is never one check behind
@@ -1097,7 +1120,7 @@ class PaperTradeJournal:
     def _exit_ladder_mode() -> str:
         """APLUS_EXIT_LADDER_MODE: SHADOW (default: recorded on every trade, real exits unchanged) or ENFORCE (the ladder IS the exit rule)."""
         mode = str(os.getenv("APLUS_EXIT_LADDER_MODE", "SHADOW")).strip().upper()
-        return mode if mode in {"SHADOW", "ENFORCE"} else "SHADOW"
+        return mode if mode in {"SHADOW", "ENFORCE", "ENFORCE2"} else "SHADOW"
 
     @staticmethod
     def _stop_shadow_floors(trade: dict[str, Any], entry: float, high: float) -> dict[str, float]:
@@ -1105,7 +1128,7 @@ class PaperTradeJournal:
         ladder:  T1 -> entry, T2 -> target 1 price, T3 -> target 2 price (each step locks the previous target).
         trail60: T1 -> entry, T2 onward -> entry + 60% of the peak gain."""
         t1, t2, t3 = bool(trade.get("target1_hit_at")), bool(trade.get("target2_hit_at")), bool(trade.get("target3_hit_at"))
-        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high), "two_step": two_step_floor(entry, high), "cost5": cost5_floor(entry, high)}
+        out = {"ladder": 0.0, "trail60": 0.0, "user_ladder": user_ladder_floor(entry, high), "two_step": two_step_floor(entry, high), "cost5": cost5_floor(entry, high), "ladder2": ladder2_floor(entry, high)}
         for (dd, act), name in zip(PEAK_VARIANTS, PEAK_NAMES):
             out[name] = high * (1.0 - dd) if high >= entry * (1.0 + act) else 0.0
         qty = float(trade.get("quantity") or 0)

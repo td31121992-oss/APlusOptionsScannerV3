@@ -37,7 +37,27 @@ def stop_state(t: Mapping[str, Any], ladder_mode: str | None = None, profit_lock
     ladder_mode = (ladder_mode or os.getenv("APLUS_EXIT_LADDER_MODE", "SHADOW")).strip().upper()
     lock_mode = (profit_lock_mode or os.getenv("APLUS_PROFIT_LOCK_MODE", "SHADOW")).strip().upper()
     cur, label, nxt = start, "Initial", ""
-    if ladder_mode == "ENFORCE":
+    if ladder_mode == "ENFORCE2":                  # 24 Nov 2026 ladder: +10% -> +3%, +20% -> +12%, +30% -> +22%, then +2 points per further +5%
+        import paper_trade_journal as pj
+
+        floor = pj.ladder2_floor(entry, high)
+        gain = (high / entry - 1.0) * 100.0 if high > 0 else 0.0
+        if floor > cur:
+            cur, label = floor, f"Ladder +{(floor / entry - 1.0) * 100.0:g}%"
+        if gain < 10.0:
+            nxt_gain, lock = 10.0, 3.0
+        elif gain < 20.0:
+            nxt_gain, lock = 20.0, 12.0
+        elif gain < 30.0:
+            nxt_gain = 20.0 + 5.0 * (int((gain - 20.0) // 5.0) + 1)
+            lock = 12.0 + 2.0 * int((nxt_gain - 20.0) // 5.0)
+        else:
+            nxt_gain = 30.0 + 5.0 * (int((gain - 30.0) // 5.0) + 1)
+            lock = 22.0 + 2.0 * int((nxt_gain - 30.0) // 5.0)
+        if nxt_gain == 30.0:
+            lock = 22.0
+        nxt = f"at {entry * (1 + nxt_gain / 100):.2f} (+{nxt_gain:g}%) stop moves to {entry * (1 + lock / 100):.2f}"
+    elif ladder_mode == "ENFORCE":
         import paper_trade_journal as pj
 
         floor = pj.user_ladder_floor(entry, high)
