@@ -74,5 +74,73 @@ class WindowTests(unittest.TestCase):
         self.assertIn("News collector", names)
 
 
+class DataFreshnessTests(unittest.TestCase):
+    def setUp(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        self.json, self.os = json, os
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.root = Path(self.tmp.name)
+        p = mock.patch.object(sa, "ROOT", self.root)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self.tmp.cleanup)
+        self.now = datetime(2026, 11, 23, 11, 0, tzinfo=IST)
+        self.ctx = sa.Context([], self.now)
+
+    def write(self, rel, text="x", age=0):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        t = self.now.timestamp() - age
+        self.os.utime(path, (t, t))
+
+    def test_dated_file_fresh_stale_and_missing(self):
+        check = sa.dated_file("data/order_book/{d}.csv", 300)
+        self.assertFalse(check(self.ctx)[0])                                           # missing today
+        self.write("data/order_book/2026-11-23.csv", age=60)
+        self.assertTrue(check(self.ctx)[0])
+        self.write("data/order_book/2026-11-23.csv", age=900)
+        ok, detail = check(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("limit 300s", detail)
+        self.write("data/order_book/2026-11-22.csv", age=0)                             # yesterday's file never counts for today
+        self.assertFalse(check(self.ctx)[0])
+
+    def test_chain_data_needs_fresh_health_and_at_least_one_stock(self):
+        check = sa.chain_data(1500)
+        rel = "data/options_intelligence_upstox/health.json"
+        self.write(rel, self.json.dumps({"symbols": 50, "symbols_ok": 0, "last_error": "UpstoxLimit: budget"}), age=120)
+        ok, detail = check(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("0 of 50", detail)
+        self.assertIn("UpstoxLimit", detail)
+        self.write(rel, self.json.dumps({"symbols": 50, "symbols_ok": 48}), age=120)
+        self.assertTrue(check(self.ctx)[0])
+        self.write(rel, self.json.dumps({"symbols": 50, "symbols_ok": 48}), age=4000)
+        self.assertFalse(check(self.ctx)[0])                                           # captured but long ago
+        (self.root / rel).unlink()
+        self.assertFalse(check(self.ctx)[0])
+
+    def test_data_messages_say_data_not_stopped(self):
+        down = datetime(2026, 11, 23, 10, 20, tzinfo=IST).timestamp()
+        m = sa.message("stopped", "Smart Flow data (order book)", {"down_since": down, "detail": "x updated 900s ago"}, self.now, data=True)
+        self.assertIn("DATA NOT UPDATING: Smart Flow data (order book)", m)
+        self.assertIn("since 10:20", m)
+        self.assertNotIn("STOPPED", m)
+        self.assertIn("DATA BACK", sa.message("back", "Futures data", {"back_after": 1200}, self.now, data=True))
+        self.assertIn("APlus STOPPED", sa.message("stopped", "News collector", {"down_since": down}, self.now))     # process alerts keep their wording
+
+    def test_the_data_checks_are_registered_in_the_trading_window(self):
+        data = {c.name: c for c in sa.COMPONENTS if c.data}
+        self.assertEqual(set(data), {"Smart Flow data (order book)", "Futures data", "Option chain data", "1-minute price history"})
+        for c in data.values():
+            self.assertIsNotNone(c.window)
+
+
 if __name__ == "__main__":
     unittest.main()

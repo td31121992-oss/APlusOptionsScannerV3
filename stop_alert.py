@@ -41,6 +41,7 @@ class Component:
     name: str
     check: Callable[["Context"], tuple[bool, str]]
     window: tuple[dtime, dtime] | None = None      # None = 24x7 (every day); otherwise trading days only, inside this IST window
+    data: bool = False                             # True = a "data is not updating" check (the process may be alive but writing nothing): worded that way in the Telegram message
 
 
 class Context:
@@ -97,6 +98,30 @@ def port_open(port: int) -> Callable[[Context], tuple[bool, str]]:
     return check
 
 
+def dated_file(template: str, max_age_s: float) -> Callable[[Context], tuple[bool, str]]:
+    """Today's file (template with {d} = the date) must have been written within max_age_s. Used for the minute-by-minute recorders: a recorder that is alive but refused by the API writes nothing."""
+    def check(ctx: Context) -> tuple[bool, str]:
+        return fresh_file(ROOT / template.format(d=ctx.now.strftime("%Y-%m-%d")), max_age_s)(ctx)
+    return check
+
+
+def chain_data(max_age_s: float = 1500.0) -> Callable[[Context], tuple[bool, str]]:
+    """The option-chain collector's health file: written recently AND at least one stock actually captured in the last cycle (all failing = nothing recorded, usually the Upstox budget)."""
+    def check(ctx: Context) -> tuple[bool, str]:
+        path = ROOT / "data" / "options_intelligence_upstox" / "health.json"
+        try:
+            age = ctx.now.timestamp() - path.stat().st_mtime
+            h = json.loads(path.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            return False, "chain collector health file missing or unreadable"
+        if age > max_age_s:
+            return False, f"no chain capture for {int(age // 60)} min (limit {int(max_age_s // 60)} min)"
+        if int(h.get("symbols") or 0) > 0 and int(h.get("symbols_ok") or 0) == 0:
+            return False, f"last cycle captured 0 of {h.get('symbols')} stocks: {str(h.get('last_error') or '')[:140]}"
+        return True, f"{h.get('symbols_ok')} of {h.get('symbols')} stocks captured, {int(age // 60)} min ago"
+    return check
+
+
 def disk_space(ctx: Context) -> tuple[bool, str]:
     free = shutil.disk_usage(ROOT.anchor or "C:\\").free / 1024 ** 3
     return (free >= MIN_FREE_GB, f"C: has {free:.1f} GB free" + ("" if free >= MIN_FREE_GB else f" (alert below {MIN_FREE_GB:.0f} GB - recorders and logs start failing)"))
@@ -120,6 +145,11 @@ COMPONENTS: tuple[Component, ...] = (
     Component("CAlphaTrader scanner", proc(r"CAlphaTrader.*main\.py --loop"), (T(9, 16), T(15, 30))),
     Component("Gate outcome tracker (16:20 task)", fresh_file(Path(r"E:\APlusData\top_movers_study\gate_outcome_check.txt"), 3 * 3600), (T(17, 0), T(19, 0))),
     Component("Disk space", disk_space),
+    # data-is-updating checks: the process can be alive and still write nothing (23 Nov: the order-book, futures and chain recorders were refused by the Upstox budget for 80+ minutes and nobody was told)
+    Component("Smart Flow data (order book)", dated_file("data/order_book/{d}.csv", 300), (T(9, 22), T(15, 30)), data=True),
+    Component("Futures data", dated_file("data/futures/{d}.csv.gz", 420), (T(9, 22), T(15, 30)), data=True),
+    Component("Option chain data", chain_data(), (T(9, 25), T(15, 30)), data=True),
+    Component("1-minute price history", dated_file("data/chart_history/{d}/market_watch_1m.csv", 180), (T(9, 17), T(15, 30)), data=True),
 )
 
 
@@ -157,9 +187,14 @@ def step(entry: dict[str, Any], ok: bool, active: bool, now_ts: float, detail: s
     return e, None
 
 
-def message(kind: str, name: str, e: dict[str, Any], now: datetime) -> str:
+def message(kind: str, name: str, e: dict[str, Any], now: datetime, data: bool = False) -> str:
     since = datetime.fromtimestamp(float(e.get("down_since", now.timestamp())), IST)
     mins = max(1, int((now.timestamp() - since.timestamp()) // 60))
+    if data:
+        if kind == "back":
+            return f"\U0001F7E2 APlus DATA BACK: {name}\nIt was not updating for about {max(1, int(e.get('back_after', 0)) // 60)} min and is updating again ({now:%H:%M} IST)."
+        head = "\U0001F7E0 APlus DATA NOT UPDATING" if kind == "stopped" else "\U0001F7E0 APlus DATA STILL NOT UPDATING"
+        return f"{head}: {name}\nNot updating since {since:%H:%M} IST ({mins} min).\n{e.get('detail', '')}"
     if kind == "back":
         return f"\U0001F7E2 APlus BACK: {name}\nIt was down about {max(1, int(e.get('back_after', 0)) // 60)} min and is healthy again ({now:%H:%M} IST)."
     head = "\U0001F534 APlus STOPPED" if kind == "stopped" else "\U0001F534 APlus STILL DOWN"
@@ -223,7 +258,7 @@ def run(dry: bool = False) -> int:
         entry, action = step(state.get(comp.name, {}), ok, active, now.timestamp(), detail)
         rows.append((comp.name, active, ok, detail, action))
         if action and not dry:
-            sent, why = send(message(action, comp.name, entry, now))
+            sent, why = send(message(action, comp.name, entry, now, data=comp.data))
             log(f"{action.upper()} {comp.name}: {detail} | telegram {'sent' if sent else 'FAILED ' + why}")
             if sent:
                 if action == "stopped":
