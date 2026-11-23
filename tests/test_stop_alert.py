@@ -126,6 +126,60 @@ class DataFreshnessTests(unittest.TestCase):
         (self.root / rel).unlink()
         self.assertFalse(check(self.ctx)[0])
 
+    def journal(self, trades, day="2026-11-23"):
+        self.write("data/intraday_movement/paper_trade_journal.json", self.json.dumps({"trading_date": day, "trades": trades}))
+
+    def tape(self, rows):
+        text = "timestamp,trade_id,symbol,option_security_id,price,bid,bid_qty,ask,ask_qty\n" + "".join(f"{t},{i},X,1,1,1,1,1,1\n" for t, i in rows)
+        self.write("data/option_quote_tape/2026-11-23.csv", text)
+
+    def test_open_trade_prices(self):
+        check = sa.open_trade_prices(90)
+        self.journal([{"paper_trade_id": "A", "symbol": "TCS", "status": "CLOSED", "entry_time": "2026-11-23T09:30:00+05:30"}])
+        self.assertTrue(check(self.ctx)[0])                                            # nothing open
+        self.journal([{"paper_trade_id": "A", "symbol": "TCS", "status": "OPEN", "entry_time": "2026-11-23T09:30:00+05:30"},
+                      {"paper_trade_id": "B", "symbol": "INFY", "status": "OPEN", "entry_time": "2026-11-23T09:31:00+05:30"}])
+        self.tape([("2026-11-23T10:59:50+05:30", "A"), ("2026-11-23T10:55:00+05:30", "B")])   # A priced 10 s ago, B 5 minutes ago
+        ok, detail = check(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("1 of 2", detail)
+        self.assertIn("INFY", detail)
+        self.assertNotIn("TCS", detail)
+        self.tape([("2026-11-23T10:59:50+05:30", "A"), ("2026-11-23T10:59:40+05:30", "B")])
+        self.assertTrue(check(self.ctx)[0])
+        self.journal([{"paper_trade_id": "C", "symbol": "SBIN", "status": "OPEN", "entry_time": "2026-11-23T10:59:30+05:30"}])     # new trade, no price yet, entered 30 s ago
+        self.tape([])
+        self.assertTrue(check(self.ctx)[0])
+        self.journal([{"paper_trade_id": "C", "symbol": "SBIN", "status": "OPEN", "entry_time": "2026-11-23T10:50:00+05:30"}])     # no price for 10 minutes
+        self.assertFalse(check(self.ctx)[0])
+        self.journal([{"paper_trade_id": "C", "symbol": "SBIN", "status": "OPEN", "entry_time": "2026-11-20T10:50:00+05:30"}], day="2026-11-20")
+        self.assertTrue(check(self.ctx)[0])                                            # yesterday's journal is not today's problem
+
+    def test_index_data(self):
+        check = sa.index_data(180, 10)
+        head = "time,regime,nifty_ltp,nifty_pct_prev,nifty_pct_open,banknifty_ltp,banknifty_pct_prev,banknifty_pct_open,vix,vix_pct_prev\n"
+
+        def rows(n, nifty, bank, last="10:59:30"):
+            out = []
+            for k in range(n):
+                hh = f"10:{50 + k:02d}:30" if k < n - 1 else last
+                out.append(f"2026-11-23T{hh}+05:30,BULL,{nifty(k)},0,0,{bank(k)},0,0,17,0\n")
+            return "".join(out)
+
+        self.write("data/market_context/2026-11-23.csv", head + rows(10, lambda k: 25000 + k, lambda k: 60000 + k))
+        self.assertTrue(check(self.ctx)[0])
+        self.write("data/market_context/2026-11-23.csv", head + rows(10, lambda k: 25000, lambda k: 60000 + k))
+        ok, detail = check(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("NIFTY price frozen", detail)
+        self.assertNotIn("BANK", detail)
+        self.write("data/market_context/2026-11-23.csv", head + rows(10, lambda k: 25000 + k, lambda k: 60000 + k, last="10:50:00"))
+        ok, detail = check(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("not updated", detail)
+        self.write("data/market_context/2026-11-23.csv", head + rows(3, lambda k: 25000, lambda k: 60000))              # too few readings to call it frozen
+        self.assertTrue(check(self.ctx)[0])
+
     def test_data_messages_say_data_not_stopped(self):
         down = datetime(2026, 11, 23, 10, 20, tzinfo=IST).timestamp()
         m = sa.message("stopped", "Smart Flow data (order book)", {"down_since": down, "detail": "x updated 900s ago"}, self.now, data=True)
@@ -137,7 +191,7 @@ class DataFreshnessTests(unittest.TestCase):
 
     def test_the_data_checks_are_registered_in_the_trading_window(self):
         data = {c.name: c for c in sa.COMPONENTS if c.data}
-        self.assertEqual(set(data), {"Smart Flow data (order book)", "Futures data", "Option chain data", "1-minute price history"})
+        self.assertEqual(set(data), {"Smart Flow data (order book)", "Futures data", "Option chain data", "1-minute price history", "Running trades' prices", "Nifty / Bank Nifty data"})
         for c in data.values():
             self.assertIsNotNone(c.window)
 

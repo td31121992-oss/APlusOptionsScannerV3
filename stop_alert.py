@@ -122,6 +122,87 @@ def chain_data(max_age_s: float = 1500.0) -> Callable[[Context], tuple[bool, str
     return check
 
 
+def _tail_lines(path: Path, size: int = 300_000) -> list[str]:
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            end = fh.tell()
+            fh.seek(max(0, end - size))
+            return fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+
+
+def _stamp(text: str) -> datetime | None:
+    try:
+        ts = datetime.fromisoformat(text.strip())
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=IST)
+
+
+def open_trade_prices(max_age_s: float = 90.0) -> Callable[[Context], tuple[bool, str]]:
+    """Every OPEN paper trade must have had a recorded option price (data/option_quote_tape/<date>.csv, written by the fast monitor every few seconds) within max_age_s.
+    A trade with no price yet is judged from its entry time. No open trades = fine."""
+    def check(ctx: Context) -> tuple[bool, str]:
+        today = ctx.now.strftime("%Y-%m-%d")
+        try:
+            journal = json.loads((ROOT / "data" / "intraday_movement" / "paper_trade_journal.json").read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            return False, "paper trade journal missing or unreadable"
+        if str(journal.get("trading_date") or today) != today:
+            return True, "no trades today yet"
+        opens = [t for t in (journal.get("trades") or []) if str(t.get("status") or "").upper() == "OPEN"]
+        if not opens:
+            return True, "no open trades"
+        last: dict[str, datetime] = {}
+        for line in _tail_lines(ROOT / "data" / "option_quote_tape" / f"{today}.csv"):
+            parts = line.split(",", 2)
+            ts = _stamp(parts[0]) if len(parts) > 2 else None
+            if ts is not None:
+                last[parts[1]] = ts
+        stale = []
+        for t in opens:
+            seen = last.get(str(t.get("paper_trade_id") or t.get("id")))
+            entered = _stamp(str(t.get("entry_time") or ""))
+            base = max([x for x in (seen, entered) if x is not None], default=None)
+            age = (ctx.now - base).total_seconds() if base else None
+            if age is None or age > max_age_s:
+                stale.append(f"{t.get('symbol')} {'no price' if age is None else str(int(age)) + 's'}")
+        if stale:
+            return False, f"{len(stale)} of {len(opens)} open trades have no fresh price (limit {int(max_age_s)}s): " + ", ".join(stale[:8])
+        return True, f"{len(opens)} open trades, all priced within {int(max_age_s)}s"
+    return check
+
+
+def index_data(max_age_s: float = 180.0, frozen_rows: int = 10) -> Callable[[Context], tuple[bool, str]]:
+    """NIFTY and BANK NIFTY prices (data/market_context/<date>.csv, one row a minute): the newest row must be recent and each price must have moved at least once in the last `frozen_rows` rows."""
+    def check(ctx: Context) -> tuple[bool, str]:
+        path = ROOT / "data" / "market_context" / f"{ctx.now.strftime('%Y-%m-%d')}.csv"
+        rows = []
+        for line in _tail_lines(path, 20_000)[1:]:
+            c = line.split(",")
+            if len(c) >= 6:
+                rows.append(c)
+        if not rows:
+            return False, f"{path.name} missing or empty"
+        ts = _stamp(rows[-1][0])
+        age = (ctx.now - ts).total_seconds() if ts else None
+        if age is None or age > max_age_s:
+            return False, f"index data not updated for {'?' if age is None else str(int(age // 60)) + ' min'} (limit {int(max_age_s // 60)} min)"
+        problems = []
+        for label, idx in (("NIFTY", 2), ("BANK NIFTY", 5)):
+            vals = [r[idx] for r in rows[-frozen_rows:]]
+            if not vals[-1] or float(vals[-1] or 0) <= 0:
+                problems.append(f"{label} has no price")
+            elif len(vals) >= frozen_rows and len(set(vals)) == 1:
+                problems.append(f"{label} price frozen at {vals[-1]} for {frozen_rows} readings")
+        if problems:
+            return False, "; ".join(problems)
+        return True, f"NIFTY {rows[-1][2]}, BANK NIFTY {rows[-1][5]}, {int(age)}s ago"
+    return check
+
+
 def disk_space(ctx: Context) -> tuple[bool, str]:
     free = shutil.disk_usage(ROOT.anchor or "C:\\").free / 1024 ** 3
     return (free >= MIN_FREE_GB, f"C: has {free:.1f} GB free" + ("" if free >= MIN_FREE_GB else f" (alert below {MIN_FREE_GB:.0f} GB - recorders and logs start failing)"))
@@ -150,6 +231,8 @@ COMPONENTS: tuple[Component, ...] = (
     Component("Futures data", dated_file("data/futures/{d}.csv.gz", 420), (T(9, 22), T(15, 30)), data=True),
     Component("Option chain data", chain_data(), (T(9, 25), T(15, 30)), data=True),
     Component("1-minute price history", dated_file("data/chart_history/{d}/market_watch_1m.csv", 180), (T(9, 17), T(15, 30)), data=True),
+    Component("Running trades' prices", open_trade_prices(), (T(9, 17), T(15, 30)), data=True),
+    Component("Nifty / Bank Nifty data", index_data(), (T(9, 20), T(15, 30)), data=True),
 )
 
 
