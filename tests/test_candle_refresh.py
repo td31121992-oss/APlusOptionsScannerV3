@@ -96,6 +96,10 @@ class ScannerHookTests(unittest.TestCase):
 
         self.sc, _ = make_scanner()
         self.sc._cr_tracker = cr.Tracker()
+        from unittest import mock
+        patcher = mock.patch.object(self.sc, "_candle_refresh_note")                       # the real one writes into data/candle_refresh_shadow: never from a test
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.q = SimpleNamespace(symbol="TCS")
 
     def tearDown(self):
