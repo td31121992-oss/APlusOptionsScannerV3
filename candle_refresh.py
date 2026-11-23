@@ -9,6 +9,11 @@ opened (_analyse_candidate), so for four cycles out of five the list of complete
              cycle (CANDLE_REFRESH_CHECK) and one CSV row per difference (data/candle_refresh_shadow/<date>.csv).
     ENFORCE  not built yet: it is only written after SHADOW has shown the decisions agree. Treated as OFF.
 
+SAFEGUARD (what ENFORCE would do for stocks that matter): held candles are never used to decide an entry. A stock is "near entry" when its analysis is actionable or its stage is an entry-ready or
+pullback stage (near_entry). (1) HOT: a stock that was near entry on the previous cycle is fetched fresh every cycle, as today. (2) VERIFY: if the held candles make a stock look near entry, a fresh fetch is
+made first and the fresh analysis decides. Everything else (quiet stocks) reuses the held candles. The cost of the safeguard is counted in the shadow (fetches if enforced = slot + hot + verify), and the one
+remaining risk, a quiet stock that has just turned near-entry being seen up to a slot late, is counted as LATE.
+
 A "decision" is stage, shortlist and actionable. Score differences are counted separately so a tiny drift is visible without being called a different decision.
 """
 
@@ -21,7 +26,13 @@ from typing import Any
 SCORE_TOLERANCE = 0.05
 DECISION_FIELDS = ("stage", "shortlist", "actionable")
 SCORE_FIELDS = ("score", "trade_quality_score", "movement_capture_score")
-_TALLY = ("fetches_now", "fetches_if_enforced", "checks", "same_decision", "same_scores")
+_TALLY = ("fetches_now", "fetches_if_enforced", "checks", "same_decision", "same_scores", "slot", "hot", "verify", "late")
+
+
+def near_entry(candidate: Any) -> bool:
+    """True when a stock is actionable or in an entry-ready / pullback stage: the stocks whose decision must always rest on fresh candles."""
+    stage = str(getattr(candidate, "stage", "") or "")
+    return bool(getattr(candidate, "actionable", False)) or "ENTRY_READY" in stage or "PULLBACK" in stage
 
 
 def mode() -> str:
@@ -56,6 +67,8 @@ class Tracker:
 
     def __init__(self) -> None:
         self.held: dict[str, tuple[int, Any]] = {}
+        self.hot: set[str] = set()                       # near entry on the previous cycle
+        self.next_hot: set[str] = set()                  # near entry on this cycle (becomes hot next cycle)
         self.day = ""
         self.total = {k: 0 for k in _TALLY}
         self.cycle = {k: 0 for k in _TALLY}
@@ -63,8 +76,10 @@ class Tracker:
     def new_cycle(self, now: datetime) -> None:
         day = now.date().isoformat()
         if day != self.day:                              # a new session: nothing held, tallies restart
-            self.day, self.held = day, {}
+            self.day, self.held, self.hot, self.next_hot = day, {}, set(), set()
             self.total = {k: 0 for k in _TALLY}
+        else:
+            self.hot, self.next_hot = self.next_hot, set()
         self.cycle = {k: 0 for k in _TALLY}
 
     def due(self, symbol: str, now: datetime) -> bool:
@@ -72,9 +87,11 @@ class Tracker:
         held = self.held.get(symbol)
         return held is None or held[0] != slot_of(now)
 
-    def remember(self, symbol: str, now: datetime, candles: Any) -> None:
+    def remember(self, symbol: str, now: datetime, candles: Any, why: str = "slot") -> None:
+        """ENFORCE would fetch this stock now (new slot, hot, or verification): the fresh candles become the held ones for the slot."""
         self.held[symbol] = (slot_of(now), candles)
         self.cycle["fetches_if_enforced"] += 1
+        self.cycle[why] += 1
 
     def held_candles(self, symbol: str) -> Any:
         return self.held[symbol][1]

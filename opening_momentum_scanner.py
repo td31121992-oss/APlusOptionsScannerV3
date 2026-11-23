@@ -2132,12 +2132,23 @@ class OpeningMomentumScanner:
 
         tr = self._cr_tracker
         try:
+            near_now = candle_refresh.near_entry(candidate)
+            if near_now:
+                tr.next_hot.add(quote.symbol)                  # near entry now: fetched fresh on the next cycle too
             if tr.due(quote.symbol, now):
-                tr.remember(quote.symbol, now, candles)        # ENFORCE would fetch here, so the held list equals the fresh one: nothing to compare
+                tr.remember(quote.symbol, now, candles)        # ENFORCE would fetch here (new slot), so the held list equals the fresh one: nothing to compare
+                return
+            if quote.symbol in tr.hot:
+                tr.remember(quote.symbol, now, candles, "hot")  # SAFEGUARD 1: near entry on the previous cycle, so always fresh
                 return
             stale = self._analyse_candidate(quote=quote, candles=tr.held_candles(quote.symbol), now=now)
+            if candle_refresh.near_entry(stale):
+                tr.remember(quote.symbol, now, candles, "verify")  # SAFEGUARD 2: held candles make it look near entry, so a fresh fetch decides, never the held ones
+                return
             result = candle_refresh.compare(stale, candidate)
             tr.record(result)
+            if near_now:
+                tr.cycle["late"] += 1                          # a quiet stock turned near-entry and held candles missed it (seen at the next refresh)
             if not (result["same_decision"] and result["same_scores"]):
                 self._candle_refresh_note(quote.symbol, now, stale, candidate, result)
         except Exception as exc:                               # noqa: BLE001 - a shadow check never affects trading
@@ -2166,9 +2177,9 @@ class OpeningMomentumScanner:
     def _candle_refresh_log(self, fetched_now: int, now: datetime) -> None:
         c = self._cr_tracker.close_cycle(fetched_now)
         t = self._cr_tracker.total
-        logger.info("CANDLE_REFRESH_CHECK this_cycle: checked=%d same_decision=%d same_scores=%d fetches now=%d if_enforced=%d | day_total: checked=%d same_decision=%d same_scores=%d fetches now=%d if_enforced=%d",
-                    c["checks"], c["same_decision"], c["same_scores"], c["fetches_now"], c["fetches_if_enforced"],
-                    t["checks"], t["same_decision"], t["same_scores"], t["fetches_now"], t["fetches_if_enforced"])
+        logger.info("CANDLE_REFRESH_CHECK this_cycle: checked=%d same_decision=%d same_scores=%d late=%d fetches now=%d if_enforced=%d (slot=%d hot=%d verify=%d) | day_total: checked=%d same_decision=%d same_scores=%d late=%d fetches now=%d if_enforced=%d (slot=%d hot=%d verify=%d)",
+                    c["checks"], c["same_decision"], c["same_scores"], c["late"], c["fetches_now"], c["fetches_if_enforced"], c["slot"], c["hot"], c["verify"],
+                    t["checks"], t["same_decision"], t["same_scores"], t["late"], t["fetches_now"], t["fetches_if_enforced"], t["slot"], t["hot"], t["verify"])
 
     def _fetch_one_symbol_cached(self, quote: QuoteSnapshot, now: datetime) -> list[Candle]:
         import history_cache

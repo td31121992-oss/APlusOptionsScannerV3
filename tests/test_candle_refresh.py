@@ -12,7 +12,7 @@ def at(h, m, s=5):
     return datetime(2026, 11, 23, h, m, s, tzinfo=IST)
 
 
-def cand(stage="ENTRY_READY", shortlist="WAIT", actionable=False, score=80.0, quality=70.0, capture=60.0):
+def cand(stage="LOW_RELATIVE_VOLUME", shortlist="WAIT", actionable=False, score=80.0, quality=70.0, capture=60.0):
     return SimpleNamespace(stage=stage, shortlist=shortlist, actionable=actionable, score=score, trade_quality_score=quality, movement_capture_score=capture)
 
 
@@ -86,50 +86,85 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class NearEntryTests(unittest.TestCase):
+    def test_near_entry_is_actionable_or_entry_ready_or_pullback(self):
+        self.assertTrue(cr.near_entry(cand(actionable=True)))
+        self.assertTrue(cr.near_entry(cand(stage="CONTINUATION_BEARISH_ENTRY_READY")))
+        self.assertTrue(cr.near_entry(cand(stage="HEALTHY_BULLISH_PULLBACK")))
+        self.assertTrue(cr.near_entry(cand(stage="BEARISH_TREND_WAIT_FOR_PULLBACK")))
+        self.assertFalse(cr.near_entry(cand(stage="EXTENDED_NO_ENTRY")))
+        self.assertFalse(cr.near_entry(cand(stage="LOW_RELATIVE_VOLUME")))
+
+
 class ScannerHookTests(unittest.TestCase):
-    """The scanner-side hook with the analysis mocked: stale candles are the ones held from the first cycle of the slot, the verdict is compared with the fresh one, nothing is returned to the caller."""
+    """The scanner-side hook with the analysis mocked. Held candles are the ones from the first cycle of the slot; near-entry stocks are always fetched fresh (hot) and a held-candle verdict of
+    'near entry' is verified with a fresh fetch (verify); only quiet stocks are compared. Nothing is returned to the caller."""
 
     def setUp(self):
         import logging
+        from unittest import mock
 
         logging.disable(logging.CRITICAL)
         from tests.test_history_cache import make_scanner
 
         self.sc, _ = make_scanner()
         self.sc._cr_tracker = cr.Tracker()
-        from unittest import mock
-        patcher = mock.patch.object(self.sc, "_candle_refresh_note")                       # the real one writes into data/candle_refresh_shadow: never from a test
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.q = SimpleNamespace(symbol="TCS")
+        self.verdict = lambda candles: cand()
+        p = mock.patch.object(self.sc, "_candle_refresh_note")                          # the real one writes into data/candle_refresh_shadow: never from a test
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = mock.patch.object(self.sc, "_analyse_candidate", side_effect=lambda **kw: self.verdict(kw["candles"]))
+        p2.start()
+        self.addCleanup(p2.stop)
 
     def tearDown(self):
         import logging
 
         logging.disable(logging.NOTSET)
 
-    def run_cycle(self, when, candles, fresh):
+    def cycle(self, when, candles, fresh):
         self.sc._cr_tracker.new_cycle(when)
         self.sc._candle_refresh_shadow(self.q, candles, fresh, when)
         return self.sc._cr_tracker.close_cycle(30)
 
-    def test_first_cycle_of_a_slot_is_a_fetch_and_later_ones_are_compared(self):
-        from unittest import mock
+    def test_quiet_stock_is_fetched_once_per_slot_and_compared_in_between(self):
+        self.verdict = lambda candles: cand(stage="LOW_RELATIVE_VOLUME", score=80.0 + len(candles) * 0.0)
+        c0 = self.cycle(at(10, 0), ["c"] * 5, cand())
+        self.assertEqual((c0["slot"], c0["checks"]), (1, 0))
+        c1 = self.cycle(at(10, 1), ["c"] * 5, cand())
+        self.assertEqual((c1["checks"], c1["same_decision"], c1["fetches_if_enforced"]), (1, 1, 0))      # reused, no fetch
+        c5 = self.cycle(at(10, 5), ["c"] * 6, cand())
+        self.assertEqual((c5["slot"], c5["checks"]), (1, 0))                                           # new slot: fetched again
 
-        verdict = lambda quote, candles, now: cand(actionable=len(candles) > 5)             # the analysis only looks at how many candles it was given
-        with mock.patch.object(self.sc, "_analyse_candidate", side_effect=lambda **kw: verdict(kw["quote"], kw["candles"], kw["now"])):
-            c0 = self.run_cycle(at(10, 0), ["c"] * 5, cand(actionable=False))
-            self.assertEqual((c0["fetches_if_enforced"], c0["checks"]), (1, 0))
-            c1 = self.run_cycle(at(10, 1), ["c"] * 5, cand(actionable=False))                # same candles, same verdict
-            self.assertEqual((c1["checks"], c1["same_decision"]), (1, 1))
-            c2 = self.run_cycle(at(10, 2), ["c"] * 6, cand(actionable=True))                 # fresh has one more candle: the held list would have decided differently
-            self.assertEqual((c2["checks"], c2["same_decision"]), (1, 0))
-            c5 = self.run_cycle(at(10, 5), ["c"] * 6, cand(actionable=True))                 # new slot: fetched again, nothing to compare
-            self.assertEqual((c5["fetches_if_enforced"], c5["checks"]), (1, 0))
+    def test_a_stock_that_was_near_entry_is_fetched_fresh_every_cycle(self):
+        self.cycle(at(10, 0), ["c"] * 5, cand(stage="HEALTHY_BULLISH_PULLBACK"))                         # near entry now ...
+        c1 = self.cycle(at(10, 1), ["c"] * 5, cand(stage="HEALTHY_BULLISH_PULLBACK"))
+        self.assertEqual((c1["hot"], c1["fetches_if_enforced"], c1["checks"]), (1, 1, 0))                # ... so fresh on the next cycle, nothing compared
+        c2 = self.cycle(at(10, 2), ["c"] * 5, cand(stage="HEALTHY_BULLISH_PULLBACK"))
+        self.assertEqual(c2["hot"], 1)
+        c3 = self.cycle(at(10, 3), ["c"] * 5, cand(stage="LOW_RELATIVE_VOLUME"))                         # still hot (it was near entry on the previous cycle) ...
+        self.assertEqual(c3["hot"], 1)
+        c4 = self.cycle(at(10, 4), ["c"] * 5, cand(stage="LOW_RELATIVE_VOLUME"))                         # ... but is quiet now, so it goes back to reusing held candles
+        self.assertEqual((c4["hot"], c4["checks"]), (0, 1))
+
+    def test_held_candles_never_decide_an_entry_they_are_verified(self):
+        """The 11:42 PNB case: held candles said entry ready, fresh candles said wait. Verified with a fresh fetch, so it is not a difference and the fresh answer decides."""
+        self.verdict = lambda candles: cand(stage="CONTINUATION_BEARISH_ENTRY_READY", actionable=True)
+        self.cycle(at(10, 0), ["c"] * 5, cand())                                                          # quiet at the slot start
+        c1 = self.cycle(at(10, 1), ["c"] * 5, cand(stage="BEARISH_TREND_WAIT_FOR_PULLBACK"))
+        self.assertEqual((c1["verify"], c1["fetches_if_enforced"], c1["checks"]), (1, 1, 0))
+        self.assertEqual(c1["same_decision"], 0)
+
+    def test_a_quiet_stock_that_turns_near_entry_is_counted_as_late(self):
+        self.verdict = lambda candles: cand(stage="EXTENDED_NO_ENTRY")                                    # held candles still say quiet
+        self.cycle(at(10, 0), ["c"] * 5, cand())
+        c1 = self.cycle(at(10, 1), ["c"] * 6, cand(stage="HEALTHY_BULLISH_PULLBACK"))                     # fresh candles say pullback
+        self.assertEqual((c1["checks"], c1["late"], c1["same_decision"]), (1, 1, 0))
 
     def test_a_failing_analysis_never_raises(self):
         from unittest import mock
 
         with mock.patch.object(self.sc, "_analyse_candidate", side_effect=RuntimeError("boom")):
-            self.run_cycle(at(10, 0), ["c"], cand())
-            self.run_cycle(at(10, 1), ["c"], cand())                                          # must not raise
+            self.cycle(at(10, 0), ["c"], cand())
+            self.cycle(at(10, 1), ["c"], cand())                                                          # must not raise
