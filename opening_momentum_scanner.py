@@ -591,6 +591,12 @@ class OpeningMomentumScanner:
         stage_marks["histories"] = time.monotonic()
 
         candidates: list[MomentumCandidate] = []
+        import candle_refresh
+
+        _candle_refresh_on = candle_refresh.mode() == "SHADOW"
+        if _candle_refresh_on:
+            self._cr_tracker = getattr(self, "_cr_tracker", None) or candle_refresh.Tracker()
+            self._cr_tracker.new_cycle(current_time)
         for quote in candle_shortlist:
             candles = history_by_symbol.get(quote.symbol)
             if not candles:
@@ -611,7 +617,11 @@ class OpeningMomentumScanner:
                 )
                 continue
             candidates.append(candidate)
+            if _candle_refresh_on:
+                self._candle_refresh_shadow(quote, candles, candidate, current_time)
 
+        if _candle_refresh_on:
+            self._candle_refresh_log(len(candle_shortlist), current_time)
         candidates.sort(
             key=lambda item: (
                 item.actionable,
@@ -2115,6 +2125,50 @@ class OpeningMomentumScanner:
             except Exception as exc:                      # noqa: BLE001 - the check never affects a decision
                 logger.warning("HISTORY_CACHE_CHECK failed: %s: %s", type(exc).__name__, exc)
         return full
+
+    def _candle_refresh_shadow(self, quote: QuoteSnapshot, candles: Sequence[Candle], candidate: MomentumCandidate, now: datetime) -> None:
+        """SHADOW of INTRADAY_CANDLE_REFRESH (see candle_refresh.py): where ENFORCE would reuse this stock's candles from the first cycle of the slot, analyse the held candles and compare. Never affects a decision."""
+        import candle_refresh
+
+        tr = self._cr_tracker
+        try:
+            if tr.due(quote.symbol, now):
+                tr.remember(quote.symbol, now, candles)        # ENFORCE would fetch here, so the held list equals the fresh one: nothing to compare
+                return
+            stale = self._analyse_candidate(quote=quote, candles=tr.held_candles(quote.symbol), now=now)
+            result = candle_refresh.compare(stale, candidate)
+            tr.record(result)
+            if not (result["same_decision"] and result["same_scores"]):
+                self._candle_refresh_note(quote.symbol, now, stale, candidate, result)
+        except Exception as exc:                               # noqa: BLE001 - a shadow check never affects trading
+            logger.warning("CANDLE_REFRESH_CHECK failed for %s: %s: %s", quote.symbol, type(exc).__name__, exc)
+
+    def _candle_refresh_note(self, symbol: str, now: datetime, stale: MomentumCandidate, fresh: MomentumCandidate, result: Mapping[str, Any]) -> None:
+        import csv as _csv
+        from pathlib import Path as _P
+
+        try:
+            folder = _P(__file__).resolve().parent / "data" / "candle_refresh_shadow"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"{now.date().isoformat()}.csv"
+            new = not path.exists()
+            with path.open("a", encoding="utf-8", newline="") as fh:
+                w = _csv.writer(fh)
+                if new:
+                    w.writerow(["time", "symbol", "decision_differs", "decision_fields", "score_fields", "stale_stage", "fresh_stage", "stale_shortlist", "fresh_shortlist",
+                                "stale_actionable", "fresh_actionable", "stale_score", "fresh_score", "stale_quality", "fresh_quality", "completed_bars_stale", "completed_bars_fresh"])
+                w.writerow([now.strftime("%H:%M:%S"), symbol, int(not result["same_decision"]), "|".join(result["decision_fields"]), "|".join(result["score_fields"]),
+                            stale.stage, fresh.stage, stale.shortlist, fresh.shortlist, int(stale.actionable), int(fresh.actionable), round(stale.score, 2), round(fresh.score, 2),
+                            round(stale.trade_quality_score, 2), round(fresh.trade_quality_score, 2), stale.completed_5m_bars, fresh.completed_5m_bars])
+        except OSError:
+            pass
+
+    def _candle_refresh_log(self, fetched_now: int, now: datetime) -> None:
+        c = self._cr_tracker.close_cycle(fetched_now)
+        t = self._cr_tracker.total
+        logger.info("CANDLE_REFRESH_CHECK this_cycle: checked=%d same_decision=%d same_scores=%d fetches now=%d if_enforced=%d | day_total: checked=%d same_decision=%d same_scores=%d fetches now=%d if_enforced=%d",
+                    c["checks"], c["same_decision"], c["same_scores"], c["fetches_now"], c["fetches_if_enforced"],
+                    t["checks"], t["same_decision"], t["same_scores"], t["fetches_now"], t["fetches_if_enforced"])
 
     def _fetch_one_symbol_cached(self, quote: QuoteSnapshot, now: datetime) -> list[Candle]:
         import history_cache
