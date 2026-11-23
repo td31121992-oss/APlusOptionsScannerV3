@@ -1,249 +1,265 @@
 {
-  "pass_marks": {
-    "variants": "at least 10 forward sessions and 100 trades, total change > 0 and better than live on at least 60% of days",
-    "gates": "at least 30 blocked trades over 8+ days, forward change if enforced > 0 and it helped on at least 60% of the blocked days",
-    "rule": "READY only means the mark is met. Nothing goes live without the user's explicit yes."
+ "pass_marks": {
+  "variants": "at least 10 forward sessions and 100 trades, total change > 0 and better than live on at least 60% of days",
+  "gates": "at least 30 blocked trades over 8+ days, forward change if enforced > 0 and it helped on at least 60% of the blocked days",
+  "rule": "READY only means the mark is met. Nothing goes live without the user's explicit yes."
+ },
+ "experiments": [
+  {
+   "id": "V01",
+   "kind": "variant",
+   "key": "dx_x_wide25",
+   "name": "Wide stop (-25%), no early profit locks",
+   "registered": "2026-11-10",
+   "note": "Replay on 268 trades (26 Oct - 9 Nov): +Rs 38k vs -Rs 32k live. First forward day (11 Nov) went against it."
   },
-  "experiments": [
-    {
-      "id": "V01",
-      "kind": "variant",
-      "key": "dx_x_wide25",
-      "name": "Wide stop (-25%), no early profit locks",
-      "registered": "2026-11-10",
-      "note": "Replay on 268 trades (26 Oct - 9 Nov): +Rs 38k vs -Rs 32k live. First forward day (11 Nov) went against it."
-    },
-    {
-      "id": "V02",
-      "kind": "variant",
-      "key": "dx_x_wide25_t30g30",
-      "name": "Wide stop (-25%) with a late trail (+30% reached, give back 30%)",
-      "registered": "2026-11-10",
-      "note": "Replay +Rs 24k vs -Rs 32k live."
-    },
-    {
-      "id": "V03",
-      "kind": "variant",
-      "key": "dx_e_wait5",
-      "name": "Wait 5 minutes after the signal, buy at the ask only if the option is at / above the signal price",
-      "registered": "2026-11-10",
-      "note": "Replay +Rs 25.5k vs -Rs 24.9k live on 255 trades; unstable at other waits."
-    },
-    {
-      "id": "G01",
-      "kind": "gate",
-      "name": "Spread cap (no entry when the option spread is over 1%)",
-      "key": "Spread cap, all history (no entry when the option spread at entry is over 1%)  [derived]",
-      "registered": "2026-11-09",
-      "note": "Spread over 1%: 276 trades, -Rs 175k; tighter: about break-even."
-    },
-    {
-      "id": "G02",
-      "kind": "gate",
-      "name": "5-minute momentum confirmation",
-      "key": "Momentum confirmation (not at / above entry price 5 minutes after the signal, or closed by then)  [derived from recorded ticks]",
-      "registered": "2026-11-09",
-      "note": "Confirmed trades +Rs 108k at real prices but only +Rs 27k after paying the later ask."
-    },
-    {
-      "id": "G03",
-      "kind": "gate",
-      "name": "Skip a quiet opening (RVOL below 1)",
-      "key": "Skip a quiet opening (the stock's first 5-minute volume below its 14-session average)  [derived]",
-      "registered": "2026-11-09",
-      "note": "Quiet openings: 193 trades, -Rs 164k (range clearly negative)."
-    },
-    {
-      "id": "G04",
-      "kind": "gate",
-      "name": "Only stocks in play (RVOL 3x or more)",
-      "key": "Only stocks in play (first 5-minute volume at least 3x its 14-session average)  [derived]",
-      "registered": "2026-11-09",
-      "note": "64 trades, +Rs 48k, range includes zero."
-    },
-    {
-      "id": "G05",
-      "kind": "gate",
-      "name": "Wait 11+ minutes after the first entry-ready signal",
-      "key": "Wait 11+ minutes after the stock's first entry-ready signal (entered 10 minutes or sooner = would block)  [derived]",
-      "registered": "2026-11-09",
-      "note": "Entries within 10 minutes of the first signal lost -Rs 91.7k over 160 trades."
-    },
-    {
-      "id": "G06",
-      "kind": "gate",
-      "name": "Enter only 11-30 minutes after the first signal",
-      "key": "Enter only 11-30 minutes after the first entry-ready signal  [derived]",
-      "registered": "2026-11-09",
-      "note": "The only profitable lag bucket (+Rs 34k, 84 trades)."
-    },
-    {
-      "id": "G07",
-      "kind": "gate",
-      "name": "Observe till 09:45, then the top-2 gaining / losing sectors only (NSE-corrected sectors)",
-      "key": "Observe till 09:45, then top-2 gaining / losing sectors only (calls in gaining, puts in losing; ranked since the open)  [derived]",
-      "registered": "2026-11-11",
-      "note": "With the corrected NSE sectors the replay turned negative (-Rs 24.6k, 87 trades); the earlier + result came from bad sector labels. Forward evidence restarts 12 Nov."
-    },
-    {
-      "id": "G08",
-      "kind": "gate",
-      "name": "... and only the 5 strongest movers of that sector",
-      "key": "  ... and only the 5 strongest movers of that sector on the trade's side  [derived]",
-      "registered": "2026-11-11",
-      "note": "Corrected replay -Rs 11k (67 trades)."
-    },
-    {
-      "id": "AI01",
-      "kind": "gate",
-      "name": "AI trading agent (shadow) says SKIP",
-      "key": "AI trading agent (shadow, sees only facts known at entry) says SKIP  [derived]",
-      "registered": "2026-11-12",
-      "note": "Judges each trade from facts known at entry. The plain statistical baseline found no usable signal (AUC 0.49-0.57 vs chance 0.45-0.56), so this must clearly beat chance to count."
-    },
-    {
-      "id": "G20",
-      "kind": "gate",
-      "name": "4th+ trade of the day on the same side in one sector",
-      "key": "4th or later trade of the day on the same side in one NSE sector (crowded sector)  [derived]",
-      "registered": "2026-11-12",
-      "note": "Requested 12 Nov after CHOLAFIN/KALYANKJIL stopped out. Replay 22 Sep-12 Nov (in-sample): 57 trades, -Rs 54,410, 10 of 13 days lost."
-    },
-    {
-      "id": "G21",
-      "kind": "gate",
-      "name": "Entered before 09:35",
-      "key": "Entered before 09:35  [derived]",
-      "registered": "2026-11-12",
-      "note": "Requested 12 Nov. Replay 22 Sep-12 Nov (in-sample): 106 trades, -Rs 96,852, 25% wins, 19 of 24 days lost. Overlaps the 09:45 sector gates."
-    },
-    {
-      "id": "V04",
-      "kind": "variant",
-      "key": "dx_x_peak8_a20",
-      "name": "Peak-drop exit: once the option is up 20%, sell when it falls 8% below its highest price",
-      "registered": "2026-11-12",
-      "note": "Hindsight (12 Oct - 12 Nov, 476 trades): +Rs 28k, better on only 10 of 21 days. Tracked forward from 13 Nov; the exit price is the one the journal's live shadow rule recorded."
-    },
-    {
-      "id": "V05",
-      "kind": "variant",
-      "key": "dx_x_secfade",
-      "name": "Sector-fade exit: sell when the sector index gives back 0.4% from its best since entry while the stock is below entry",
-      "registered": "2026-11-12",
-      "note": "Hindsight (15 Oct - 12 Nov, 437 trades): +Rs 43k, better on 12 of 18 days but -Rs 14k over the last 10. Tracked forward from 13 Nov."
-    },
-    {
-      "id": "V06",
-      "kind": "variant",
-      "key": "dx_x_lvwap_put",
-      "name": "Release the late-VWAP-extension wait rule for PUTS only (shadow: trades that were not taken, replayed with the live ladder)",
-      "registered": "2026-11-13",
-      "note": "Hindsight 21 Oct - 12 Nov: 86 put trades, -Rs 20.9k (mean about +1.8% at the close but negative with the live ladder); calls are not part of this test. Live net is 0 because these trades were not taken, so 'change' = what they would have added. Forward from 14 Nov; 'positive days' counts days the released puts made money."
-    },
-    {
-      "id": "G22",
-      "kind": "gate",
-      "name": "Pullback-only entries (block every setup except HEALTHY_PULLBACK)",
-      "key": "Pullback-only entries (block everything but HEALTHY_PULLBACK / wait-for-retest)",
-      "registered": "2026-11-13",
-      "note": "Hindsight 22 Sep - 13 Nov: HEALTHY_PULLBACK 193 trades +Rs 49.9k (36% wins); every other setup family negative (-Rs 96.9k, -107k, -28.7k). Shadow only; forward from 14 Nov."
-    },
-    {
-      "id": "G23",
-      "kind": "gate",
-      "name": "Pullback-only AND option spread 1% or less (combined)",
-      "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
-      "registered": "2026-11-13",
-      "note": "Combination of G22 and the spread cap G01, tracked as one rule so the overlap is not double counted. Hindsight only before 14 Nov."
-    },
-    {
-      "id": "V07",
-      "kind": "variant",
-      "key": "dx_x_regime_put",
-      "name": "Bearish candidates the market-regime filter dropped (Nifty BULL): shadow puts replayed with the live ladder",
-      "registered": "2026-11-16",
-      "note": "Hindsight 21 Oct - 16 Nov: 89 stock-days, net -Rs 12.3k with the live ladder (one day, 21 Oct, +Rs 77k, hides -Rs 89k on the other days). Stock-level the same candidates fell on average on 16 Nov, but option P&L after charges was negative on 7 of 11 days. Live net is 0 because these puts were blocked, so 'change' = what they would have added. Forward from 17 Nov; 'positive days' counts days the released puts made money."
-    },
-    {
-      "id": "G24",
-      "kind": "gate",
-      "name": "No entries before 10:00 (any setup)",
-      "key": "No entry before 10:00 (any setup)",
-      "registered": "2026-11-16",
-      "note": "Hindsight 22 Sep - 16 Nov by entry time: 09:15-09:44 -Rs 76.3k (214 trades), 09:45-09:59 -Rs 52.2k (88), 10:00-10:59 +Rs 21.1k (163), 11:00-12:59 -Rs 72.7k, 13:00+ -Rs 10.4k. On 16 Nov the 13 trades entered before 10:00 lost about Rs 20.6k, the 9 later ones made about Rs 12.8k. Shadow only; forward from 17 Nov. Time buckets are one of several groupings tried, so only forward sessions count."
-    },
-    {
-      "id": "G25",
-      "kind": "gate",
-      "name": "Sector focus till 10:30, looser (sector in either top-2 gaining / losing list)",
-      "key": "Sector focus till 10:30, looser (sector in either top-2 list)",
-      "registered": "2026-11-16",
-      "note": "On 16 Nov the rule would have blocked 8 of 22 calls (all entered 09:31-09:58, 1 winner of 8, net -Rs 20,069), leaving +Rs 12,239; hindsight, one day, the three NBFC losers are one sector. The tag (sf_focus_any_block) is already recorded on every trade, so no code change: this entry only starts the forward count from 17 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
-    },
-    {
-      "id": "G26",
-      "kind": "gate",
-      "name": "Pullback-only + spread cap (HEALTHY_PULLBACK setup AND option spread 1% or less)",
-      "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
-      "registered": "2026-11-17",
-      "note": "Keeps PNB 147 CE (+Rs 13,043 on 17 Nov, spread 0.89%). 17 Nov hindsight: passes 2 of 17 (PNB, POLYCAB), blocks the other 15. History to 16 Nov (544 trades): passed 64 trades +Rs 8,352 (+Rs 130 each), blocked 480 trades -Rs 1.91 lakh; random blocking of the same size is beaten 84% of draws (short of 95%). The setup family was chosen after seeing this history, so in-sample. Tags already recorded; forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
-    },
-    {
-      "id": "G27",
-      "kind": "gate",
-      "name": "Pullback-only + no entry before 10:00 (HEALTHY_PULLBACK setup AND entered 10:00 or later)",
-      "key": "Pullback-only + no entry before 10:00 together (HEALTHY_PULLBACK and entered 10:00 or later)",
-      "registered": "2026-11-17",
-      "note": "Best pair from a search of 2,109 gate combinations over 603 trades (22 Sep-16 Nov): passes 64 trades, +Rs 40,280 (+Rs 629 each, 42% won), positive in both halves, but about half of the other 119 'profitable' combos are this same pair and chance alone would give ~155 such hits. Without its top 3 trades it is +Rs 7,553; Sep +10.9k, Oct +30.0k, Nov -0.6k (22 trades); 48% positive days. It blocks PNB (09:32, +Rs 13,043 on 17 Nov). Forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
-    },
-    {
-      "id": "V08",
-      "kind": "variant",
-      "name": "Early stop: exit at -8% from entry during the first 5 minutes (live first stop is ~15-20% away)",
-      "key": "dx_x_early8",
-      "registered": "2026-11-17",
-      "note": "Tick replay of 388 trades (26 Oct-17 Nov): +Rs 42.8k vs the live ladder, positive in both halves (+30.4k / +12.4k), better on 13 of 15 days. Best of ~40 settings tried: -5% gave +30.5k but only +0.6k in the 2nd half, -10% +5.3k, a 10-minute window was negative in the 2nd half, so treat as a lead. Replay assumes fills at the tick price; real fast moves and wide spreads will fill worse. Exit-if-below-entry-at-N-minutes variants all lost money and are not part of this. Recorded live as shadow_early8_exit_price by paper_trade_journal from the first session after registration (18 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
-    },
-    {
-      "id": "V09",
-      "kind": "variant",
-      "name": "Late trail: once the option is up 40%, exit if it falls back to keep only 60% of its best gain",
-      "key": "dx_x_lt40",
-      "registered": "2026-11-19",
-      "note": "Tick replay of 421 trades (26 Oct-18 Nov): +Rs 20.2k vs the live exits (positive in both halves, +11.1k / +9.1k), but only 25 trades changed and days were 4 better / 5 worse; in the replay every trail arming at +10% to +30% lost money (-Rs 12k to -Rs 108k) and selling part of the position below +30% also lost, because winners dip before they run. Variants around it: keep 70% +26.8k, keep 50% +14.0k, keep 30% +6.2k. Replay assumes fills at the tick price. Recorded live as shadow_lt40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
-    },
-    {
-      "id": "G28",
-      "kind": "gate",
-      "name": "Stricter chase check: stock already up 0.45% or more our way in the last 15 minutes (separate from the 0.30% gate)",
-      "key": "Stricter chase check (stock already up 0.45% or more our way in the last 15 minutes)",
-      "registered": "2026-11-19",
-      "note": "On 481 trades with entry-context tags (mid-Oct to 18 Nov) it blocks 100 trades (21%) that net -Rs 120.5k (24% won, avg -Rs 1,280), so enforcing would have been +Rs 120.5k: +75.0k / +45.5k by half, positive on 18 of 22 days, better than random blocking of 100 trades in 100% of 2,000 draws, but it also blocks 24 winners (best +Rs 16.1k). Threshold 0.45% was picked after looking at quintiles and the older 0.30% chase gate was written on overlapping mid-Oct data, so treat as a lead. Reads the ctx_last15_pct tag already on every trade (signed in our direction); no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
-    },
-    {
-      "id": "V10",
-      "kind": "variant",
-      "name": "Puts only: wait 2 minutes after the signal and buy at the ask only if the option is up 2% or more (calls unchanged)",
-      "key": "dx_e_wait2_put",
-      "registered": "2026-11-19",
-      "note": "Tick replay of 423 trades (26 Oct-18 Nov): puts lost -Rs 120k as taken, and kept only when the option was up 2%+ after 2 minutes they were -Rs 10.9k (21 of the put trades kept); calls made +Rs 75.8k unfiltered and every confirmation rule REDUCED them, so calls are left alone. Combined (calls as is, puts confirmed) ~ +Rs 65k vs -Rs 44k real. Best of ~15 confirmation settings tried (2 min / up 2% was +Rs 42k all-trades; up 5% was negative), 16 days of one market phase, and even confirmed puts stay negative - a lead only. Replay buys at the ask at t0+2min and sells at the real exit. Recorded live as opt2 / opt2_price / opt2_ask by paper_trade_journal.record_opt2 from 20 Nov; a put whose trade was over before 2 minutes counts as not taken (0). Nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
-    },
-    {
-      "id": "V11",
-      "kind": "variant",
-      "name": "Cash out at +40%: sell the whole position the first time the option is up 40%",
-      "key": "dx_x_cash40",
-      "registered": "2026-11-19",
-      "note": "Tick replay of 421 trades (26 Oct-18 Nov): selling everything at +40% beat the live exits by +Rs 61.8k (total +Rs 18.1k vs -Rs 43.7k), positive in both halves (+34.1k / +27.7k), better on 11 of 15 days. The same replay for +10% / +15% / +20% / +25% / +30% lost Rs 108.5k / 68.9k / 42.9k / 17.5k / 0.7k vs live, because only 60% / 47% / 38% of options ever reach +10% / +15% / +20% and the rest still take the full stop, so small fixed targets raise the win rate (56% at +10%) but lose money. In-sample and assumes a fill at exactly +40%; real fills on fast moves will be a little worse. Recorded live as shadow_cash40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
-    },
-    {
-      "id": "G29",
-      "kind": "gate",
-      "name": "Regime 60%: only trade the side that more than 60% of F&O stocks are on (calls when 60%+ are up, puts when 60%+ are down)",
-      "key": "Regime 60% (the majority side must hold more than 60% of stocks)",
-      "registered": "2026-11-19",
-      "note": "On 380 trades with the regime tag (29 Oct-19 Nov, 14 days) it blocks 203 (53%) that net -Rs 48.4k, so enforcing would have been +Rs 48.4k: +38.7k / +9.6k by half, positive on 8 of 13 days with an effect (about 62%), better than random blocking of 203 trades in 91.9% of 2,000 draws (short of 95%), but it also blocks 76 winners (best +Rs 18.8k). Worst day -Rs 36.0k (6 Nov, blocked winners), best +Rs 42.1k (4 Nov); 19 Nov +Rs 38.2k because it blocked every put on a call-only day. The second half is much weaker than the first, and it works as 'trade with the market', so a reversal day would block the good side - treat as a lead. Compare with Regime-only (same idea at >50%: +Rs 50.6k, 7 of 13 days) and Breadth 70% (blocks 79% of trades, kills 30 Oct) which were not registered. Reads the rgs_regime60_ok tag already on every trade; no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 30 blocked trades over 8+ days, change > 0, helped on 60%+ of the blocked days, and compare with random blocking of the same size."
-    }
-  ]
+  {
+   "id": "V02",
+   "kind": "variant",
+   "key": "dx_x_wide25_t30g30",
+   "name": "Wide stop (-25%) with a late trail (+30% reached, give back 30%)",
+   "registered": "2026-11-10",
+   "note": "Replay +Rs 24k vs -Rs 32k live."
+  },
+  {
+   "id": "V03",
+   "kind": "variant",
+   "key": "dx_e_wait5",
+   "name": "Wait 5 minutes after the signal, buy at the ask only if the option is at / above the signal price",
+   "registered": "2026-11-10",
+   "note": "Replay +Rs 25.5k vs -Rs 24.9k live on 255 trades; unstable at other waits."
+  },
+  {
+   "id": "G01",
+   "kind": "gate",
+   "name": "Spread cap (no entry when the option spread is over 1%)",
+   "key": "Spread cap, all history (no entry when the option spread at entry is over 1%)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Spread over 1%: 276 trades, -Rs 175k; tighter: about break-even."
+  },
+  {
+   "id": "G02",
+   "kind": "gate",
+   "name": "5-minute momentum confirmation",
+   "key": "Momentum confirmation (not at / above entry price 5 minutes after the signal, or closed by then)  [derived from recorded ticks]",
+   "registered": "2026-11-09",
+   "note": "Confirmed trades +Rs 108k at real prices but only +Rs 27k after paying the later ask."
+  },
+  {
+   "id": "G03",
+   "kind": "gate",
+   "name": "Skip a quiet opening (RVOL below 1)",
+   "key": "Skip a quiet opening (the stock's first 5-minute volume below its 14-session average)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Quiet openings: 193 trades, -Rs 164k (range clearly negative)."
+  },
+  {
+   "id": "G04",
+   "kind": "gate",
+   "name": "Only stocks in play (RVOL 3x or more)",
+   "key": "Only stocks in play (first 5-minute volume at least 3x its 14-session average)  [derived]",
+   "registered": "2026-11-09",
+   "note": "64 trades, +Rs 48k, range includes zero."
+  },
+  {
+   "id": "G05",
+   "kind": "gate",
+   "name": "Wait 11+ minutes after the first entry-ready signal",
+   "key": "Wait 11+ minutes after the stock's first entry-ready signal (entered 10 minutes or sooner = would block)  [derived]",
+   "registered": "2026-11-09",
+   "note": "Entries within 10 minutes of the first signal lost -Rs 91.7k over 160 trades."
+  },
+  {
+   "id": "G06",
+   "kind": "gate",
+   "name": "Enter only 11-30 minutes after the first signal",
+   "key": "Enter only 11-30 minutes after the first entry-ready signal  [derived]",
+   "registered": "2026-11-09",
+   "note": "The only profitable lag bucket (+Rs 34k, 84 trades)."
+  },
+  {
+   "id": "G07",
+   "kind": "gate",
+   "name": "Observe till 09:45, then the top-2 gaining / losing sectors only (NSE-corrected sectors)",
+   "key": "Observe till 09:45, then top-2 gaining / losing sectors only (calls in gaining, puts in losing; ranked since the open)  [derived]",
+   "registered": "2026-11-11",
+   "note": "With the corrected NSE sectors the replay turned negative (-Rs 24.6k, 87 trades); the earlier + result came from bad sector labels. Forward evidence restarts 12 Nov."
+  },
+  {
+   "id": "G08",
+   "kind": "gate",
+   "name": "... and only the 5 strongest movers of that sector",
+   "key": "  ... and only the 5 strongest movers of that sector on the trade's side  [derived]",
+   "registered": "2026-11-11",
+   "note": "Corrected replay -Rs 11k (67 trades)."
+  },
+  {
+   "id": "AI01",
+   "kind": "gate",
+   "name": "AI trading agent (shadow) says SKIP",
+   "key": "AI trading agent (shadow, sees only facts known at entry) says SKIP  [derived]",
+   "registered": "2026-11-12",
+   "note": "Judges each trade from facts known at entry. The plain statistical baseline found no usable signal (AUC 0.49-0.57 vs chance 0.45-0.56), so this must clearly beat chance to count."
+  },
+  {
+   "id": "G20",
+   "kind": "gate",
+   "name": "4th+ trade of the day on the same side in one sector",
+   "key": "4th or later trade of the day on the same side in one NSE sector (crowded sector)  [derived]",
+   "registered": "2026-11-12",
+   "note": "Requested 12 Nov after CHOLAFIN/KALYANKJIL stopped out. Replay 22 Sep-12 Nov (in-sample): 57 trades, -Rs 54,410, 10 of 13 days lost."
+  },
+  {
+   "id": "G21",
+   "kind": "gate",
+   "name": "Entered before 09:35",
+   "key": "Entered before 09:35  [derived]",
+   "registered": "2026-11-12",
+   "note": "Requested 12 Nov. Replay 22 Sep-12 Nov (in-sample): 106 trades, -Rs 96,852, 25% wins, 19 of 24 days lost. Overlaps the 09:45 sector gates."
+  },
+  {
+   "id": "V04",
+   "kind": "variant",
+   "key": "dx_x_peak8_a20",
+   "name": "Peak-drop exit: once the option is up 20%, sell when it falls 8% below its highest price",
+   "registered": "2026-11-12",
+   "note": "Hindsight (12 Oct - 12 Nov, 476 trades): +Rs 28k, better on only 10 of 21 days. Tracked forward from 13 Nov; the exit price is the one the journal's live shadow rule recorded."
+  },
+  {
+   "id": "V05",
+   "kind": "variant",
+   "key": "dx_x_secfade",
+   "name": "Sector-fade exit: sell when the sector index gives back 0.4% from its best since entry while the stock is below entry",
+   "registered": "2026-11-12",
+   "note": "Hindsight (15 Oct - 12 Nov, 437 trades): +Rs 43k, better on 12 of 18 days but -Rs 14k over the last 10. Tracked forward from 13 Nov."
+  },
+  {
+   "id": "V06",
+   "kind": "variant",
+   "key": "dx_x_lvwap_put",
+   "name": "Release the late-VWAP-extension wait rule for PUTS only (shadow: trades that were not taken, replayed with the live ladder)",
+   "registered": "2026-11-13",
+   "note": "Hindsight 21 Oct - 12 Nov: 86 put trades, -Rs 20.9k (mean about +1.8% at the close but negative with the live ladder); calls are not part of this test. Live net is 0 because these trades were not taken, so 'change' = what they would have added. Forward from 14 Nov; 'positive days' counts days the released puts made money."
+  },
+  {
+   "id": "G22",
+   "kind": "gate",
+   "name": "Pullback-only entries (block every setup except HEALTHY_PULLBACK)",
+   "key": "Pullback-only entries (block everything but HEALTHY_PULLBACK / wait-for-retest)",
+   "registered": "2026-11-13",
+   "note": "Hindsight 22 Sep - 13 Nov: HEALTHY_PULLBACK 193 trades +Rs 49.9k (36% wins); every other setup family negative (-Rs 96.9k, -107k, -28.7k). Shadow only; forward from 14 Nov."
+  },
+  {
+   "id": "G23",
+   "kind": "gate",
+   "name": "Pullback-only AND option spread 1% or less (combined)",
+   "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
+   "registered": "2026-11-13",
+   "note": "Combination of G22 and the spread cap G01, tracked as one rule so the overlap is not double counted. Hindsight only before 14 Nov."
+  },
+  {
+   "id": "V07",
+   "kind": "variant",
+   "key": "dx_x_regime_put",
+   "name": "Bearish candidates the market-regime filter dropped (Nifty BULL): shadow puts replayed with the live ladder",
+   "registered": "2026-11-16",
+   "note": "Hindsight 21 Oct - 16 Nov: 89 stock-days, net -Rs 12.3k with the live ladder (one day, 21 Oct, +Rs 77k, hides -Rs 89k on the other days). Stock-level the same candidates fell on average on 16 Nov, but option P&L after charges was negative on 7 of 11 days. Live net is 0 because these puts were blocked, so 'change' = what they would have added. Forward from 17 Nov; 'positive days' counts days the released puts made money."
+  },
+  {
+   "id": "G24",
+   "kind": "gate",
+   "name": "No entries before 10:00 (any setup)",
+   "key": "No entry before 10:00 (any setup)",
+   "registered": "2026-11-16",
+   "note": "Hindsight 22 Sep - 16 Nov by entry time: 09:15-09:44 -Rs 76.3k (214 trades), 09:45-09:59 -Rs 52.2k (88), 10:00-10:59 +Rs 21.1k (163), 11:00-12:59 -Rs 72.7k, 13:00+ -Rs 10.4k. On 16 Nov the 13 trades entered before 10:00 lost about Rs 20.6k, the 9 later ones made about Rs 12.8k. Shadow only; forward from 17 Nov. Time buckets are one of several groupings tried, so only forward sessions count."
+  },
+  {
+   "id": "G25",
+   "kind": "gate",
+   "name": "Sector focus till 10:30, looser (sector in either top-2 gaining / losing list)",
+   "key": "Sector focus till 10:30, looser (sector in either top-2 list)",
+   "registered": "2026-11-16",
+   "note": "On 16 Nov the rule would have blocked 8 of 22 calls (all entered 09:31-09:58, 1 winner of 8, net -Rs 20,069), leaving +Rs 12,239; hindsight, one day, the three NBFC losers are one sector. The tag (sf_focus_any_block) is already recorded on every trade, so no code change: this entry only starts the forward count from 17 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
+  },
+  {
+   "id": "G26",
+   "kind": "gate",
+   "name": "Pullback-only + spread cap (HEALTHY_PULLBACK setup AND option spread 1% or less)",
+   "key": "Pullback-only + spread cap together (HEALTHY_PULLBACK and option spread 1% or less)",
+   "registered": "2026-11-17",
+   "note": "Keeps PNB 147 CE (+Rs 13,043 on 17 Nov, spread 0.89%). 17 Nov hindsight: passes 2 of 17 (PNB, POLYCAB), blocks the other 15. History to 16 Nov (544 trades): passed 64 trades +Rs 8,352 (+Rs 130 each), blocked 480 trades -Rs 1.91 lakh; random blocking of the same size is beaten 84% of draws (short of 95%). The setup family was chosen after seeing this history, so in-sample. Tags already recorded; forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
+  },
+  {
+   "id": "G27",
+   "kind": "gate",
+   "name": "Pullback-only + no entry before 10:00 (HEALTHY_PULLBACK setup AND entered 10:00 or later)",
+   "key": "Pullback-only + no entry before 10:00 together (HEALTHY_PULLBACK and entered 10:00 or later)",
+   "registered": "2026-11-17",
+   "note": "Best pair from a search of 2,109 gate combinations over 603 trades (22 Sep-16 Nov): passes 64 trades, +Rs 40,280 (+Rs 629 each, 42% won), positive in both halves, but about half of the other 119 'profitable' combos are this same pair and chance alone would give ~155 such hits. Without its top 3 trades it is +Rs 7,553; Sep +10.9k, Oct +30.0k, Nov -0.6k (22 trades); 48% positive days. It blocks PNB (09:32, +Rs 13,043 on 17 Nov). Forward count from 18 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size. Shadow only, nothing enforced."
+  },
+  {
+   "id": "V08",
+   "kind": "variant",
+   "name": "Early stop: exit at -8% from entry during the first 5 minutes (live first stop is ~15-20% away)",
+   "key": "dx_x_early8",
+   "registered": "2026-11-17",
+   "note": "Tick replay of 388 trades (26 Oct-17 Nov): +Rs 42.8k vs the live ladder, positive in both halves (+30.4k / +12.4k), better on 13 of 15 days. Best of ~40 settings tried: -5% gave +30.5k but only +0.6k in the 2nd half, -10% +5.3k, a 10-minute window was negative in the 2nd half, so treat as a lead. Replay assumes fills at the tick price; real fast moves and wide spreads will fill worse. Exit-if-below-entry-at-N-minutes variants all lost money and are not part of this. Recorded live as shadow_early8_exit_price by paper_trade_journal from the first session after registration (18 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+  },
+  {
+   "id": "V09",
+   "kind": "variant",
+   "name": "Late trail: once the option is up 40%, exit if it falls back to keep only 60% of its best gain",
+   "key": "dx_x_lt40",
+   "registered": "2026-11-19",
+   "note": "Tick replay of 421 trades (26 Oct-18 Nov): +Rs 20.2k vs the live exits (positive in both halves, +11.1k / +9.1k), but only 25 trades changed and days were 4 better / 5 worse; in the replay every trail arming at +10% to +30% lost money (-Rs 12k to -Rs 108k) and selling part of the position below +30% also lost, because winners dip before they run. Variants around it: keep 70% +26.8k, keep 50% +14.0k, keep 30% +6.2k. Replay assumes fills at the tick price. Recorded live as shadow_lt40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+  },
+  {
+   "id": "G28",
+   "kind": "gate",
+   "name": "Stricter chase check: stock already up 0.45% or more our way in the last 15 minutes (separate from the 0.30% gate)",
+   "key": "Stricter chase check (stock already up 0.45% or more our way in the last 15 minutes)",
+   "registered": "2026-11-19",
+   "note": "On 481 trades with entry-context tags (mid-Oct to 18 Nov) it blocks 100 trades (21%) that net -Rs 120.5k (24% won, avg -Rs 1,280), so enforcing would have been +Rs 120.5k: +75.0k / +45.5k by half, positive on 18 of 22 days, better than random blocking of 100 trades in 100% of 2,000 draws, but it also blocks 24 winners (best +Rs 16.1k). Threshold 0.45% was picked after looking at quintiles and the older 0.30% chase gate was written on overlapping mid-Oct data, so treat as a lead. Reads the ctx_last15_pct tag already on every trade (signed in our direction); no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days, and compare with random blocking of the same size."
+  },
+  {
+   "id": "V10",
+   "kind": "variant",
+   "name": "Puts only: wait 2 minutes after the signal and buy at the ask only if the option is up 2% or more (calls unchanged)",
+   "key": "dx_e_wait2_put",
+   "registered": "2026-11-19",
+   "note": "Tick replay of 423 trades (26 Oct-18 Nov): puts lost -Rs 120k as taken, and kept only when the option was up 2%+ after 2 minutes they were -Rs 10.9k (21 of the put trades kept); calls made +Rs 75.8k unfiltered and every confirmation rule REDUCED them, so calls are left alone. Combined (calls as is, puts confirmed) ~ +Rs 65k vs -Rs 44k real. Best of ~15 confirmation settings tried (2 min / up 2% was +Rs 42k all-trades; up 5% was negative), 16 days of one market phase, and even confirmed puts stay negative - a lead only. Replay buys at the ask at t0+2min and sells at the real exit. Recorded live as opt2 / opt2_price / opt2_ask by paper_trade_journal.record_opt2 from 20 Nov; a put whose trade was over before 2 minutes counts as not taken (0). Nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+  },
+  {
+   "id": "V11",
+   "kind": "variant",
+   "name": "Cash out at +40%: sell the whole position the first time the option is up 40%",
+   "key": "dx_x_cash40",
+   "registered": "2026-11-19",
+   "note": "Tick replay of 421 trades (26 Oct-18 Nov): selling everything at +40% beat the live exits by +Rs 61.8k (total +Rs 18.1k vs -Rs 43.7k), positive in both halves (+34.1k / +27.7k), better on 11 of 15 days. The same replay for +10% / +15% / +20% / +25% / +30% lost Rs 108.5k / 68.9k / 42.9k / 17.5k / 0.7k vs live, because only 60% / 47% / 38% of options ever reach +10% / +15% / +20% and the rest still take the full stop, so small fixed targets raise the win rate (56% at +10%) but lose money. In-sample and assumes a fill at exactly +40%; real fills on fast moves will be a little worse. Recorded live as shadow_cash40_exit_price by paper_trade_journal from the first full session after the scanner restart (20 Nov); nothing is enforced. Judge on 10 sessions / 100 trades, change > 0, 60%+ positive days."
+  },
+  {
+   "id": "G29",
+   "kind": "gate",
+   "name": "Regime 60%: only trade the side that more than 60% of F&O stocks are on (calls when 60%+ are up, puts when 60%+ are down)",
+   "key": "Regime 60% (the majority side must hold more than 60% of stocks)",
+   "registered": "2026-11-19",
+   "note": "On 380 trades with the regime tag (29 Oct-19 Nov, 14 days) it blocks 203 (53%) that net -Rs 48.4k, so enforcing would have been +Rs 48.4k: +38.7k / +9.6k by half, positive on 8 of 13 days with an effect (about 62%), better than random blocking of 203 trades in 91.9% of 2,000 draws (short of 95%), but it also blocks 76 winners (best +Rs 18.8k). Worst day -Rs 36.0k (6 Nov, blocked winners), best +Rs 42.1k (4 Nov); 19 Nov +Rs 38.2k because it blocked every put on a call-only day. The second half is much weaker than the first, and it works as 'trade with the market', so a reversal day would block the good side - treat as a lead. Compare with Regime-only (same idea at >50%: +Rs 50.6k, 7 of 13 days) and Breadth 70% (blocks 79% of trades, kills 30 Oct) which were not registered. Reads the rgs_regime60_ok tag already on every trade; no new tag and nothing is enforced. Forward count from 20 Nov. Judge on 30 blocked trades over 8+ days, change > 0, helped on 60%+ of the blocked days, and compare with random blocking of the same size."
+  },
+  {
+   "id": "G30",
+   "kind": "gate",
+   "name": "No entry before 09:45: wait for the opening burst to pass (any setup)",
+   "key": "No entry before 09:45 (any setup)",
+   "registered": "2026-11-20",
+   "note": "On 613 trades with entry times (1 Oct-19 Nov, 31 days) it blocks 203 (33%) that net -Rs 79.8k (31% won, avg -1.9%), so enforcing would have been +Rs 79.8k, helped on 18 of 29 days with an effect (62%), but it also blocks 63 winners (best +Rs 18.8k); first half -Rs 74.1k, second half only -Rs 5.7k, so the benefit is mostly early-Oct; worst day 21 Oct (-Rs 26.4k), best day 30 Oct (+Rs 51.2k, blocked winners). A random block of 203 trades is beaten only 67% of the time, short of 95%, so treat as a weak lead. 20 Nov: the 09:26-09:31 burst of 9 trades lost about Rs 24k; the 6 winners all entered 09:31-10:14 and 5 of them after 09:45. Reads entry_time already on every trade; no new tag; nothing is enforced. Forward count from 20 Nov. Judge on 30 blocked trades over 8+ days, change > 0, helped on 60%+ of blocked days, and compare with random blocking of the same size."
+  },
+  {
+   "id": "S01",
+   "kind": "signal",
+   "name": "Take the held-back extended calls: bullish setups the scanner waits on as 'late / overheated / overextended' (paper only, nothing enforced)",
+   "key": "EXTENDED_WAIT:BULLISH",
+   "registered": "2026-11-23",
+   "note": "Signal-log study, 21 days (19 Oct-20 Nov), 626 first bullish signals in the extended-wait group: the stock moved +0.36% (right way) from the signal to 15:15 on average, 56% went the right way, versus +0.21% / 53% for the calls we took (passed all gates). Bearish extended waits were flat (0.00%). This is the STOCK move, not option P&L, with no costs; with a 2-3% option spread it is roughly break-even, so it only matters if the forward record repeats it. Scored by signal_shadow.py: sessions after 23 Nov, first signal per stock per day before 14:30, move to 15:15; 'trades' on the Home page = signals, 'change' is left blank (a % not Rs), 'positive days' = share of sessions whose average move was above zero. Pass mark: 10 sessions, 100 signals, positive on 60%+ of days and an average clearly above the passed-calls average. Recording only; the extension gates stay on."
+  }
+ ]
 }

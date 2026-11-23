@@ -213,6 +213,11 @@ def shadow_tests(today: str) -> list[dict[str, Any]]:
                 if key in sb.GATES:
                     r = sb.gate_rows(fwd, only=[key])[0]
                     row.update(sessions=r["days_with_data"], trades=r["blocked"]["n"], change=round(r["change_if_enforced"]), pos_days=(round(100 * r["days_helped"] / r["days_blocked"]) if r["days_blocked"] else None))
+            elif kind == "signal":                            # a rule on signals we did not trade: scored from the signal log + the stock's own 1-minute prices (see signal_shadow.py)
+                import signal_shadow
+
+                r = signal_shadow.score(str(key), reg, today)
+                row.update(sessions=r["sessions"], trades=r["signals"], pos_days=r["pos_days"])
             elif kind == "variant":
                 if var_rows is None:
                     with VARIANTS.open(encoding="utf-8") as fh:
