@@ -216,6 +216,7 @@ COMPONENTS: tuple[Component, ...] = (
     Component("Option tick recorder", proc(r"\\option_tick_recorder\.py"), (T(9, 16), T(15, 30))),
     Component("Futures recorder", proc(r"\\futures_recorder\.py"), (T(9, 16), T(15, 30))),
     Component("Upstox chain collector", proc(r"\\upstox_chain_collector\.py"), (T(9, 16), T(15, 30))),
+    Component("Held-signal option recorder", proc(r"\\held_signal_recorder\.py"), (T(9, 16), T(15, 18))),
     Component("News collector", proc(r"\\aplus_overnight_intelligence\.py")),
     Component("Announcement service", proc(r"\\aplus_announcement_service\.py")),
     Component("Order book recorder", proc(r"\\order_book_recorder\.py")),
@@ -230,6 +231,7 @@ COMPONENTS: tuple[Component, ...] = (
     Component("Smart Flow data (order book)", dated_file("data/order_book/{d}.csv", 300), (T(9, 22), T(15, 30)), data=True),
     Component("Futures data", dated_file("data/futures/{d}.csv.gz", 420), (T(9, 22), T(15, 30)), data=True),
     Component("Option chain data", chain_data(), (T(9, 25), T(15, 30)), data=True),
+    Component("Held-signal option prices", dated_file("data/held_signal_options/{d}.csv.gz", 300), (T(9, 58), T(15, 18)), data=True),
     Component("1-minute price history", dated_file("data/chart_history/{d}/market_watch_1m.csv", 180), (T(9, 17), T(15, 30)), data=True),
     Component("Running trades' prices", open_trade_prices(), (T(9, 17), T(15, 30)), data=True),
     Component("Nifty / Bank Nifty data", index_data(), (T(9, 20), T(15, 30)), data=True),
@@ -299,6 +301,36 @@ def holidays() -> set[str]:
     return {ln.split(",")[0].strip() for ln in lines if ln.strip()}
 
 
+def holiday_names() -> dict[str, str]:
+    try:
+        lines = HOLIDAYS.read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        return {}
+    out = {}
+    for ln in lines:
+        if ln.strip():
+            d, _, name = ln.partition(",")
+            out[d.strip()] = name.strip()
+    return out
+
+
+def holiday_notices(now: datetime, names: dict[str, str], sent: dict[str, Any]) -> list[tuple[str, str]]:
+    """[(key, text)] for market-holiday notices not yet sent: the evening before (from 18:00, next weekday is a holiday) and the morning of (from 08:30 until close).
+    A weekday holiday means no scanner, no signals and a frozen dashboard - this says so instead of leaving it to be discovered."""
+    out: list[tuple[str, str]] = []
+    today = now.strftime("%Y-%m-%d")
+    if now.weekday() < 5 and today in names and dtime(8, 30) <= now.time() <= dtime(15, 30) and f"morn:{today}" not in sent:
+        out.append((f"morn:{today}", f"📅 Market CLOSED today ({now.strftime('%a %d %b')}): {names[today]}. No scanner cycles, signals or dashboard updates today - nothing is broken."))
+    nxt = now + timedelta(days=1)
+    while nxt.weekday() >= 5:
+        nxt += timedelta(days=1)
+    key = nxt.strftime("%Y-%m-%d")
+    if now.time() >= dtime(18, 0) and key in names and f"eve:{key}" not in sent:
+        when = "Tomorrow" if (nxt.date() - now.date()).days == 1 else nxt.strftime("%A")
+        out.append((f"eve:{key}", f"📅 {when} ({nxt.strftime('%a %d %b')}) the market is CLOSED: {names[key]}. The scanner will not run and the dashboard will not update."))
+    return out
+
+
 def send(text: str) -> tuple[bool, str]:
     py, tools = CALPHA / ".venv" / "Scripts" / "python.exe", CALPHA / "tools"
     if not py.exists() or not (tools / "telegram_alerts.py").exists():
@@ -353,6 +385,16 @@ def run(dry: bool = False) -> int:
             elif action == "back":
                 entry = {**state.get(comp.name, {}), "last_ok": now.timestamp()}          # keep the alerted state so the BACK message is retried
         new_state[comp.name] = entry
+    sent_notices = {k: v for k, v in state.get("_holiday_notices", {}).items() if k[-10:] >= (now - timedelta(days=7)).strftime("%Y-%m-%d")}
+    for key, text in holiday_notices(now, holiday_names(), sent_notices):
+        if dry:
+            print("would send holiday notice: " + text.encode("ascii", "replace").decode())
+            continue
+        ok_sent, why = send(text)
+        log(f"HOLIDAY NOTICE {key}: telegram {'sent' if ok_sent else 'FAILED ' + why}")
+        if ok_sent:
+            sent_notices[key] = now.isoformat(timespec="seconds")
+    new_state["_holiday_notices"] = sent_notices
     if dry:
         for name, active, ok, detail, action in rows:
             print(f"{'OK  ' if ok else 'DOWN'} {'     ' if active else 'idle '} {name:28s} {detail}{'   -> would send ' + action if action else ''}")

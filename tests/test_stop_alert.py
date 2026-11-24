@@ -191,9 +191,36 @@ class DataFreshnessTests(unittest.TestCase):
 
     def test_the_data_checks_are_registered_in_the_trading_window(self):
         data = {c.name: c for c in sa.COMPONENTS if c.data}
-        self.assertEqual(set(data), {"Smart Flow data (order book)", "Futures data", "Option chain data", "1-minute price history", "Running trades' prices", "Nifty / Bank Nifty data"})
+        self.assertEqual(set(data), {"Smart Flow data (order book)", "Futures data", "Option chain data", "1-minute price history", "Running trades' prices", "Nifty / Bank Nifty data", "Held-signal option prices"})
         for c in data.values():
             self.assertIsNotNone(c.window)
+
+
+class HolidayNoticeTests(unittest.TestCase):
+    NAMES = {"2026-11-24": "Guru Nanak", "2026-11-30": "Test Monday"}
+
+    def test_evening_before(self):
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 23, 17, 59, tzinfo=IST), self.NAMES, {}), [])
+        out = sa.holiday_notices(datetime(2026, 11, 23, 18, 0, tzinfo=IST), self.NAMES, {})
+        self.assertEqual([k for k, _ in out], ["eve:2026-11-24"])
+        self.assertIn("Tomorrow", out[0][1])
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 23, 19, 0, tzinfo=IST), self.NAMES, {"eve:2026-11-24": "x"}), [])
+
+    def test_friday_evening_names_the_monday(self):
+        out = sa.holiday_notices(datetime(2026, 11, 27, 20, 0, tzinfo=IST), self.NAMES, {})
+        self.assertEqual([k for k, _ in out], ["eve:2026-11-30"])
+        self.assertIn("Monday", out[0][1])
+
+    def test_morning_of(self):
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 24, 8, 29, tzinfo=IST), self.NAMES, {}), [])
+        out = sa.holiday_notices(datetime(2026, 11, 24, 8, 30, tzinfo=IST), self.NAMES, {})
+        self.assertEqual([k for k, _ in out], ["morn:2026-11-24"])
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 24, 9, 30, tzinfo=IST), self.NAMES, {"morn:2026-11-24": "x"}), [])
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 24, 16, 0, tzinfo=IST), self.NAMES, {}), [])
+
+    def test_ordinary_day_is_silent(self):
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 25, 9, 0, tzinfo=IST), self.NAMES, {}), [])
+        self.assertEqual(sa.holiday_notices(datetime(2026, 11, 25, 21, 0, tzinfo=IST), self.NAMES, {}), [])
 
 
 if __name__ == "__main__":
