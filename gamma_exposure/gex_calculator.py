@@ -117,7 +117,10 @@ def _flip_price(rows: list[dict[str, Any]], spot: float,
         lot = _number(row.get("lot_size"))
         if None in (strike, iv, years, oi, lot) or years <= 0 or oi <= 0 or lot <= 0:
             continue
-        sign = _side_sign(str(row.get("side", "")), config)
+        try:
+            sign = _side_sign(str(row.get("side", "")), config)
+        except ValueError:
+            continue
         prepared.append((strike, iv, years, oi * lot, sign))
     if not prepared:
         return None
@@ -187,6 +190,7 @@ def calculate_snapshot(
     }
     by_strike: dict[float, dict[str, float]] = {}
     by_expiry: dict[str, dict[str, float]] = {}
+    by_side_strike: dict[str, dict[float, float]] = {}
     valid_rows = 0
     excluded_rows = 0
 
@@ -229,6 +233,8 @@ def calculate_snapshot(
         strike_bucket = by_strike.setdefault(strike, {"gross_gex": 0.0, "scenario_net_gex": 0.0})
         strike_bucket["gross_gex"] += abs(gross)
         strike_bucket["scenario_net_gex"] += scenario
+        side_bucket = by_side_strike.setdefault(side, {})
+        side_bucket[strike] = side_bucket.get(strike, 0.0) + abs(gross)
         expiry = str(row.get("expiry") or "UNKNOWN")
         expiry_bucket = by_expiry.setdefault(expiry, {"gross_gex": 0.0, "scenario_net_gex": 0.0})
         expiry_bucket["gross_gex"] += abs(gross)
@@ -242,24 +248,10 @@ def calculate_snapshot(
             "excluded_rows": excluded_rows,
         }
 
-    call_rows = [
-        (abs(_number(row.get("gamma")) or 0.0)
-         * (_number(row.get("oi")) or 0.0)
-         * (_number(row.get("lot_size")) or 0.0)
-         * (_number(row.get("spot")) or 0.0) ** 2 * 0.01, _number(row.get("strike")))
-        for row in source_rows if str(row.get("side") or "").upper() in {"CE", "CALL"}
-        and _number(row.get("strike")) is not None
-    ]
-    put_rows = [
-        (abs(_number(row.get("gamma")) or 0.0)
-         * (_number(row.get("oi")) or 0.0)
-         * (_number(row.get("lot_size")) or 0.0)
-         * (_number(row.get("spot")) or 0.0) ** 2 * 0.01, _number(row.get("strike")))
-        for row in source_rows if str(row.get("side") or "").upper() in {"PE", "PUT"}
-        and _number(row.get("strike")) is not None
-    ]
-    call_wall = max(call_rows, default=(0.0, None), key=lambda item: item[0])[1]
-    put_wall = max(put_rows, default=(0.0, None), key=lambda item: item[0])[1]
+    call_strikes = by_side_strike.get("CE", by_side_strike.get("CALL", {}))
+    put_strikes = by_side_strike.get("PE", by_side_strike.get("PUT", {}))
+    call_wall = max(call_strikes, key=call_strikes.get) if call_strikes else None
+    put_wall = max(put_strikes, key=put_strikes.get) if put_strikes else None
 
     return {
         "status": "OK",
