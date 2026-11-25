@@ -268,6 +268,14 @@
       "key": "EARLY_EXT_RELEASE:BULLISH",
       "registered": "2026-11-23",
       "note": "Option replay of the extended-wait gates switched off (gate_whatif.py, 21 Oct-19 Nov, 371 stock-days with option prices, live ladder, 1% slippage each way, Rs 250 charges): +Rs 158.9k, but the top 5 trades made +Rs 206k (without them -Rs 47k), 9 of 18 days profitable, bullish +Rs 172k vs bearish -Rs 13.5k, before 10:30 +Rs 195k vs after 10:30 -Rs 36k, and LATE_CLOSE_EXTENSION lost Rs 25.6k. This test is the part of that result that looks like an edge and was fitted to those days: bullish, LATE_VWAP_EXTENSION or LATE_10M_OVERHEAT, first signal before 10:30. Scored forward by signal_shadow.py from sessions after 23 Nov: first signal per stock per day, STOCK move to 15:15 (not option P&L, no costs); 'trades' on the Home page = signals. Pass mark: 10 sessions, 100 signals, positive on 60%+ of days and an average clearly above the passed-calls average (about -0.09% to +0.0%). A positive stock move still has to survive a 1-3% option spread, so it is only a first filter; a pass means 'replay it as options trades next', not 'enforce'. Recording only; the extension gates stay on."
+  },
+  {
+   "id": "G31",
+   "kind": "gate",
+   "name": "Spread gate, post-23 Nov watch (option bid-ask spread over 1% at entry, recorded at entry time)",
+   "key": "Spread gate (option bid-ask spread over 1% at entry)",
+   "registered": "2026-11-23",
+   "note": "Forward watch on sessions after 23 Nov only. Evidence at registration (4-23 Nov, 13 days): kept 107 trades +Rs 24,461 (9 of 13 days positive), blocked 240 trades -Rs 115,344. Random blocking (20,000 draws): same count per day p=0.029, same total count p=0.053. Fragile: without the 3 biggest kept winners the kept set is -Rs 17,223. Not enforced; a READY pass means re-run the random-blocking test on the new days before proposing it."
   }
  ]
 }
